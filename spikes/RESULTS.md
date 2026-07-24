@@ -138,7 +138,62 @@ t=+83.201s  OUT  len=10   text=' 늘릴 계획입니다.'
 이후 실행부터는 스파이크가 선행 공백 비율을 함께 출력합니다. 100%가 아니면
 이 규칙을 재검토해야 합니다.
 
+---
+
+# Phase 3 — 30분 세션 유지 (2026-07-24) ✅ 통과
+
+`spikes/fixtures/ko_30min.wav` (원고 18문장 × 20회 = 360문장, 30.8분), 한→영.
+
+```bash
+python spikes/s2_headless_run.py --wav spikes/fixtures/ko_30min.wav --minutes 30 \
+    --script spikes/fixtures/ko_script.txt --repeat 20 --out phase3_transcript.md
+```
+
+## 수용 기준 대조
+
+| PLAN.md §9 Phase 3 기준 | 실측 | 판정 |
+|---|---|---|
+| 30분 연속 실행 완주 | 30.1분 | ✅ |
+| 재연결 횟수·공백 시간 로그 | 3회 / 370·403·459 ms | ✅ |
+| 재연결 구간 문장 유실 없음 | 360문장 전부, 최저 0.78 · 평균 0.96 | ✅ |
+| 비용이 예상($1.10)의 ±20% 이내 | **$1.11** (+0.9%) | ✅ |
+
+부가 지표: 전송 청크 18000개(= 정확히 1800초), 링 버퍼 유실 **0 바이트**.
+
+## 재연결 동작
+
+`go_away`는 **9분 간격으로 정확히 3번** 왔고 매번 `time_left=50s`였다.
+계획서가 예상한 "3~4회"와 일치한다.
+
+```
+15:40:54  live session open (resumed=False)
+15:49:54  go_away received (time_left=50s) — opening replacement
+15:49:55  live session open (resumed=True)
+15:49:55  session swapped — gap 370 ms (reconnect #1)
+15:58:55  go_away ... gap 403 ms (reconnect #2)
+16:07:55  go_away ... gap 459 ms (reconnect #3)
+```
+
+세 번 모두 `resumed=True` — 보관해 둔 `new_handle`이 실제로 재사용되었다.
+새 세션을 **먼저 연 뒤** 교체하므로 공백이 0.5초 미만에 그친다.
+
+캡션도 재연결을 가로질러 끊기지 않는다.
+
+```
+[1080.0s] We expect to achieve it.
+          go_away received (time_left=50s) — opening replacement
+[1081.0s] Of course, exchange rate fluctuations are still the biggest variable.
+```
+
+## 이 실행에서 발견해 고친 것
+
+첫 재연결이 상태를 `연결 중`으로 표시했다. `stats.reconnects`로 판단했는데 그
+시점에는 아직 0이기 때문이다. 교체할 세션(`_active`)의 존재 여부로 판단하도록
+바꿨다.
+
 ## 남은 미검증 항목
 
-- `go_away` 실제 수신과 선제 재연결 동작 → Phase 3 (30분 실행)
-- 재연결 구간 문장 유실 → Phase 3 (`ko_script.txt` 원고와 대조)
+- 실제 USB 오디오 인터페이스로의 캡처 (지금까지는 내장 마이크 + 파일 입력)
+- PLAN.md §10 시나리오 2(지연 측정), 3(Google Translate 앱 대비),
+  4(장애 주입 — Wi-Fi 차단·USB 분리·화면 잠금)
+- 영→한 방향의 30분 완주 (한→영만 검증함)

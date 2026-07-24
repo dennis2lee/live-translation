@@ -170,6 +170,22 @@ def test_go_away_opens_the_replacement_before_closing_the_old_session(rec):
         t.stop()
 
 
+def test_first_reconnect_reports_reconnecting_not_connecting(rec):
+    """첫 재연결도 '재연결 중'이어야 한다 (실측 로그에서 발견한 결함)."""
+    states: list[str] = []
+    t = make_translator(
+        rec, [[msg(go_away=True)], []], on_state=lambda s, _d: states.append(s.value)
+    )
+    t.start()
+    try:
+        assert wait_until(lambda: t.stats.reconnects >= 1)
+        assert states[0] == State.CONNECTING.value  # 최초 연결
+        assert State.RECONNECTING.value in states
+        assert states.count(State.CONNECTING.value) == 1
+    finally:
+        t.stop()
+
+
 def test_resumption_handle_is_stored_and_passed_to_the_next_connection(rec):
     t = make_translator(rec, [[msg(handle="HANDLE-1"), msg(go_away=True)], []])
     t.start()

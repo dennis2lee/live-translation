@@ -252,8 +252,10 @@ class LiveTranslator:
 
         try:
             while not self._stop.is_set():
+                # 교체할 세션이 이미 있으면 '재연결'이다. stats.reconnects로 판단하면
+                # 첫 재연결이 아직 0이라 '연결 중'으로 잘못 표시된다.
                 self._set_state(
-                    State.RECONNECTING if self.stats.reconnects else State.CONNECTING, ""
+                    State.RECONNECTING if self._active is not None else State.CONNECTING, ""
                 )
                 gap_started = time.monotonic()
                 holder = await self._open_session(client)
