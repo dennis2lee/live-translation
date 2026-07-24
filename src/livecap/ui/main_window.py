@@ -61,7 +61,11 @@ class CaptionWindow(QMainWindow):
         self._state = State.IDLE
         self._error_detail = ""
 
-        self._buffer = CaptionBuffer(max_lines=settings.max_lines, policy=settings.policy)
+        self._buffer = CaptionBuffer(
+            max_lines=settings.max_lines,
+            policy=settings.policy,
+            clear_after_seconds=settings.clear_after_seconds,
+        )
         self._view = CaptionView(settings, self)
         self.setCentralWidget(self._view)
         self.setWindowTitle("LiveCap")
@@ -255,11 +259,15 @@ class CaptionWindow(QMainWindow):
 
     # --- 설정 변경 --------------------------------------------------------
 
+    def _apply_buffer_settings(self) -> None:
+        self._buffer.set_max_lines(self._settings.max_lines)
+        self._buffer.clear_after_seconds = self._settings.clear_after_seconds
+
     def _update(self, **changes: object) -> None:
         """설정을 바꾸고 즉시 반영·저장한다. 통역 세션은 끊지 않는다."""
         self._settings = replace(self._settings, **changes).clamped()  # type: ignore[arg-type]
         config.save(self._settings)
-        self._buffer.set_max_lines(self._settings.max_lines)
+        self._apply_buffer_settings()
         self._view.apply_settings(self._settings)
         self._push_lines()
         self._sync_actions()
@@ -289,7 +297,9 @@ class CaptionWindow(QMainWindow):
     def _reset_settings(self) -> None:
         self._settings = config.reset()
         self._buffer = CaptionBuffer(
-            max_lines=self._settings.max_lines, policy=self._settings.policy
+            max_lines=self._settings.max_lines,
+            policy=self._settings.policy,
+            clear_after_seconds=self._settings.clear_after_seconds,
         )
         self._view.apply_settings(self._settings)
         self._view.clear()

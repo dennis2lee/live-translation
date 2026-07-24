@@ -14,6 +14,7 @@ from enum import StrEnum
 
 SENTENCE_ENDERS = ".?!"
 IDLE_COMMIT_SECONDS = 1.2
+CLEAR_AFTER_SECONDS = 2.0
 _AUTO_SAMPLE_SIZE = 8
 _AUTO_UTTERANCE_CHARS = 25
 
@@ -41,6 +42,9 @@ class CaptionBuffer:
     max_lines: int = 2
     policy: Policy = Policy.AUTO
     idle_commit_seconds: float = IDLE_COMMIT_SECONDS
+
+    clear_after_seconds: float = CLEAR_AFTER_SECONDS
+    """마지막 조각 이후 이만큼 지나면 캡션을 비운다. 0이면 비활성."""
 
     _committed: deque[str] = field(default_factory=lambda: deque(maxlen=2), init=False)
     _pending: str = field(default="", init=False)
@@ -128,15 +132,25 @@ class CaptionBuffer:
         return True
 
     def tick(self, now: float) -> bool:
-        """주기 호출. 정책 A에서 유휴 시간이 지나면 미확정분을 확정한다."""
-        if self.effective_policy is not Policy.INCREMENTAL:
-            return False
-        if not self._pending:
-            return False
-        if now - self._last_feed_at < self.idle_commit_seconds:
-            return False
-        self._commit()
-        return True
+        """주기 호출. 유휴 시간에 따라 미확정분을 확정하고, 더 지나면 비운다."""
+        changed = False
+        idle = now - self._last_feed_at
+
+        # 정책 A — 종결 부호 없이 끊긴 미확정분을 확정한다.
+        if (
+            self.effective_policy is Policy.INCREMENTAL
+            and self._pending
+            and idle >= self.idle_commit_seconds
+        ):
+            self._commit()
+            changed = True
+
+        # 말이 멎으면 캡션을 비운다 (정책 A/B 공통).
+        if self.clear_after_seconds and not self.is_empty and idle >= self.clear_after_seconds:
+            self.clear()
+            changed = True
+
+        return changed
 
     def note_reconnect(self) -> None:
         """재연결이 일어났음을 알린다. 다음 조각을 이전 줄에 이어 붙인다."""

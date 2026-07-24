@@ -34,7 +34,7 @@ class Settings:
 
     # 레이아웃
     corner_radius: int = 24  # 0 ~ 48
-    box_max_width_pct: int = 80  # 60 ~ 95
+    box_max_width_pct: int = 90  # 60 ~ 100 (좌우 여백 5%씩)
     bottom_margin_pct: int = 8  # 2 ~ 20
     font_size: int = 44  # 24 ~ 96
     max_lines: int = 2  # 1 ~ 4
@@ -42,6 +42,9 @@ class Settings:
     # 캡션 박스를 항상 같은 크기·위치로 띄운다 (텍스트가 없어도 유지).
     # 끄면 PLAN.md §6.2의 원래 동작 — 내용에 맞춰 크기가 변하고, 비면 사라진다.
     fixed_box: bool = True
+
+    # 말이 멎고 이만큼 지나면 캡션을 비운다. 0이면 계속 남겨둔다.
+    clear_after_seconds: float = 2.0  # 0 ~ 30
 
     # 동작
     audio_device_name: str = ""  # 빈 문자열이면 시스템 기본 입력
@@ -65,11 +68,12 @@ class Settings:
             text_color=_hex(self.text_color, "#FFFFFF"),
             box_opacity=_clamp(self.box_opacity, 0.6, 1.0),
             corner_radius=int(_clamp(self.corner_radius, 0, 48)),
-            box_max_width_pct=int(_clamp(self.box_max_width_pct, 60, 95)),
+            box_max_width_pct=int(_clamp(self.box_max_width_pct, 60, 100)),
             bottom_margin_pct=int(_clamp(self.bottom_margin_pct, 2, 20)),
             font_size=int(_clamp(self.font_size, 24, 96)),
             max_lines=int(_clamp(self.max_lines, 1, 4)),
             fixed_box=bool(self.fixed_box),
+            clear_after_seconds=_clamp(self.clear_after_seconds, 0.0, 30.0),
             audio_device_name=self.audio_device_name,
             show_source_text=bool(self.show_source_text),
             fullscreen=bool(self.fullscreen),

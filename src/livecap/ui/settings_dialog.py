@@ -88,8 +88,14 @@ class SettingsDialog(QDialog):
         self._radius = self._spin(settings.corner_radius, 0, 48, " px")
         form.addRow("모서리 반경", self._radius)
 
-        self._box_width, box_width_row = self._slider(settings.box_max_width_pct, 60, 95, "%")
+        self._box_width, box_width_row = self._slider(settings.box_max_width_pct, 60, 100, "%")
         form.addRow("박스 최대 폭", box_width_row)
+
+        self._clear_after, clear_after_row = self._slider(
+            int(settings.clear_after_seconds * 10), 0, 100, ""
+        )
+        self._clear_after.setToolTip("0으로 두면 캡션을 지우지 않고 계속 남겨둡니다.")
+        form.addRow("무음 후 캡션 지우기 (0.1초 단위)", clear_after_row)
 
         self._bottom_margin, margin_row = self._slider(settings.bottom_margin_pct, 2, 20, "%")
         form.addRow("하단 여백", margin_row)
@@ -190,6 +196,7 @@ class SettingsDialog(QDialog):
             box_max_width_pct=self._box_width.value(),
             bottom_margin_pct=self._bottom_margin.value(),
             box_opacity=self._opacity.value() / 100.0,
+            clear_after_seconds=self._clear_after.value() / 10.0,
             fixed_box=self._fixed_box.isChecked(),
             show_source_text=self._show_source.isChecked(),
             fullscreen=self._fullscreen.isChecked(),

@@ -2,10 +2,13 @@ from livecap.caption_buffer import CaptionBuffer, Policy
 
 
 def inc(**kw) -> CaptionBuffer:
+    # 무음 후 지우기는 기본 끔 — 커밋 동작만 따로 보기 위해서.
+    kw.setdefault("clear_after_seconds", 0.0)
     return CaptionBuffer(policy=Policy.INCREMENTAL, **kw)
 
 
 def utt(**kw) -> CaptionBuffer:
+    kw.setdefault("clear_after_seconds", 0.0)
     return CaptionBuffer(policy=Policy.UTTERANCE, **kw)
 
 
@@ -221,4 +224,84 @@ def test_whitespace_only_fragment_does_not_create_a_line():
     buf.feed("   ", 0.0)
     buf.tick(5.0)
     assert buf.committed_lines == []
+    assert buf.is_empty
+
+
+# --- 무음 후 지우기 --------------------------------------------------------
+
+
+def test_clear_after_silence_is_two_seconds_by_default():
+    from livecap.caption_buffer import CLEAR_AFTER_SECONDS
+
+    assert CLEAR_AFTER_SECONDS == 2.0
+    assert CaptionBuffer().clear_after_seconds == 2.0
+
+
+def test_captions_are_cleared_after_the_silence_window():
+    buf = CaptionBuffer(policy=Policy.INCREMENTAL, clear_after_seconds=2.0)
+    buf.feed("Hello there.", 0.0)
+    assert buf.committed_lines == ["Hello there."]
+    assert buf.tick(1.5) is False  # 아직 2초 안 됨
+    assert not buf.is_empty
+    assert buf.tick(2.0) is True
+    assert buf.is_empty
+    assert buf.committed_lines == []
+
+
+def test_clear_also_applies_to_policy_b():
+    buf = CaptionBuffer(policy=Policy.UTTERANCE, clear_after_seconds=2.0)
+    buf.feed("one utterance", 0.0)
+    assert buf.tick(1.9) is False
+    assert buf.tick(2.1) is True
+    assert buf.is_empty
+
+
+def test_clear_removes_uncommitted_pending_too():
+    buf = CaptionBuffer(policy=Policy.INCREMENTAL, clear_after_seconds=2.0)
+    buf.feed("no terminator", 0.0)
+    buf.tick(1.3)  # 1.2초 유휴 커밋
+    assert buf.committed_lines == ["no terminator"]
+    buf.tick(2.5)
+    assert buf.is_empty
+
+
+def test_silence_timer_resets_when_speech_resumes():
+    buf = CaptionBuffer(policy=Policy.INCREMENTAL, clear_after_seconds=2.0)
+    buf.feed("First part.", 0.0)
+    buf.feed("Second part.", 1.5)  # 지우기 전에 말이 이어짐
+    assert buf.tick(2.5) is False  # 마지막 조각으로부터 1.0초뿐
+    assert buf.committed_lines == ["First part.", "Second part."]
+    assert buf.tick(3.6) is True
+    assert buf.is_empty
+
+
+def test_clear_does_not_fire_repeatedly_once_empty():
+    buf = CaptionBuffer(policy=Policy.INCREMENTAL, clear_after_seconds=2.0)
+    buf.feed("Hello.", 0.0)
+    assert buf.tick(3.0) is True
+    assert buf.tick(4.0) is False
+    assert buf.tick(99.0) is False
+
+
+def test_zero_disables_clearing():
+    buf = CaptionBuffer(policy=Policy.INCREMENTAL, clear_after_seconds=0.0)
+    buf.feed("Stays put.", 0.0)
+    assert buf.tick(600.0) is False
+    assert buf.committed_lines == ["Stays put."]
+
+
+def test_text_arriving_after_a_clear_starts_a_fresh_line():
+    buf = CaptionBuffer(policy=Policy.INCREMENTAL, clear_after_seconds=2.0)
+    buf.feed("Old sentence.", 0.0)
+    buf.tick(2.5)
+    buf.feed("New sentence.", 5.0)
+    assert buf.committed_lines == ["New sentence."]
+
+
+def test_clear_setting_can_be_changed_at_runtime():
+    buf = CaptionBuffer(policy=Policy.INCREMENTAL, clear_after_seconds=0.0)
+    buf.feed("Hello.", 0.0)
+    assert buf.tick(10.0) is False
+    buf.clear_after_seconds = 2.0
+    assert buf.tick(11.0) is True
     assert buf.is_empty

@@ -183,6 +183,30 @@ def test_clear_captions_empties_the_view(window):
     assert window._buffer.is_empty
 
 
+def test_silence_clear_setting_reaches_the_buffer(window):
+    assert window._buffer.clear_after_seconds == 2.0
+    window._update(clear_after_seconds=5.0)
+    assert window._buffer.clear_after_seconds == 5.0
+
+
+def test_tick_clears_the_view_after_silence(window, monkeypatch):
+    import time as _time
+
+    base = _time.monotonic()
+    monkeypatch.setattr(mw.time, "monotonic", lambda: base)
+    window._on_target_text("Hello there.")
+    assert window._view._lines == [("Hello there.", True)]
+
+    monkeypatch.setattr(mw.time, "monotonic", lambda: base + 2.5)
+    window._on_tick()
+    assert window._view._lines == []
+    assert window._buffer.is_empty
+
+
+def test_default_box_width_leaves_five_percent_margins(window):
+    assert window._settings.box_max_width_pct == 90
+
+
 def test_reconnect_signal_continues_the_previous_line(window):
     window._on_target_text("the quarterly numbers.")
     window._bridge.reconnected.emit()
