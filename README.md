@@ -16,15 +16,30 @@ Python 3.12 이상이 필요합니다 (검증 환경: Python 3.14).
 
 ## API 키
 
-키는 소스나 설정 파일에 저장하지 않습니다. 아래 순서로 조회합니다.
-
-1. `GEMINI_API_KEY` 환경변수
-2. macOS 키체인 (`LiveCap` / `gemini-api-key`)
-3. 앱 **환경설정…**(⌘,)에서 입력 → 키체인에 저장
+`.env.example`을 복사해 값을 채우십시오.
 
 ```bash
-export GEMINI_API_KEY=...
+cp .env.example .env
 ```
+
+```
+GEMINI_API_KEY=AIza...
+```
+
+`.env`는 `.gitignore`에 있어 커밋되지 않습니다. `.env.example`에는 절대 실제
+키를 적지 마십시오 — 그쪽은 커밋됩니다.
+
+조회 순서는 다음과 같습니다.
+
+1. `GEMINI_API_KEY` (또는 `GOOGLE_API_KEY`) 환경변수
+2. 리포지토리 루트의 `.env`
+3. macOS 키체인 (`LiveCap` / `gemini-api-key`)
+4. 앱 **환경설정…**(⌘,)에서 입력 → 키체인에 저장
+
+`.env.example`의 안내 문구를 지우지 않은 채 두면 키가 없는 것으로 간주합니다.
+
+> `gemini-3.5-live-translate-preview`는 **무료 등급에서 동작하지 않습니다.**
+> 키를 발급받은 Google Cloud 프로젝트에 결제 계정이 연결되어 있어야 합니다.
 
 ## 실행
 

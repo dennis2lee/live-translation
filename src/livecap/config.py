@@ -2,13 +2,14 @@
 
 `QSettings("LiveCap", "LiveCap")` → ~/Library/Preferences/ 에 plist 생성.
 API 키는 Settings에 넣지 않는다. 우선순위는
-`GEMINI_API_KEY` 환경변수 → macOS 키체인 → 환경설정 다이얼로그 입력.
+환경변수 → 리포지토리 루트의 `.env` → macOS 키체인 → 환경설정 다이얼로그 입력.
 """
 
 from __future__ import annotations
 
 import os
 from dataclasses import asdict, dataclass, fields
+from pathlib import Path
 
 from PyQt6.QtCore import QSettings
 
@@ -148,12 +149,81 @@ def reset() -> Settings:
 # --- API 키 ---------------------------------------------------------------
 
 
+API_KEY_VARS = ("GEMINI_API_KEY", "GOOGLE_API_KEY")
+_PLACEHOLDER_MARKERS = ("여기에", "your", "xxx", "<", "붙여넣")
+
+
+def dotenv_path() -> Path:
+    """`.env`의 위치. LIVECAP_ENV_FILE로 덮어쓸 수 있다."""
+    override = os.environ.get("LIVECAP_ENV_FILE")
+    if override:
+        return Path(override).expanduser()
+    # src/livecap/config.py → 리포지토리 루트
+    root = Path(__file__).resolve().parents[2]
+    local = Path.cwd() / ".env"
+    return local if local.is_file() else root / ".env"
+
+
+def read_dotenv(path: Path | None = None) -> dict[str, str]:
+    """아주 단순한 KEY=VALUE 파서. 주석·빈 줄·따옴표·`export ` 접두를 처리한다."""
+    path = path or dotenv_path()
+    values: dict[str, str] = {}
+    try:
+        text = path.read_text(encoding="utf-8")
+    except (OSError, UnicodeDecodeError):
+        return values
+    for raw in text.splitlines():
+        line = raw.strip()
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+        line = line.removeprefix("export ").lstrip()
+        key, _, value = line.partition("=")
+        key = key.strip()
+        if not key:
+            continue
+        value = value.strip().split(" #", 1)[0].strip()
+        if len(value) >= 2 and value[0] == value[-1] and value[0] in "\"'":
+            value = value[1:-1]
+        values[key] = value
+    return values
+
+
+def apply_dotenv_to_environ() -> list[str]:
+    """`.env`의 값을 os.environ에 채운다. 이미 있는 환경변수는 덮어쓰지 않는다.
+
+    앱 시작 시 한 번 호출한다. 돌려주는 것은 채워 넣은 키 이름 목록이며,
+    값은 로그에 남기지 않는다.
+    """
+    applied: list[str] = []
+    for key, value in read_dotenv().items():
+        if key not in os.environ and value:
+            os.environ[key] = value
+            applied.append(key)
+    return applied
+
+
+def _is_placeholder(value: str) -> bool:
+    low = value.lower()
+    return any(marker in low for marker in _PLACEHOLDER_MARKERS)
+
+
 def load_api_key() -> str | None:
-    """환경변수 → 키체인 순으로 조회. 소스나 plist에는 절대 저장하지 않는다."""
-    for env in ("GEMINI_API_KEY", "GOOGLE_API_KEY"):
+    """환경변수 → .env → 키체인 순으로 조회.
+
+    소스나 QSettings plist에는 절대 저장하지 않는다.
+    .env에 예시 문구가 그대로 남아 있으면 키가 없는 것으로 취급한다.
+    """
+    for env in API_KEY_VARS:
         v = os.environ.get(env)
-        if v:
+        if v and v.strip() and not _is_placeholder(v.strip()):
             return v.strip()
+
+    dotenv = read_dotenv()
+    for env in API_KEY_VARS:
+        v = dotenv.get(env, "")
+        if v.strip() and not _is_placeholder(v.strip()):
+            return v.strip()
+
     try:
         import keyring
 

@@ -32,8 +32,10 @@
     pytest                # 테스트
     python spikes/s0_transcription_timing.py   # 전사 타이밍 측정
 
-API 키는 `GEMINI_API_KEY` 환경변수 또는 macOS 키체인에서 읽는다.
-소스나 설정 파일에 키를 하드코딩하지 않는다.
+API 키는 환경변수 → 리포지토리 루트의 `.env` → macOS 키체인 순으로 읽는다.
+소스나 설정 파일에 키를 하드코딩하지 않는다. `.env`는 커밋하지 않으며,
+`.env.example`에는 실제 키를 절대 적지 않는다.
+키 값을 로그에 찍지 않는다 (`.env`에서 읽은 것은 키 '이름'만 남긴다).
 
 ## 스타일
 

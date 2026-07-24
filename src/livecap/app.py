@@ -14,7 +14,12 @@ from .util import logging as log
 
 
 def main() -> int:
+    # .env를 먼저 읽어야 LIVECAP_DEBUG 같은 값이 로깅 설정에 반영된다.
+    loaded = config.apply_dotenv_to_environ()
     log.setup()
+    if loaded:
+        # 키 '이름'만 남긴다. 값은 절대 로그에 찍지 않는다.
+        log.get(__name__).info("loaded from .env: %s", ", ".join(sorted(loaded)))
 
     app = QApplication(sys.argv)
     app.setApplicationName("LiveCap")
