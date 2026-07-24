@@ -155,7 +155,15 @@ class SettingsDialog(QDialog):
 
         self._target_lang = QLineEdit(settings.target_language_code)
         self._target_lang.setMaximumWidth(80)
+        self._target_lang.setToolTip(
+            "en = 한국어→영어 (단축키 1), ko = 영어→한국어 (단축키 2).\n"
+            "출발 언어는 모델이 자동 감지하므로 지정하지 않습니다."
+        )
         form.addRow("번역 대상 언어", self._target_lang)
+
+        self._direction_hint = QCheckBox("번역 방향을 캡션 아래에 잠깐 표시")
+        self._direction_hint.setChecked(settings.show_direction_hint)
+        form.addRow("", self._direction_hint)
 
         buttons = QDialogButtonBox(
             QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel
@@ -222,6 +230,7 @@ class SettingsDialog(QDialog):
             box_opacity=self._opacity.value() / 100.0,
             clear_after_seconds=self._clear_after.value() / 10.0,
             save_transcript=self._save_transcript.isChecked(),
+            show_direction_hint=self._direction_hint.isChecked(),
             transcript_dir=self._transcript_dir.text().strip() or DEFAULT_DIR,
             fixed_box=self._fixed_box.isChecked(),
             show_source_text=self._show_source.isChecked(),

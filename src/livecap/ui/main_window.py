@@ -18,7 +18,14 @@ from PyQt6.QtWidgets import QColorDialog, QMainWindow, QMessageBox
 from .. import config
 from ..audio import AudioCapture, list_input_devices
 from ..caption_buffer import CaptionBuffer
-from ..config import Settings
+from ..config import (
+    DIRECTION_MENU_TEXT,
+    DIRECTION_TARGET,
+    Direction,
+    Settings,
+    direction_for_target,
+    direction_label,
+)
 from ..transcript import TranscriptWriter, resolve_dir
 from ..translator import MODEL, LiveTranslator, State
 from ..util import logging as log
@@ -146,6 +153,12 @@ class CaptionWindow(QMainWindow):
         clear.triggered.connect(self._clear_captions)
         run_menu.addAction(clear)
 
+        # 0번 키로 시작/중지를 오간다. 메뉴 항목은 실수 방지를 위해 둘로 유지한다.
+        self._act_toggle = QAction("통역 시작/중지 전환", self)
+        self._act_toggle.setShortcut(QKeySequence("0"))
+        self._act_toggle.triggered.connect(self.toggle_translation)
+        self.addAction(self._act_toggle)
+
         run_menu.addSeparator()
         self._act_save_transcript = QAction("번역 기록 저장", self, checkable=True)
         self._act_save_transcript.setToolTip(
@@ -166,6 +179,29 @@ class CaptionWindow(QMainWindow):
 
         # --- 설정 ---
         cfg = bar.addMenu("설정")
+
+        dir_menu = cfg.addMenu("번역 방향")
+        self._direction_group = QActionGroup(self)
+        self._direction_group.setExclusive(True)
+        self._direction_actions: dict[Direction, QAction] = {}
+        for i, direction in enumerate(Direction, start=1):
+            act = QAction(DIRECTION_MENU_TEXT[direction], self, checkable=True)
+            act.setShortcut(QKeySequence(str(i)))  # 1 = 한→영, 2 = 영→한
+            act.triggered.connect(lambda _c, d=direction: self.set_direction(d))
+            self._direction_group.addAction(act)
+            dir_menu.addAction(act)
+            self._direction_actions[direction] = act
+
+        self._act_direction_hint = QAction("번역 방향 표시", self, checkable=True)
+        self._act_direction_hint.setToolTip(
+            "방향이 바뀌거나 통역이 시작될 때 캡션 박스 아래에\n"
+            "KO → EN 형태로 2초간 띄웠다가 사라집니다."
+        )
+        self._act_direction_hint.triggered.connect(
+            lambda c: self._update(show_direction_hint=c)
+        )
+        cfg.addAction(self._act_direction_hint)
+        cfg.addSeparator()
         cfg.addAction(self._color_action("배경색…", "bg_color", alpha=False))
         cfg.addAction(self._color_action("캡션 박스 색…", "box_color", alpha=True))
         cfg.addAction(self._color_action("글자색…", "text_color", alpha=False))
@@ -272,6 +308,10 @@ class CaptionWindow(QMainWindow):
         for a in self._lines_group.actions():
             a.setChecked(int(a.text()) == self._settings.max_lines)
         self._act_save_transcript.setChecked(self._settings.save_transcript)
+        self._act_direction_hint.setChecked(self._settings.show_direction_hint)
+        current = direction_for_target(self._settings.target_language_code)
+        for direction, act in self._direction_actions.items():
+            act.setChecked(direction is current)
         self._act_fixed_box.setChecked(self._settings.fixed_box)
         self._act_source.setChecked(self._settings.show_source_text)
         self._act_fullscreen.setChecked(self._settings.fullscreen)
@@ -358,6 +398,67 @@ class CaptionWindow(QMainWindow):
 
     # --- 통역 제어 --------------------------------------------------------
 
+    def toggle_translation(self) -> None:
+        """0번 키 — 대기 중이면 시작, 아니면 중지."""
+        if self._state is State.IDLE:
+            self.start_translation()
+        else:
+            self.stop_translation()
+
+    def set_direction(self, direction: Direction) -> None:
+        """번역 방향 프리셋을 바꾼다 (1 = 한→영, 2 = 영→한).
+
+        목적지 언어는 세션 연결 시점에 정해지므로 통역 중이면 번역기만 다시
+        연결한다. 오디오 캡처와 링 버퍼는 그대로 두므로 소리는 유실되지 않는다.
+        """
+        target = DIRECTION_TARGET[direction]
+        if target == self._settings.target_language_code:
+            self._announce_direction()  # 같은 방향을 다시 눌러도 표시는 해준다
+            return
+
+        self._update(target_language_code=target)
+        self._announce_direction()
+
+        if self._state is not State.IDLE:
+            if self._writer is not None:
+                self._writer.note_direction(
+                    direction_label(target), time.monotonic() - self._started_at
+                )
+            self._restart_translator()
+
+    def _announce_direction(self) -> None:
+        if self._settings.show_direction_hint:
+            self._view.show_hint(direction_label(self._settings.target_language_code))
+
+    def _restart_translator(self) -> None:
+        """오디오·기록은 유지한 채 번역 세션만 새 목적지 언어로 다시 연다."""
+        if self._capture is None:
+            return
+        api_key = config.load_api_key()
+        if not api_key:
+            return
+        if self._translator is not None:
+            self._translator.stop()
+            self._translator = None
+        self._translator = self._make_translator(self._capture.ring, api_key)
+        self._translator.start()
+        self._state = State.CONNECTING
+        self._sync_actions()
+        self._refresh_overlay()
+
+    def _make_translator(self, ring: object, api_key: str) -> LiveTranslator:
+        return LiveTranslator(
+            ring,  # type: ignore[arg-type]
+            api_key,
+            target_language_code=self._settings.target_language_code,
+            echo_target_language=self._settings.echo_target_language,
+            silence_gate=self._settings.silence_gate,
+            on_source=self._bridge.source_text.emit,
+            on_target=self._bridge.target_text.emit,
+            on_state=lambda s, d: self._bridge.state_changed.emit(s.value, d),
+            on_reconnect=self._bridge.reconnected.emit,
+        )
+
     def start_translation(self) -> None:
         if self._state is not State.IDLE:
             return
@@ -384,17 +485,7 @@ class CaptionWindow(QMainWindow):
             _log.warning("requested device unavailable — using %r", dev.name)
             self._view.set_status(f"{self._settings.audio_device_name} 없음 — {dev.name} 사용")
 
-        self._translator = LiveTranslator(
-            self._capture.ring,
-            api_key,
-            target_language_code=self._settings.target_language_code,
-            echo_target_language=self._settings.echo_target_language,
-            silence_gate=self._settings.silence_gate,
-            on_source=self._bridge.source_text.emit,
-            on_target=self._bridge.target_text.emit,
-            on_state=lambda s, d: self._bridge.state_changed.emit(s.value, d),
-            on_reconnect=self._bridge.reconnected.emit,
-        )
+        self._translator = self._make_translator(self._capture.ring, api_key)
         self._started_at = time.monotonic()
         self._writer = None
         if self._settings.save_transcript:
@@ -414,6 +505,7 @@ class CaptionWindow(QMainWindow):
         self._sync_actions()
         self._refresh_overlay()
         self._reset_cursor_timer()
+        self._announce_direction()  # 시작할 때 현재 방향을 알려준다
 
     def stop_translation(self) -> None:
         reconnects = self._translator.stats.reconnects if self._translator is not None else 0

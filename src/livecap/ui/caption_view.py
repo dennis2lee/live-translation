@@ -12,6 +12,7 @@ from PyQt6.QtCore import (
     QPropertyAnimation,
     QRectF,
     Qt,
+    QTimer,
     pyqtProperty,
 )
 from PyQt6.QtGui import (
@@ -31,8 +32,21 @@ PAD_V = 24.0
 FADE_MS = 150
 SOURCE_GAP = 14.0
 SOURCE_FONT_RATIO = 0.42
+
+# 번역 방향 표시 (KO → EN)
+HINT_HOLD_MS = 2000
+HINT_FADE_MS = 400
+HINT_GAP = 12.0
+HINT_FONT_RATIO = 0.42
 STATUS_COLOR = QColor("#6E6E6E")
-FONT_FAMILIES = ["SF Pro Display", "Helvetica Neue", "Helvetica"]
+# 한글 출력(영어→한국어)을 쓰므로 한글 글꼴을 명시한다. 빠뜨리면 Qt 폴백에
+# 맡겨지면서 굵기·자간이 라틴 문자와 어긋난다.
+FONT_FAMILIES = [
+    "SF Pro Display",
+    "Apple SD Gothic Neo",
+    "Helvetica Neue",
+    "Helvetica",
+]
 _CENTER = int(Qt.AlignmentFlag.AlignHCenter | Qt.AlignmentFlag.AlignVCenter)
 
 
@@ -51,6 +65,16 @@ class CaptionView(QWidget):
         self._fade.setDuration(FADE_MS)
         self._fade.setEasingCurve(QEasingCurve.Type.InOutQuad)
 
+        # 방향 표시 — 2초 유지한 뒤 서서히 사라진다.
+        self._hint_text = ""
+        self._hint_alpha = 0.0
+        self._hint_fade = QPropertyAnimation(self, b"hintAlpha", self)
+        self._hint_fade.setDuration(HINT_FADE_MS)
+        self._hint_fade.setEasingCurve(QEasingCurve.Type.InCubic)
+        self._hint_timer = QTimer(self)
+        self._hint_timer.setSingleShot(True)
+        self._hint_timer.timeout.connect(self._start_hint_fade)
+
         self.setAutoFillBackground(False)
         self.setAttribute(Qt.WidgetAttribute.WA_OpaquePaintEvent, True)
 
@@ -64,6 +88,39 @@ class CaptionView(QWidget):
         self.update()
 
     boxAlpha = pyqtProperty(float, fget=_get_box_alpha, fset=_set_box_alpha)
+
+    def _get_hint_alpha(self) -> float:
+        return self._hint_alpha
+
+    def _set_hint_alpha(self, v: float) -> None:
+        self._hint_alpha = v
+        self.update()
+
+    hintAlpha = pyqtProperty(float, fget=_get_hint_alpha, fset=_set_hint_alpha)
+
+    # --- 방향 표시 --------------------------------------------------------
+
+    def show_hint(self, text: str, hold_ms: int = HINT_HOLD_MS) -> None:
+        """캡션 박스 아래에 회색으로 잠깐 띄웠다가 페이드아웃한다."""
+        self._hint_text = text
+        self._hint_fade.stop()
+        self._hint_timer.stop()
+        self._hint_alpha = 1.0
+        self._hint_timer.start(hold_ms)
+        self.update()
+
+    def hide_hint(self) -> None:
+        self._hint_fade.stop()
+        self._hint_timer.stop()
+        self._hint_alpha = 0.0
+        self._hint_text = ""
+        self.update()
+
+    def _start_hint_fade(self) -> None:
+        self._hint_fade.stop()
+        self._hint_fade.setStartValue(self._hint_alpha)
+        self._hint_fade.setEndValue(0.0)
+        self._hint_fade.start()
 
     # --- 입력 -------------------------------------------------------------
 
@@ -119,18 +176,37 @@ class CaptionView(QWidget):
 
         s = self._settings
         p.fillRect(self.rect(), QColor(s.bg_color))
+        self._paint_body(p)
+        self._paint_hint(p)  # 캡션 유무와 무관하게 그린다
+        p.end()
 
+    def _paint_body(self, p: QPainter) -> None:
+        s = self._settings
         if self._status and not self._lines and not s.fixed_box:
             self._paint_status(p)
-            p.end()
             return
-
         if self._box_alpha <= 0.001 or (not self._lines and not s.fixed_box):
-            p.end()
             return
-
         self._paint_caption(p)
-        p.end()
+
+    def _paint_hint(self, p: QPainter) -> None:
+        if self._hint_alpha <= 0.001 or not self._hint_text:
+            return
+        s = self._settings
+        f = self._caption_font()
+        f.setPixelSize(max(16, int(s.font_size * HINT_FONT_RATIO)))
+        f.setWeight(QFont.Weight.Normal)
+        p.setFont(f)
+        fm = QFontMetricsF(f)
+
+        color = QColor(STATUS_COLOR)
+        color.setAlphaF(max(0.0, min(1.0, self._hint_alpha)))
+        p.setPen(color)
+
+        top = self._box_bottom() + HINT_GAP
+        # 하단 여백을 좁게 잡아 자리가 모자라면 화면 안으로 밀어 넣는다.
+        top = min(top, self.height() - fm.height())
+        p.drawText(QRectF(0, top, self.width(), fm.height()), _CENTER, self._hint_text)
 
     def _paint_status(self, p: QPainter) -> None:
         f = self._caption_font()

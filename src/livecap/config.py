@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import os
 from dataclasses import asdict, dataclass, fields
+from enum import StrEnum
 from pathlib import Path
 
 from PyQt6.QtCore import QSettings
@@ -21,6 +22,50 @@ _log = log.get(__name__)
 
 ORG = "LiveCap"
 APP = "LiveCap"
+
+
+class Direction(StrEnum):
+    """번역 방향 프리셋.
+
+    Live API의 `TranslationConfig`에는 출발 언어 필드가 없다(모델이 감지한다).
+    따라서 프리셋은 실제로는 '목적지 언어' 하나로 환원된다.
+    """
+
+    KO_TO_EN = "ko2en"
+    EN_TO_KO = "en2ko"
+
+
+DIRECTION_TARGET: dict[Direction, str] = {
+    Direction.KO_TO_EN: "en",
+    Direction.EN_TO_KO: "ko",
+}
+
+DIRECTION_LABEL: dict[Direction, str] = {
+    Direction.KO_TO_EN: "KO → EN",
+    Direction.EN_TO_KO: "EN → KO",
+}
+
+DIRECTION_MENU_TEXT: dict[Direction, str] = {
+    Direction.KO_TO_EN: "한국어 → 영어",
+    Direction.EN_TO_KO: "영어 → 한국어",
+}
+
+
+def direction_for_target(target_language_code: str) -> Direction | None:
+    """목적지 언어에 해당하는 프리셋. 프리셋 밖의 언어면 None."""
+    code = (target_language_code or "").strip().lower()
+    for direction, target in DIRECTION_TARGET.items():
+        if target == code:
+            return direction
+    return None
+
+
+def direction_label(target_language_code: str) -> str:
+    """오버레이에 띄울 문구. 프리셋 밖이면 목적지만 표시한다."""
+    direction = direction_for_target(target_language_code)
+    if direction is not None:
+        return DIRECTION_LABEL[direction]
+    return f"→ {(target_language_code or '?').strip().upper()}"
 KEYRING_SERVICE = "LiveCap"
 KEYRING_USER = "gemini-api-key"
 
@@ -51,6 +96,9 @@ class Settings:
     save_transcript: bool = True
     transcript_dir: str = transcript.DEFAULT_DIR
 
+    # 방향이 바뀌거나 통역이 시작될 때 캡션 박스 아래에 KO → EN 식으로 잠깐 띄운다.
+    show_direction_hint: bool = True
+
     # 동작
     audio_device_name: str = ""  # 빈 문자열이면 시스템 기본 입력
     show_source_text: bool = False
@@ -80,6 +128,7 @@ class Settings:
             fixed_box=bool(self.fixed_box),
             clear_after_seconds=_clamp(self.clear_after_seconds, 0.0, 30.0),
             save_transcript=bool(self.save_transcript),
+            show_direction_hint=bool(self.show_direction_hint),
             transcript_dir=self.transcript_dir or transcript.DEFAULT_DIR,
             audio_device_name=self.audio_device_name,
             show_source_text=bool(self.show_source_text),

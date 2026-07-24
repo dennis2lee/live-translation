@@ -261,6 +261,83 @@ def test_fixed_box_shows_status_inside_the_box(qapp):
     assert with_status != without
 
 
+# --- 번역 방향 표시 --------------------------------------------------------
+
+
+def render_view(view, size=(1280, 800)) -> QImage:
+    img = QImage(QSize(*size), QImage.Format.Format_RGB32)
+    painter = QPainter(img)
+    view.render(painter)
+    painter.end()
+    return img
+
+
+def make_view(settings: Settings, lines=(), size=(1280, 800)) -> CaptionView:
+    view = CaptionView(settings)
+    view.resize(QSize(*size))
+    view._box_alpha = 1.0
+    view._lines = list(lines)
+    return view
+
+
+def test_hint_is_drawn_below_the_caption_box(qapp):
+    s = Settings()
+    without = make_view(s, ONE)
+    with_hint = make_view(s, ONE)
+    with_hint.show_hint("KO → EN")
+
+    box = content_bbox(render_view(without), s.bg_color)
+    both = content_bbox(render_view(with_hint), s.bg_color)
+    assert box is not None and both is not None
+    assert both[3] > box[3]  # 아래쪽으로 더 뻗는다
+
+
+def test_hint_is_drawn_even_with_no_captions(qapp):
+    s = Settings(fixed_box=False)
+    view = make_view(s, [])
+    view.show_hint("EN → KO")
+    assert content_bbox(render_view(view), s.bg_color) is not None
+
+
+def test_hint_starts_fully_opaque_and_hides_cleanly(qapp):
+    view = make_view(Settings(), ONE)
+    view.show_hint("KO → EN")
+    assert view._hint_alpha == 1.0
+    view.hide_hint()
+    assert view._hint_alpha == 0.0
+    assert view._hint_text == ""
+
+
+def test_hidden_hint_paints_nothing_extra(qapp):
+    s = Settings()
+    plain = render_view(make_view(s, ONE))
+    view = make_view(s, ONE)
+    view.show_hint("KO → EN")
+    view.hide_hint()
+    assert render_view(view) == plain
+
+
+def test_hint_alpha_property_drives_repaint(qapp):
+    s = Settings()
+    view = make_view(s, ONE)
+    view.show_hint("KO → EN")
+    opaque = content_bbox(render_view(view), s.bg_color)
+    view.hintAlpha = 0.0
+    faded = content_bbox(render_view(view), s.bg_color)
+    assert opaque is not None and faded is not None
+    assert faded[3] < opaque[3]  # 사라지면 박스 아래 잉크가 없어진다
+
+
+def test_hint_stays_on_screen_with_a_tiny_bottom_margin(qapp):
+    """하단 여백을 좁게 잡아도 화면 밖으로 나가지 않는다."""
+    s = Settings(bottom_margin_pct=2)
+    view = make_view(s, ONE)
+    view.show_hint("KO → EN")
+    bbox = content_bbox(render_view(view), s.bg_color)
+    assert bbox is not None
+    assert bbox[3] <= 799
+
+
 def test_long_text_is_clipped_to_max_lines(qapp):
     long_line = [("word " * 200, True)]
     two = content_bbox(render(Settings(max_lines=2), long_line), "#000000")

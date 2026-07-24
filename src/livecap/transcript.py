@@ -113,6 +113,12 @@ class TranscriptWriter:
             f"공백 {gap_ms:.0f}ms_\n\n"
         )
 
+    def note_direction(self, label: str, elapsed_seconds: float) -> None:
+        """번역 방향이 바뀐 지점을 기록에 남긴다."""
+        if self._file is None:
+            return
+        self._write(f"> _번역 방향 — {label} ({_format_elapsed(elapsed_seconds)})_\n\n")
+
     def close(self, *, elapsed_seconds: float = 0.0, reconnects: int = 0) -> Path | None:
         if self._file is None:
             return None
