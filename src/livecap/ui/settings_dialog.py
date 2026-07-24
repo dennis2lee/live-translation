@@ -13,6 +13,7 @@ from PyQt6.QtWidgets import (
     QComboBox,
     QDialog,
     QDialogButtonBox,
+    QFileDialog,
     QFormLayout,
     QHBoxLayout,
     QLabel,
@@ -28,6 +29,7 @@ from .. import config
 from ..audio import list_input_devices
 from ..caption_buffer import Policy
 from ..config import Settings
+from ..transcript import DEFAULT_DIR, resolve_dir
 
 POLICY_LABELS = {
     Policy.AUTO: "자동 판별 (권장)",
@@ -104,6 +106,22 @@ class SettingsDialog(QDialog):
         form.addRow("박스 불투명도", opacity_row)
 
         # --- 동작 ---
+        self._save_transcript = QCheckBox("번역 기록을 .md 파일로 저장")
+        self._save_transcript.setToolTip("파일명은 통역을 시작한 날짜·시간을 따릅니다.")
+        self._save_transcript.setChecked(settings.save_transcript)
+        form.addRow("", self._save_transcript)
+
+        self._transcript_dir = QLineEdit(settings.transcript_dir)
+        self._transcript_dir.setMinimumWidth(260)
+        browse = QPushButton("찾아보기…")
+        browse.clicked.connect(self._pick_transcript_dir)
+        dir_row = QHBoxLayout()
+        dir_row.addWidget(self._transcript_dir)
+        dir_row.addWidget(browse)
+        dir_holder = QWidget()
+        dir_holder.setLayout(dir_row)
+        form.addRow("기록 저장 폴더", dir_holder)
+
         self._fixed_box = QCheckBox("캡션 박스 항상 표시 (크기·위치 고정)")
         self._fixed_box.setToolTip(
             "끄면 내용에 맞춰 박스 크기가 변하고, 캡션이 없을 때 사라집니다."
@@ -173,6 +191,12 @@ class SettingsDialog(QDialog):
         holder.setLayout(row)
         return s, holder
 
+    def _pick_transcript_dir(self) -> None:
+        current = str(resolve_dir(self._transcript_dir.text()))
+        chosen = QFileDialog.getExistingDirectory(self, "기록 저장 폴더 선택", current)
+        if chosen:
+            self._transcript_dir.setText(chosen)
+
     def _clear_key(self) -> None:
         config.clear_api_key()
         self._key_edit.clear()
@@ -197,6 +221,8 @@ class SettingsDialog(QDialog):
             bottom_margin_pct=self._bottom_margin.value(),
             box_opacity=self._opacity.value() / 100.0,
             clear_after_seconds=self._clear_after.value() / 10.0,
+            save_transcript=self._save_transcript.isChecked(),
+            transcript_dir=self._transcript_dir.text().strip() or DEFAULT_DIR,
             fixed_box=self._fixed_box.isChecked(),
             show_source_text=self._show_source.isChecked(),
             fullscreen=self._fullscreen.isChecked(),

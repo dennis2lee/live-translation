@@ -53,6 +53,8 @@ class CaptionBuffer:
     _continue_next: bool = field(default=False, init=False)
     _resolved: Policy | None = field(default=None, init=False)
     _samples: list[int] = field(default_factory=list, init=False)
+    _new_commits: list[str] = field(default_factory=list, init=False)
+    _resumed_prefix: str = field(default="", init=False)
 
     def __post_init__(self) -> None:
         self._committed = deque(maxlen=max(1, self.max_lines))
@@ -121,7 +123,14 @@ class CaptionBuffer:
         if self._continue_next:
             self._continue_next = False
             if not self._pending and self._committed:
-                self._pending = self._committed.pop()
+                resumed = self._committed.pop()
+                self._pending = resumed
+                if self._new_commits and self._new_commits[-1] == resumed:
+                    # 아직 기록으로 넘어가지 않았다 — 합본을 통째로 내보내면 된다.
+                    self._new_commits.pop()
+                else:
+                    # 이미 기록에 쓰였다 — 이어진 부분만 내보내 중복을 막는다.
+                    self._resumed_prefix = resumed
 
         self._pending = _join(self._pending, text)
 
@@ -147,10 +156,30 @@ class CaptionBuffer:
 
         # 말이 멎으면 캡션을 비운다 (정책 A/B 공통).
         if self.clear_after_seconds and not self.is_empty and idle >= self.clear_after_seconds:
+            # 지우기 전에 미확정분을 확정한다 — 안 그러면 기록에서 사라진다.
+            # (clear_after_seconds를 idle_commit_seconds보다 짧게 잡은 경우)
+            self._commit()
             self.clear()
             changed = True
 
         return changed
+
+    def drain_new_commits(self) -> list[str]:
+        """마지막 호출 이후 확정된 줄을 꺼내 간다 (기록 저장용).
+
+        화면 표시와 무관하게 한 번씩만 나온다. `clear()`로 화면을 비워도
+        아직 꺼내 가지 않은 줄은 사라지지 않는다.
+        """
+        out = self._new_commits
+        self._new_commits = []
+        return out
+
+    def flush(self) -> bool:
+        """미확정분을 강제로 확정한다 (통역 중지 시 마지막 문장을 남기기 위해)."""
+        if not self._pending:
+            return False
+        self._commit()
+        return True
 
     def note_reconnect(self) -> None:
         """재연결이 일어났음을 알린다. 다음 조각을 이전 줄에 이어 붙인다."""
@@ -163,14 +192,23 @@ class CaptionBuffer:
         self._pending = ""
         self._last_text = None
         self._continue_next = False
+        self._resumed_prefix = ""
 
     # --- 내부 -------------------------------------------------------------
 
     def _commit(self) -> None:
         line = self._pending.strip()
         self._pending = ""
-        if line:
-            self._committed.append(line)
+        prefix, self._resumed_prefix = self._resumed_prefix, ""
+        if not line:
+            return
+        self._committed.append(line)
+        if prefix and line.startswith(prefix):
+            rest = line[len(prefix) :].strip()
+            if rest:
+                self._new_commits.append(rest)
+        else:
+            self._new_commits.append(line)
 
 
 def _join(left: str, right: str) -> str:

@@ -13,6 +13,7 @@ from pathlib import Path
 
 from PyQt6.QtCore import QSettings
 
+from . import transcript
 from .caption_buffer import Policy
 from .util import logging as log
 
@@ -46,6 +47,10 @@ class Settings:
     # 말이 멎고 이만큼 지나면 캡션을 비운다. 0이면 계속 남겨둔다.
     clear_after_seconds: float = 2.0  # 0 ~ 30
 
+    # 번역 기록 저장 (파일명은 통역 시작 날짜·시간)
+    save_transcript: bool = True
+    transcript_dir: str = transcript.DEFAULT_DIR
+
     # 동작
     audio_device_name: str = ""  # 빈 문자열이면 시스템 기본 입력
     show_source_text: bool = False
@@ -74,6 +79,8 @@ class Settings:
             max_lines=int(_clamp(self.max_lines, 1, 4)),
             fixed_box=bool(self.fixed_box),
             clear_after_seconds=_clamp(self.clear_after_seconds, 0.0, 30.0),
+            save_transcript=bool(self.save_transcript),
+            transcript_dir=self.transcript_dir or transcript.DEFAULT_DIR,
             audio_device_name=self.audio_device_name,
             show_source_text=bool(self.show_source_text),
             fullscreen=bool(self.fullscreen),

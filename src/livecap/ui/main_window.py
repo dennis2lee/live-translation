@@ -6,8 +6,10 @@
 
 from __future__ import annotations
 
+import subprocess
 import time
 from dataclasses import replace
+from datetime import datetime
 
 from PyQt6.QtCore import QObject, Qt, QTimer, pyqtSignal
 from PyQt6.QtGui import QAction, QActionGroup, QColor, QCursor, QKeySequence
@@ -17,7 +19,8 @@ from .. import config
 from ..audio import AudioCapture, list_input_devices
 from ..caption_buffer import CaptionBuffer
 from ..config import Settings
-from ..translator import LiveTranslator, State
+from ..transcript import TranscriptWriter, resolve_dir
+from ..translator import MODEL, LiveTranslator, State
 from ..util import logging as log
 from .caption_view import CaptionView
 from .settings_dialog import SettingsDialog
@@ -60,6 +63,8 @@ class CaptionWindow(QMainWindow):
         self._translator: LiveTranslator | None = None
         self._state = State.IDLE
         self._error_detail = ""
+        self._writer: TranscriptWriter | None = None
+        self._started_at = 0.0
 
         self._buffer = CaptionBuffer(
             max_lines=settings.max_lines,
@@ -74,7 +79,7 @@ class CaptionWindow(QMainWindow):
         self._bridge.source_text.connect(self._on_source_text)
         self._bridge.target_text.connect(self._on_target_text)
         self._bridge.state_changed.connect(self._on_state_changed)
-        self._bridge.reconnected.connect(self._buffer.note_reconnect)
+        self._bridge.reconnected.connect(self._on_reconnected)
 
         self._tick = QTimer(self)
         self._tick.timeout.connect(self._on_tick)
@@ -140,6 +145,19 @@ class CaptionWindow(QMainWindow):
         clear.setShortcut(QKeySequence("Ctrl+K"))
         clear.triggered.connect(self._clear_captions)
         run_menu.addAction(clear)
+
+        run_menu.addSeparator()
+        self._act_save_transcript = QAction("번역 기록 저장", self, checkable=True)
+        self._act_save_transcript.setToolTip(
+            "통역 시작 날짜·시간으로 이름 붙인 .md 파일에 번역 내용을 남깁니다.\n"
+            "다음 통역 시작부터 적용됩니다."
+        )
+        self._act_save_transcript.triggered.connect(lambda c: self._update(save_transcript=c))
+        run_menu.addAction(self._act_save_transcript)
+
+        open_dir = QAction("기록 폴더 열기", self)
+        open_dir.triggered.connect(self._open_transcript_dir)
+        run_menu.addAction(open_dir)
 
         run_menu.addSeparator()
         self._act_status = QAction("상태: 대기 중", self)
@@ -253,6 +271,7 @@ class CaptionWindow(QMainWindow):
             a.setChecked(int(a.text()) == self._settings.font_size)
         for a in self._lines_group.actions():
             a.setChecked(int(a.text()) == self._settings.max_lines)
+        self._act_save_transcript.setChecked(self._settings.save_transcript)
         self._act_fixed_box.setChecked(self._settings.fixed_box)
         self._act_source.setChecked(self._settings.show_source_text)
         self._act_fullscreen.setChecked(self._settings.fullscreen)
@@ -317,6 +336,15 @@ class CaptionWindow(QMainWindow):
             self._push_lines()
             self._sync_actions()
 
+    def _open_transcript_dir(self) -> None:
+        path = resolve_dir(self._settings.transcript_dir)
+        try:
+            path.mkdir(parents=True, exist_ok=True)
+            subprocess.run(["open", str(path)], check=False)
+        except OSError as exc:
+            _log.error("could not open transcript directory: %s", exc)
+            self._view.set_status(f"기록 폴더를 열 수 없습니다: {path}")
+
     def _show_about(self) -> None:
         from .. import __version__
 
@@ -367,6 +395,19 @@ class CaptionWindow(QMainWindow):
             on_state=lambda s, d: self._bridge.state_changed.emit(s.value, d),
             on_reconnect=self._bridge.reconnected.emit,
         )
+        self._started_at = time.monotonic()
+        self._writer = None
+        if self._settings.save_transcript:
+            writer = TranscriptWriter(
+                self._settings.transcript_dir,
+                target_language=self._settings.target_language_code,
+                model=MODEL,
+            )
+            if writer.open(datetime.now()) is not None:
+                self._writer = writer
+            else:
+                self._view.set_status("번역 기록을 저장할 수 없습니다 (폴더 권한 확인)")
+
         self._translator.start()
         self._state = State.CONNECTING
         self._error_detail = ""
@@ -375,12 +416,21 @@ class CaptionWindow(QMainWindow):
         self._reset_cursor_timer()
 
     def stop_translation(self) -> None:
+        reconnects = self._translator.stats.reconnects if self._translator is not None else 0
         if self._translator is not None:
             self._translator.stop()
             self._translator = None
         if self._capture is not None:
             self._capture.stop()
             self._capture = None
+        # 마지막 미확정 문장까지 기록에 남긴다.
+        self._buffer.flush()
+        self._record_new_lines()
+        if self._writer is not None:
+            self._writer.close(
+                elapsed_seconds=time.monotonic() - self._started_at, reconnects=reconnects
+            )
+            self._writer = None
         self._state = State.IDLE
         self._error_detail = ""
         self._show_cursor()
@@ -401,6 +451,23 @@ class CaptionWindow(QMainWindow):
     def _on_target_text(self, text: str) -> None:
         if self._buffer.feed(text, time.monotonic()):
             self._push_lines()
+        self._record_new_lines()
+
+    def _record_new_lines(self) -> None:
+        """확정된 줄을 기록 파일로 흘려보낸다. 화면 표시와는 독립이다."""
+        if self._writer is None:
+            return
+        elapsed = time.monotonic() - self._started_at
+        for line in self._buffer.drain_new_commits():
+            self._writer.append_line(line, elapsed)
+
+    def _on_reconnected(self) -> None:
+        self._buffer.note_reconnect()
+        if self._writer is not None and self._translator is not None:
+            gaps = self._translator.stats.gaps_ms
+            self._writer.note_reconnect(
+                time.monotonic() - self._started_at, gaps[-1] if gaps else 0.0
+            )
 
     def _on_state_changed(self, state_value: str, detail: str) -> None:
         try:
@@ -414,6 +481,7 @@ class CaptionWindow(QMainWindow):
     def _on_tick(self) -> None:
         if self._buffer.tick(time.monotonic()):
             self._push_lines()
+        self._record_new_lines()
 
     def _push_lines(self) -> None:
         self._view.set_lines(self._buffer.display_lines())
