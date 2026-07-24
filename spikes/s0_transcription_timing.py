@@ -63,7 +63,11 @@ class Recorder:
                 continue
             lens = [len(t) for _, t in rows]
             gaps = [b - a for (a, _), (b, _) in zip(rows, rows[1:], strict=False)]
+            leading = sum(1 for _, t in rows if t.startswith((" ", "\n")))
             print(f"  조각 수      : {len(rows)}")
+            print(f"  선행 공백    : {leading}/{len(rows)} "
+                  f"({leading / len(rows) * 100:.0f}%) "
+                  f"— 100%가 아니면 CaptionBuffer._join 규칙을 재확인할 것")
             print(f"  첫 조각까지  : {rows[0][0]:.3f} s")
             print(f"  길이 median  : {statistics.median(lens):.0f} chars "
                   f"(min {min(lens)}, max {max(lens)})")

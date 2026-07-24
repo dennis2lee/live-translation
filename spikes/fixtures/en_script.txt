@@ -1,0 +1,22 @@
+# 영어→한국어 방향 검증용 원고. ko_script.txt와 같은 회의 내용이라 두 방향의
+# 결과를 나란히 비교할 수 있다. 한 줄이 한 문장이며 줄 번호가 대조 단위다.
+# make_tts_fixture.py --script spikes/fixtures/en_script.txt --voice Samantha
+
+Good morning everyone. Let's begin the quarterly results meeting.
+First, let's look at third quarter revenue.
+Total revenue grew fourteen percent compared to the same period last year.
+However, growth in the domestic market alone has slowed somewhat.
+It is especially significant that overseas revenue exceeded half for the first time.
+On the cost side, personnel expenses rose a little more than expected.
+Marketing costs, on the other hand, came in twenty percent under plan.
+So operating margin improved as a result.
+Next is the fourth quarter outlook.
+The new product launch has been confirmed for November.
+If the initial response is good, we expect to hit the annual target without difficulty.
+Of course, exchange rate movement remains the biggest variable.
+The finance team will report on that separately.
+Finally, let me briefly share next year's roadmap.
+We plan to increase research and development investment by thirty percent over this year.
+We intend to concentrate hiring in the first half.
+If you have questions, please speak up now.
+If not, we will conclude the meeting here.

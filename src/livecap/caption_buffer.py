@@ -211,12 +211,31 @@ class CaptionBuffer:
             self._new_commits.append(line)
 
 
+def _is_cjk(ch: str) -> bool:
+    """한글·한자·가나. 이 문자들 사이에는 공백을 끼워 넣지 않는다."""
+    code = ord(ch)
+    return (
+        0xAC00 <= code <= 0xD7A3  # 한글 음절
+        or 0x1100 <= code <= 0x11FF  # 한글 자모
+        or 0x3040 <= code <= 0x30FF  # 히라가나·가타카나
+        or 0x4E00 <= code <= 0x9FFF  # 한자
+    )
+
+
 def _join(left: str, right: str) -> str:
-    """조각을 이어 붙인다. 양쪽이 공백을 안 주면 한 칸 넣는다."""
+    """조각을 이어 붙인다. 양쪽이 공백을 안 주면 한 칸 넣는다.
+
+    실측(spikes/RESULTS.md) 결과 영어·한국어 모두 조각이 선행 공백을 달고 오므로
+    보통은 그대로 이어 붙이면 된다. 공백이 없는 예외적인 경우, 한글끼리는
+    **넣지 않는다** — 어절 중간에서 잘린 조각(`계획` + `입니다.`)에 공백을 넣으면
+    단어가 쪼개져 읽기 나빠지기 때문이다. 영어는 반대로 넣어야 단어가 붙지 않는다.
+    """
     if not left:
         return right.lstrip()
     if left.endswith((" ", "\n")) or right.startswith((" ", "\n")):
         return left + right
     if right[0] in ",.?!;:%)]}'\"" or left.endswith(("(", "[", "{", "-", "'")):
+        return left + right
+    if _is_cjk(left[-1]) and _is_cjk(right[0]):
         return left + right
     return left + " " + right

@@ -9,7 +9,7 @@
 재현:
 
 ```bash
-python spikes/make_ko_fixture.py
+python spikes/make_tts_fixture.py
 python spikes/s0_transcription_timing.py --wav spikes/fixtures/ko_fixture.wav --drain 10
 ```
 
@@ -91,6 +91,52 @@ SDK 2.14.0에 필드는 존재하나 이 모델에서는 오지 않았습니다.
 - 미확정 텍스트를 55% 알파로 흐리게 표시하는 단계가 실제로 쓰입니다
   (조각이 1초마다 들어오므로 확정 전 표시 구간이 존재합니다).
 - 조각의 선행 공백을 그대로 살리는 `_join` 동작이 맞습니다.
+
+---
+
+# 영어 → 한국어 방향 측정 (2026-07-24)
+
+`spikes/fixtures/en_fixture.wav` (영어 원고 18문장, 1.5분, `say -v Samantha`),
+`--target ko`.
+
+```bash
+python spikes/make_tts_fixture.py --script spikes/fixtures/en_script.txt --voice Samantha \
+    --out spikes/fixtures/en_fixture.wav
+python spikes/s0_transcription_timing.py --wav spikes/fixtures/en_fixture.wav --target ko
+```
+
+| 항목 | 영→한 | (참고) 한→영 |
+|---|---|---|
+| `output_transcription` 조각 수 | 82 | 83 |
+| 조각 길이 median | **6 chars** | 14 chars |
+| 도착 간격 median | 1001 ms | 1005 ms |
+| 첫 조각까지 | 3.756 s | 3.142 s |
+| 판정 | 정책 A | 정책 A |
+
+한국어 출력은 조각이 더 잘게 옵니다(중간값 6자). 같은 내용을 더 적은 글자로
+쓰기 때문이며, 도착 **간격**은 양방향이 사실상 같습니다(약 1초).
+
+## 조각 이어붙이기 — 공백 처리
+
+**한국어 조각도 영어와 마찬가지로 선행 공백을 달고 옵니다.**
+
+```
+t=+80.208s  OUT  len=7    text=' 핵심 역량에'
+t=+81.200s  OUT  len=5    text=' 집중하여'
+t=+82.236s  OUT  len=9    text=' 상반기에 채용을'
+t=+83.201s  OUT  len=10   text=' 늘릴 계획입니다.'
+```
+
+그대로 이어 붙이면 `핵심 역량에 집중하여 상반기에 채용을 늘릴 계획입니다.`가
+되어 띄어쓰기가 맞습니다. 우려했던 `안녕` + `하세요` → `안녕 하세요` 문제는
+정상 경로에서는 발생하지 않습니다.
+
+다만 조각이 **어절 중간에서** 잘리는 경우(`계획` + `입니다.`)에는 공백을 넣으면
+안 되므로, `_join()`이 한글·한자·가나끼리는 공백을 끼워 넣지 않도록 했습니다.
+영어는 반대로 넣어야 단어가 붙지 않으므로 기존 동작을 유지합니다.
+
+이후 실행부터는 스파이크가 선행 공백 비율을 함께 출력합니다. 100%가 아니면
+이 규칙을 재검토해야 합니다.
 
 ## 남은 미검증 항목
 

@@ -213,6 +213,36 @@ def test_join_does_not_insert_space_before_punctuation():
     assert buf.pending_text == "Hello, world"
 
 
+def test_korean_fragments_with_leading_spaces_join_correctly():
+    """실측대로 한국어 조각도 선행 공백을 달고 온다."""
+    buf = inc()
+    for i, frag in enumerate([" 질문이", " 있으시면,", " 지금 말씀해 주세요."]):
+        buf.feed(frag, float(i))
+    assert buf.committed_lines == ["질문이 있으시면, 지금 말씀해 주세요."]
+
+
+def test_no_space_is_inserted_inside_a_korean_word():
+    """어절 중간에서 잘린 조각에 공백을 넣으면 안 된다."""
+    buf = inc()
+    buf.feed("늘릴 계획", 0.0)
+    buf.feed("입니다.", 0.1)
+    assert buf.committed_lines == ["늘릴 계획입니다."]
+
+
+def test_english_still_gets_a_space_when_the_api_omits_one():
+    buf = inc()
+    buf.feed("hello", 0.0)
+    buf.feed("world", 0.1)
+    assert buf.pending_text == "hello world"
+
+
+def test_mixed_korean_and_english_still_gets_a_space():
+    buf = inc()
+    buf.feed("연구개발", 0.0)
+    buf.feed("R&D", 0.1)
+    assert buf.pending_text == "연구개발 R&D"
+
+
 def test_committed_lines_are_stripped():
     buf = inc()
     buf.feed("  spaced out.  ", 0.0)
