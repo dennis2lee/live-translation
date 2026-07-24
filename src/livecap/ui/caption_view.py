@@ -1,7 +1,7 @@
-"""캡션 페인팅 — PLAN.md §6.2.
+"""Caption painting.
 
-QLabel + 스타일시트로는 라운드 박스 자동 크기 조절과 N줄 클리핑을 깔끔하게
-처리하기 어려우므로 QWidget.paintEvent에서 직접 그린다.
+A QLabel with a stylesheet cannot cleanly auto-size a rounded box or clip to N
+lines, so this draws everything itself in QWidget.paintEvent.
 """
 
 from __future__ import annotations
@@ -35,35 +35,35 @@ FADE_MS = 150
 SOURCE_GAP = 14.0
 SOURCE_FONT_RATIO = 0.42
 
-# 번역 방향 표시 (KO → EN) — 캡션 박스 오른쪽 아래
+# Direction hint (KO → EN), at the bottom-right of the caption box
 HINT_HOLD_MS = 2000
 HINT_FADE_MS = 400
 HINT_GAP = 12.0
 HINT_FONT_RATIO = 0.42
 
-# 상태 표시등 — 캡션 박스 오른쪽 밑
+# Status indicator, at the bottom-right of the caption box
 DOT_RADIUS_RATIO = 0.13
 DOT_MIN_RADIUS = 5.0
 DOT_GAP = 14.0
 DOT_PULSE_MS = 1200
 DOT_DIM_ALPHA = 0.15
-COLOR_LIVE = QColor("#34C759")  # 연결됨
-COLOR_IDLE = QColor("#6E6E6E")  # 대기 중
-COLOR_ERROR = QColor("#FF3B30")  # 오류
+COLOR_LIVE = QColor("#34C759")  # connected
+COLOR_IDLE = QColor("#6E6E6E")  # idle
+COLOR_ERROR = QColor("#FF3B30")  # error
 
 
 class Indicator(StrEnum):
     IDLE = "idle"
-    """회색, 고정 — 프로그램 시작 직후와 통역 중지 상태."""
+    """Grey, steady — at launch and after stopping."""
 
     BUSY = "busy"
-    """녹색, 깜빡임 — 연결 중·재연결 중."""
+    """Green, blinking — connecting or reconnecting."""
 
     LIVE = "live"
-    """녹색, 고정 — 연결 완료."""
+    """Green, steady — connected."""
 
     ERROR = "error"
-    """빨강, 고정 — 오류."""
+    """Red, steady — error."""
 
 
 DOT_COLOR = {
@@ -73,8 +73,8 @@ DOT_COLOR = {
     Indicator.ERROR: COLOR_ERROR,
 }
 STATUS_COLOR = QColor("#6E6E6E")
-# 한글 출력(영어→한국어)을 쓰므로 한글 글꼴을 명시한다. 빠뜨리면 Qt 폴백에
-# 맡겨지면서 굵기·자간이 라틴 문자와 어긋난다.
+# Korean output needs an explicit Hangul family. Without it Qt falls back per
+# glyph and the weight and spacing drift away from the Latin text.
 FONT_FAMILIES = [
     "SF Pro Display",
     "Apple SD Gothic Neo",
@@ -85,7 +85,7 @@ _CENTER = int(Qt.AlignmentFlag.AlignHCenter | Qt.AlignmentFlag.AlignVCenter)
 
 
 class CaptionView(QWidget):
-    """검은 배경 + 하단 라운드 캡션 박스."""
+    """Solid background with a rounded caption box near the bottom."""
 
     def __init__(self, settings: Settings, parent: QWidget | None = None) -> None:
         super().__init__(parent)
@@ -99,7 +99,7 @@ class CaptionView(QWidget):
         self._fade.setDuration(FADE_MS)
         self._fade.setEasingCurve(QEasingCurve.Type.InOutQuad)
 
-        # 방향 표시 — 2초 유지한 뒤 서서히 사라진다.
+        # Direction hint — held for two seconds, then faded out.
         self._hint_text = ""
         self._hint_alpha = 0.0
         self._hint_fade = QPropertyAnimation(self, b"hintAlpha", self)
@@ -109,7 +109,7 @@ class CaptionView(QWidget):
         self._hint_timer.setSingleShot(True)
         self._hint_timer.timeout.connect(self._start_hint_fade)
 
-        # 상태 표시등 — 프로그램은 회색으로 시작한다.
+        # Status indicator — starts grey.
         self._indicator = Indicator.IDLE
         self._dot_alpha = 1.0
         self._dot_pulse = QPropertyAnimation(self, b"dotAlpha", self)
@@ -123,7 +123,7 @@ class CaptionView(QWidget):
         self.setAutoFillBackground(False)
         self.setAttribute(Qt.WidgetAttribute.WA_OpaquePaintEvent, True)
 
-    # --- 애니메이션용 프로퍼티 --------------------------------------------
+    # --- animated properties ----------------------------------------------
 
     def _get_box_alpha(self) -> float:
         return self._box_alpha
@@ -143,10 +143,10 @@ class CaptionView(QWidget):
 
     hintAlpha = pyqtProperty(float, fget=_get_hint_alpha, fset=_set_hint_alpha)
 
-    # --- 방향 표시 --------------------------------------------------------
+    # --- direction hint ---------------------------------------------------
 
     def show_hint(self, text: str, hold_ms: int = HINT_HOLD_MS) -> None:
-        """캡션 박스 아래에 회색으로 잠깐 띄웠다가 페이드아웃한다."""
+        """Show grey text below the caption box briefly, then fade it out."""
         self._hint_text = text
         self._hint_fade.stop()
         self._hint_timer.stop()
@@ -161,7 +161,7 @@ class CaptionView(QWidget):
         self._hint_text = ""
         self.update()
 
-    # --- 상태 표시등 ------------------------------------------------------
+    # --- status indicator -------------------------------------------------
 
     def _get_dot_alpha(self) -> float:
         return self._dot_alpha
@@ -177,7 +177,7 @@ class CaptionView(QWidget):
         return self._indicator
 
     def set_indicator(self, state: Indicator) -> None:
-        """연결 중에는 깜빡이고, 그 외에는 고정으로 켜둔다."""
+        """Blink while connecting; hold steady otherwise."""
         if state is self._indicator:
             return
         self._indicator = state
@@ -194,10 +194,10 @@ class CaptionView(QWidget):
         self._hint_fade.setEndValue(0.0)
         self._hint_fade.start()
 
-    # --- 입력 -------------------------------------------------------------
+    # --- inputs -----------------------------------------------------------
 
     def apply_settings(self, settings: Settings) -> None:
-        """설정 변경을 즉시 반영한다 (앱 재시작 불필요)."""
+        """Apply a settings change immediately, without restarting the app."""
         self._settings = settings
         self._refresh_visibility()
 
@@ -210,7 +210,7 @@ class CaptionView(QWidget):
         self.update()
 
     def set_status(self, status: str) -> None:
-        """연결 중·재연결 중 등. 모달을 띄우지 않고 캡션 자리에 표시한다."""
+        """Error text, shown in the caption area rather than in a modal dialog."""
         self._status = status
         self._refresh_visibility()
 
@@ -220,8 +220,8 @@ class CaptionView(QWidget):
         self._refresh_visibility()
 
     def _refresh_visibility(self) -> None:
-        # 고정 박스 모드에서는 비어 있어도 박스를 유지한다.
-        # 끄면 표시할 텍스트가 없을 때 박스 자체를 숨긴다 (PLAN.md §6.2).
+        # In fixed mode the box stays even when empty; otherwise it disappears
+        # as soon as there is nothing to show.
         target = 1.0 if (self._lines or self._settings.fixed_box) else 0.0
         if self._fade.state() == QPropertyAnimation.State.Running:
             self._fade.stop()
@@ -232,7 +232,7 @@ class CaptionView(QWidget):
         else:
             self.update()
 
-    # --- 페인팅 -----------------------------------------------------------
+    # --- painting ---------------------------------------------------------
 
     def _caption_font(self) -> QFont:
         f = QFont()
@@ -249,7 +249,7 @@ class CaptionView(QWidget):
         s = self._settings
         p.fillRect(self.rect(), QColor(s.bg_color))
         self._paint_body(p)
-        # 캡션 유무와 무관하게 그린다.
+        # Drawn whether or not there are captions.
         self._paint_hint(p)
         self._paint_indicator(p)
         p.end()
@@ -264,10 +264,10 @@ class CaptionView(QWidget):
         self._paint_caption(p)
 
     def _anchor_right(self) -> float:
-        """캡션 박스의 오른쪽 가장자리.
+        """The right edge of the caption box.
 
-        박스가 내용에 따라 줄어드는 모드에서도 이 값은 고정이라, 표시등이
-        글자 길이에 따라 좌우로 움직이지 않는다.
+        Fixed even when the box hugs its content, so the indicator does not
+        drift sideways as the text length changes.
         """
         max_box_w = self.width() * self._settings.box_max_width_pct / 100.0
         return (self.width() + max_box_w) / 2.0
@@ -276,7 +276,7 @@ class CaptionView(QWidget):
         return max(DOT_MIN_RADIUS, self._settings.font_size * DOT_RADIUS_RATIO)
 
     def _strip_rect(self, height: float) -> QRectF:
-        """캡션 박스 바로 아래 띠. 자리가 모자라면 화면 안으로 밀어 넣는다."""
+        """The strip just below the caption box, nudged on-screen if space is tight."""
         top = min(self._box_bottom() + HINT_GAP, self.height() - height)
         return QRectF(0, top, self.width(), height)
 
@@ -305,7 +305,7 @@ class CaptionView(QWidget):
         color.setAlphaF(max(0.0, min(1.0, self._hint_alpha)))
         p.setPen(color)
 
-        # 표시등 왼쪽에 우측 정렬로 놓아 서로 겹치지 않게 한다.
+        # Right-aligned to the left of the indicator, so the two never overlap.
         radius = self._dot_radius()
         strip = self._strip_rect(max(fm.height(), radius * 2))
         right = self._anchor_right() - radius * 2 - DOT_GAP
@@ -339,7 +339,7 @@ class CaptionView(QWidget):
         max_box_w = self.width() * s.box_max_width_pct / 100.0
         max_text_w = max(40.0, max_box_w - 2 * PAD_H)
 
-        # 논리 줄을 실제 폭에 맞춰 접고, 최대 줄 수를 넘으면 앞부분을 버린다.
+        # Wrap to the real width, then drop from the front if it exceeds max_lines.
         wrapped: list[tuple[str, bool]] = []
         for text, confirmed in self._lines:
             for piece in _wrap(text, font, max_text_w):
@@ -351,25 +351,25 @@ class CaptionView(QWidget):
 
         line_h = fm.height()
         if s.fixed_box:
-            # 폭·높이를 고정한다. 내용에 따라 박스가 흔들리지 않는다.
+            # Fixed width and height, so the box never jitters with content.
             box_w = max_box_w
             box_h = line_h * max_lines + 2 * PAD_V
         else:
             text_w = max(fm.horizontalAdvance(t) for t, _ in wrapped)
             box_w = min(max_box_w, text_w + 2 * PAD_H)
-            box_h = line_h * len(wrapped) + 2 * PAD_V  # 실제 줄 수에 맞춰 자동 조절
+            box_h = line_h * len(wrapped) + 2 * PAD_V  # sized to the real line count
 
         bottom = self._box_bottom()
         box = QRectF((self.width() - box_w) / 2.0, bottom - box_h, box_w, box_h)
 
-        # 박스
+        # the box
         box_color = QColor(s.box_color)
         box_color.setAlphaF(max(0.0, min(1.0, s.box_opacity)) * self._box_alpha)
         path = QPainterPath()
         path.addRoundedRect(box, float(s.corner_radius), float(s.corner_radius))
         p.fillPath(path, box_color)
 
-        # 고정 박스가 비어 있으면 상태 문구를 박스 안에 넣는다.
+        # An empty fixed box carries the status text inside it.
         if not wrapped:
             if self._status:
                 sf = self._caption_font()
@@ -381,11 +381,11 @@ class CaptionView(QWidget):
                 p.drawText(box, _CENTER, self._status)
             return
 
-        # 텍스트
+        # the text
         confirmed_color = QColor(s.text_color)
         pending_color = QColor(s.text_color)
-        pending_color.setAlphaF(0.55)  # 미확정은 확정색의 55% 알파
-        # 고정 박스에서는 아래쪽 정렬 — 줄 수가 변해도 최신 줄이 같은 자리에 있다.
+        pending_color.setAlphaF(0.55)  # unsettled text at 55% of the settled colour
+        # Bottom-aligned in fixed mode, so the newest line never moves.
         y = (
             box.bottom() - PAD_V - line_h * len(wrapped)
             if s.fixed_box
@@ -399,7 +399,7 @@ class CaptionView(QWidget):
             p.drawText(line_rect, _CENTER, text)
             y += line_h
 
-        # 원문 한국어 — 박스 밖, 배경색 위에 작은 회색 1줄
+        # Source text — one small grey line outside the box, on the background
         if s.show_source_text and self._source_text:
             sf = self._caption_font()
             sf.setPixelSize(max(14, int(s.font_size * SOURCE_FONT_RATIO)))
@@ -420,7 +420,7 @@ class CaptionView(QWidget):
 
 
 def _wrap(text: str, font: QFont, max_width: float) -> list[str]:
-    """QTextLayout으로 줄바꿈 위치를 계산해 실제 문자열 조각으로 돌려준다."""
+    """Use QTextLayout to find the break positions, and return the pieces."""
     text = text.strip()
     if not text:
         return []

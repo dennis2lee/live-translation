@@ -8,6 +8,9 @@ dist/
 .ruff_cache/
 .DS_Store
 
+# Local agent instructions — kept out of the repository
+CLAUDE.md
+
 # Never commit key material or captured audio
 .env
 *.pem

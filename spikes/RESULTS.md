@@ -1,124 +1,50 @@
-# Phase 0 — 전사 도착 패턴 측정 결과
+# Measurement Results
 
-**측정일** 2026-07-24
-**모델** `gemini-3.5-live-translate-preview`
-**SDK** google-genai 2.14.0 / Python 3.14
-**입력** `spikes/fixtures/ko_fixture.wav` — 원고 18문장, 1.5분, 16kHz mono 16-bit
-(macOS TTS `say -v Yuna`로 합성, 원고는 `spikes/fixtures/ko_script.txt`)
+Everything here was measured against the live API, not inferred. Code should
+follow these numbers rather than re-deriving them.
 
-재현:
+- **Model** — `gemini-3.5-live-translate-preview`
+- **Environment** — google-genai 2.14.0, Python 3.14, macOS 26.5 arm64
+- **Date** — 2026-07-24
+
+Test audio is synthesised from a fixed script with the macOS TTS voices, so
+transcripts can be compared against a known original.
 
 ```bash
-python spikes/make_tts_fixture.py
+python spikes/make_tts_fixture.py --repeat 20 --out spikes/fixtures/ko_30min.wav
+```
+
+---
+
+## Phase 0 — How transcription fragments arrive
+
+The question that had to be answered before building the UI: does
+`output_transcription` stream incrementally, or arrive one utterance at a time?
+
+```bash
 python spikes/s0_transcription_timing.py --wav spikes/fixtures/ko_fixture.wav --drain 10
 ```
 
----
+**Answer: incremental.** Caption policy A. Fixed in `Settings.caption_policy`.
 
-## 1. 조각 단위 — 정책 A/B 결정
-
-| 항목 | 값 |
-|---|---|
-| `output_transcription` 조각 수 | 83 |
-| 조각 길이 median | **14 chars** (min 4, max 33) |
-| 조각 도착 간격 median | **1005 ms** |
-| **판정** | **정책 A — 점진 표시** |
-
-조각은 단어~짧은 구 단위로 약 1초에 하나씩 도착합니다. 발화 전체가 한 번에
-오는 정책 B 형태가 **아닙니다.**
-
-관측된 조각 예 (연속 도착):
-
-```
-t=+67.084s  OUT  len=8    text=' This is'
-t=+68.089s  OUT  len=22   text=' something the finance'
-t=+69.102s  OUT  len=19   text=' team is monitoring'
-t=+70.690s  OUT  len=12   text=' separately.'
-```
-
-조각은 **앞쪽에 공백을 포함**해서 옵니다(`' This is'`). 그대로 이어 붙이면 되며,
-`CaptionBuffer._join`이 이 경우 공백을 중복으로 넣지 않습니다.
-
-문장 종결 부호가 조각 끝에 실려 옵니다(`' separately.'`). 따라서 정책 A의
-종결 부호 커밋이 실제로 동작합니다. 1.2초 유휴 커밋은 종결 부호 없이 끊기는
-구간의 보조 수단으로 남깁니다(조각 간격 median이 1.0초이므로 여유가 크지 않아
-1.2초를 그대로 유지합니다).
-
-## 2. 첫 텍스트까지의 지연
-
-| 항목 | 값 |
-|---|---|
-| 오디오 전송 시작 → 첫 `output_transcription` | **3.142 s** |
-| 오디오 전송 시작 → 첫 `input_transcription` | 2.951 s |
-
-## 3. `input_transcription`도 같은 패턴인가
-
-| 항목 | 값 |
-|---|---|
-| 조각 수 | 89 |
-| 조각 길이 median | 5 chars (min 2, max 10) |
-| 도착 간격 median | 1016 ms |
-| output과 같은 패턴인가 | **예** (양쪽 모두 점진) |
-
-원문 한국어는 영어보다 조각이 더 잘게 옵니다(`' 재무팀에서'`, `' 별도로'`).
-원문 표시는 1줄 요약이므로 문제되지 않습니다.
-
-| 항목 | 값 |
-|---|---|
-| `interim_input_transcription` 수신 여부 | **아니오** (1.5분 동안 0회) |
-
-SDK 2.14.0에 필드는 존재하나 이 모델에서는 오지 않았습니다. 코드에서 의존하지
-않습니다.
-
-## 4. `session_resumption_update` 주기
-
-| 항목 | 값 |
-|---|---|
-| 수신 횟수 | 85 |
-| 간격 median | **1.0 s** |
-| `go_away` 수신 | **0회** |
-
-핸들이 약 1초마다 갱신되므로 재연결 시 항상 최신 핸들을 쓸 수 있습니다.
-`go_away`는 1.5분 세션에서는 나오지 않습니다 — 세션 수명(약 10~15분)에
-가까워져야 옵니다. **Phase 3의 30분 실행에서 검증해야 합니다.**
-
----
-
-## 결론 → 코드에 반영한 것
-
-- `Settings.caption_policy` 기본값을 **`incremental`(정책 A)** 로 고정했습니다.
-  자동 판별(AUTO)은 선택지로 남겨두었습니다.
-- 미확정 텍스트를 55% 알파로 흐리게 표시하는 단계가 실제로 쓰입니다
-  (조각이 1초마다 들어오므로 확정 전 표시 구간이 존재합니다).
-- 조각의 선행 공백을 그대로 살리는 `_join` 동작이 맞습니다.
-
----
-
-# 영어 → 한국어 방향 측정 (2026-07-24)
-
-`spikes/fixtures/en_fixture.wav` (영어 원고 18문장, 1.5분, `say -v Samantha`),
-`--target ko`.
-
-```bash
-python spikes/make_tts_fixture.py --script spikes/fixtures/en_script.txt --voice Samantha \
-    --out spikes/fixtures/en_fixture.wav
-python spikes/s0_transcription_timing.py --wav spikes/fixtures/en_fixture.wav --target ko
-```
-
-| 항목 | 영→한 | (참고) 한→영 |
+| Metric | KO → EN | EN → KO |
 |---|---|---|
-| `output_transcription` 조각 수 | 82 | 83 |
-| 조각 길이 median | **6 chars** | 14 chars |
-| 도착 간격 median | 1001 ms | 1005 ms |
-| 첫 조각까지 | 3.756 s | 3.142 s |
-| 판정 | 정책 A | 정책 A |
+| `output_transcription` fragments | 83 | 82 |
+| Median fragment length | 14 chars | 6 chars |
+| Median inter-arrival gap | 1005 ms | 1001 ms |
+| Time to first output | 3.142 s | 3.756 s |
+| Time to first input transcription | 2.951 s | 3.557 s |
+| Verdict | Policy A | Policy A |
 
-한국어 출력은 조각이 더 잘게 옵니다(중간값 6자). 같은 내용을 더 적은 글자로
-쓰기 때문이며, 도착 **간격**은 양방향이 사실상 같습니다(약 1초).
+- Korean output arrives in smaller pieces because it says the same thing in fewer characters
+- The **arrival rate is the same in both directions** — about one fragment per second
+- `session_resumption_update` arrives roughly every second, so the resumption handle is always fresh
+- `go_away` did not appear in a 1.5-minute session — see Phase 3
+- `interim_input_transcription` exists in the SDK but this model never sends it; nothing depends on it
 
-## 조각 이어붙이기 — 공백 처리
+### Fragment joining
 
-**한국어 조각도 영어와 마찬가지로 선행 공백을 달고 옵니다.**
+Fragments carry **their own leading space**, in both languages:
 
 ```
 t=+80.208s  OUT  len=7    text=' 핵심 역량에'
@@ -127,43 +53,73 @@ t=+82.236s  OUT  len=9    text=' 상반기에 채용을'
 t=+83.201s  OUT  len=10   text=' 늘릴 계획입니다.'
 ```
 
-그대로 이어 붙이면 `핵심 역량에 집중하여 상반기에 채용을 늘릴 계획입니다.`가
-되어 띄어쓰기가 맞습니다. 우려했던 `안녕` + `하세요` → `안녕 하세요` 문제는
-정상 경로에서는 발생하지 않습니다.
+- Concatenating directly produces correct spacing in both languages
+- The feared `안녕` + `하세요` → `안녕 하세요` failure does not occur on the normal path
+- `_join()` still refuses to insert a space between CJK characters, in case a fragment ever splits mid-word (`계획` + `입니다.`)
+- English keeps the insert, since English words must stay separated
+- The spike now reports the leading-space ratio on every run; if it is ever below 100%, revisit this rule
 
-다만 조각이 **어절 중간에서** 잘리는 경우(`계획` + `입니다.`)에는 공백을 넣으면
-안 되므로, `_join()`이 한글·한자·가나끼리는 공백을 끼워 넣지 않도록 했습니다.
-영어는 반대로 넣어야 단어가 붙지 않으므로 기존 동작을 유지합니다.
-
-이후 실행부터는 스파이크가 선행 공백 비율을 함께 출력합니다. 100%가 아니면
-이 규칙을 재검토해야 합니다.
+Sentence-final punctuation rides along with the fragments (`' separately.'`),
+so policy A's punctuation commit works. The 1.2 s idle commit stays as a
+fallback for phrases that end without punctuation.
 
 ---
 
-# Phase 3 — 30분 세션 유지 (2026-07-24) ✅ 통과
+## Phase 1 — Audio capture
 
-`spikes/fixtures/ko_30min.wav` (원고 18문장 × 20회 = 360문장, 30.8분), 한→영.
+```bash
+python spikes/s1_capture_check.py --seconds 60
+```
+
+| Criterion | Measured | |
+|---|---|---|
+| Byte count within ±1% of 16000 × 2 × seconds | 0.833% drift | ✅ |
+| Callback underruns | 0 | ✅ |
+| Ring buffer drops | 0 bytes | ✅ |
+
+Measured with the built-in microphone at 48 kHz. **Not yet verified against the
+USB interface.**
+
+---
+
+## Phase 2 — Five minutes unattended
+
+```bash
+python spikes/s2_headless_run.py --wav spikes/fixtures/ko_6min.wav --minutes 5 \
+    --script spikes/fixtures/ko_script.txt --repeat 4
+```
+
+| Metric | Value |
+|---|---|
+| Duration | 5.1 min |
+| Reconnects | 0 |
+| Chunks sent | 3000 (= exactly 300 s of audio) |
+| Ring buffer drops | 0 bytes |
+| Cost | $0.19 |
+| Sentences lost | none |
+
+---
+
+## Phase 3 — Thirty minutes unattended ✅
 
 ```bash
 python spikes/s2_headless_run.py --wav spikes/fixtures/ko_30min.wav --minutes 30 \
     --script spikes/fixtures/ko_script.txt --repeat 20 --out phase3_transcript.md
 ```
 
-## 수용 기준 대조
-
-| PLAN.md §9 Phase 3 기준 | 실측 | 판정 |
+| Acceptance criterion | Measured | |
 |---|---|---|
-| 30분 연속 실행 완주 | 30.1분 | ✅ |
-| 재연결 횟수·공백 시간 로그 | 3회 / 370·403·459 ms | ✅ |
-| 재연결 구간 문장 유실 없음 | 360문장 전부, 최저 0.78 · 평균 0.96 | ✅ |
-| 비용이 예상($1.10)의 ±20% 이내 | **$1.11** (+0.9%) | ✅ |
+| 30 minutes unbroken | 30.1 min | ✅ |
+| Reconnect count and gap logged | 3 × (370, 403, 459 ms) | ✅ |
+| No sentence lost across reconnects | 360/360, worst 0.78, mean 0.96 | ✅ |
+| Cost within ±20% of the $1.10 estimate | **$1.11** (+0.9%) | ✅ |
 
-부가 지표: 전송 청크 18000개(= 정확히 1800초), 링 버퍼 유실 **0 바이트**.
+Also: 18000 chunks sent (exactly 1800 s), **0 bytes** dropped by the ring buffer.
 
-## 재연결 동작
+### Reconnect behaviour
 
-`go_away`는 **9분 간격으로 정확히 3번** 왔고 매번 `time_left=50s`였다.
-계획서가 예상한 "3~4회"와 일치한다.
+`go_away` arrived **three times at 9-minute intervals**, each with
+`time_left=50s` — matching the 3–4 predicted.
 
 ```
 15:40:54  live session open (resumed=False)
@@ -174,10 +130,9 @@ python spikes/s2_headless_run.py --wav spikes/fixtures/ko_30min.wav --minutes 30
 16:07:55  go_away ... gap 459 ms (reconnect #3)
 ```
 
-세 번 모두 `resumed=True` — 보관해 둔 `new_handle`이 실제로 재사용되었다.
-새 세션을 **먼저 연 뒤** 교체하므로 공백이 0.5초 미만에 그친다.
-
-캡션도 재연결을 가로질러 끊기지 않는다.
+- All three swaps report `resumed=True`, so the stored `new_handle` really was reused
+- Opening the replacement **before** closing the old session keeps the gap under half a second
+- Captions run straight through the swap:
 
 ```
 [1080.0s] We expect to achieve it.
@@ -185,15 +140,29 @@ python spikes/s2_headless_run.py --wav spikes/fixtures/ko_30min.wav --minutes 30
 [1081.0s] Of course, exchange rate fluctuations are still the biggest variable.
 ```
 
-## 이 실행에서 발견해 고친 것
+### Defect found by this run
 
-첫 재연결이 상태를 `연결 중`으로 표시했다. `stats.reconnects`로 판단했는데 그
-시점에는 아직 0이기 때문이다. 교체할 세션(`_active`)의 존재 여부로 판단하도록
-바꿨다.
+The first reconnect reported its state as *connecting* rather than
+*reconnecting*, because the decision used `stats.reconnects`, which is still 0
+at that moment. Now decided by whether a session is present to replace.
 
-## 남은 미검증 항목
+---
 
-- 실제 USB 오디오 인터페이스로의 캡처 (지금까지는 내장 마이크 + 파일 입력)
-- PLAN.md §10 시나리오 2(지연 측정), 3(Google Translate 앱 대비),
-  4(장애 주입 — Wi-Fi 차단·USB 분리·화면 잠금)
-- 영→한 방향의 30분 완주 (한→영만 검증함)
+## Comparing transcripts against the script
+
+`s2_headless_run.py --script` scores each original sentence against the
+recognised Korean and flags anything below a threshold.
+
+- Scoring sums **all** matching blocks, not the single longest run
+- An earlier version used the longest run and produced false positives, because the ASR normalises numbers: `십일월` → `11월`, `삼십 퍼센트` → `30%`, and spaces differently (`영업이익률` → `영업이익 율`)
+- Re-score a saved transcript without spending API credits with `--compare-only`
+
+---
+
+## Still unverified
+
+- Capture from the actual USB audio interface — everything so far used the built-in microphone or file input
+- Latency measurement by screen recording (speech start → caption appears)
+- Side-by-side quality comparison against the Google Translate app
+- Fault injection: Wi-Fi off for 10 s, USB interface unplugged and reconnected, screen locked and unlocked
+- A 30-minute run in the English → Korean direction; only Korean → English was measured

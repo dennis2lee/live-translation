@@ -117,8 +117,8 @@ def test_keychain_is_used_when_dotenv_has_no_key(tmp_path, monkeypatch):
 
 
 def test_unedited_placeholder_is_treated_as_missing(tmp_path, monkeypatch):
-    """.env.example을 그대로 복사만 하고 값을 안 채운 경우."""
-    write_env(tmp_path, monkeypatch, "GEMINI_API_KEY=여기에_발급받은_키를_붙여넣으십시오\n")
+    """.env.example copied but never filled in."""
+    write_env(tmp_path, monkeypatch, "GEMINI_API_KEY=your-key-here\n")
     no_keychain(monkeypatch)
     assert config.load_api_key() is None
 

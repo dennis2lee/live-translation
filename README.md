@@ -1,83 +1,121 @@
 # LiveCap
 
-한국어 발화를 영어로 실시간 통역해 전체화면 캡션으로 띄우는 macOS 앱.
-엔진은 Google Gemini Live API의 `gemini-3.5-live-translate-preview`.
+Real-time speech translation captions for macOS.
 
-전체 명세는 [PLAN.md](PLAN.md), 작업 규칙은 [CLAUDE.md](CLAUDE.md)를 따릅니다.
+Speak Korean, see English captions on a full-screen display — or flip the
+direction and speak English to see Korean. Audio comes in through any CoreAudio
+input device, typically a USB interface fed from a mixer.
 
-## 설치
+- **Engine** — Google Gemini Live API, `gemini-3.5-live-translate-preview`
+- **UI** — PyQt6, native macOS menu bar, no Electron
+- **Latency** — ~3.1 s to first caption, fragments arriving about once per second
+- **Endurance** — verified for 30 minutes unbroken across 3 automatic reconnects
 
-```bash
-python3 -m venv .venv
-.venv/bin/python -m pip install -e '.[dev]'
-```
+See [INSTALL.md](INSTALL.md) to set it up on a new machine.
 
-Python 3.12 이상이 필요합니다 (검증 환경: Python 3.14).
-
-## API 키
-
-`.env.example`을 복사해 값을 채우십시오.
+## Quick start
 
 ```bash
-cp .env.example .env
+cd ~/work/live-translation && cp .env.example .env
 ```
 
-```
-GEMINI_API_KEY=AIza...
-```
+- Put your Gemini API key in `.env` (paid tier required — see [INSTALL.md](INSTALL.md))
+- Run `./run.sh`
+- Press `0` to start
 
-`.env`는 `.gitignore`에 있어 커밋되지 않습니다. `.env.example`에는 절대 실제
-키를 적지 마십시오 — 그쪽은 커밋됩니다.
+## Keyboard shortcuts
 
-조회 순서는 다음과 같습니다.
+| Key | Action |
+|---|---|
+| `0` | Toggle translation on / off |
+| `1` | Korean → English |
+| `2` | English → Korean |
+| ⌘R | Start translation |
+| ⌘. | Stop translation |
+| ⌘K | Clear captions |
+| ⌘, | Preferences |
+| ⌘Q | Quit |
 
-1. `GEMINI_API_KEY` (또는 `GOOGLE_API_KEY`) 환경변수
-2. 리포지토리 루트의 `.env`
-3. macOS 키체인 (`LiveCap` / `gemini-api-key`)
-4. 앱 **환경설정…**(⌘,)에서 입력 → 키체인에 저장
+`0` toggles, but the menu deliberately keeps **Start** and **Stop** as two
+separate items so a mis-click cannot stop a live session.
 
-`.env.example`의 안내 문구를 지우지 않은 채 두면 키가 없는 것으로 간주합니다.
+## Status indicator
 
-> `gemini-3.5-live-translate-preview`는 **무료 등급에서 동작하지 않습니다.**
-> 키를 발급받은 Google Cloud 프로젝트에 결제 계정이 연결되어 있어야 합니다.
+A dot at the bottom-right of the caption box reports connection state. There is
+deliberately **no "connecting…" text** — it would cover the captions.
 
-## 실행
+| Dot | Meaning |
+|---|---|
+| Grey, steady | Idle — at launch, or after stopping |
+| Green, blinking | Connecting or reconnecting |
+| Green, steady | Connected and translating |
+| Red, steady | Error |
 
-```bash
-./run.sh
-```
+- Errors also print a short message in the caption area, because you cannot act on a red dot alone
+- Examples: `API 키가 필요합니다`, `오디오 입력 장치를 찾을 수 없습니다`
 
-메뉴바에서 **통역 → 통역 시작**(⌘R)으로 시작합니다.
+## Translation direction
 
-## 오디오 입력 장치 선택
+| Preset | Key | Target language |
+|---|---|---|
+| Korean → English | `1` | `en` |
+| English → Korean | `2` | `ko` |
 
-**설정 → 오디오 입력 장치** 서브메뉴에서 고릅니다. 메뉴를 열 때마다 목록을
-새로 감지하므로 USB 인터페이스를 도중에 뽑았다 꽂아도 다시 선택할 수 있습니다.
-장치는 인덱스가 아니라 **이름**으로 저장되며, 저장된 장치가 없으면 시스템 기본
-입력으로 폴백하고 화면에 알립니다.
+- The Live API has **no source-language field** — the model detects it
+- So a "direction" is really just a target language
+- Speech already in the target language produces no caption (`echo_target_language=False`)
+- Translating both directions at once would need two concurrent sessions and cost twice as much; this is not supported
 
-믹서 피크는 **-12dBFS 근처**로 잡으십시오. 앱에서 소프트웨어 게인을 걸지 않습니다.
+Switching while translating restarts only the translator session:
 
-## 캡션 박스
+- Audio capture and the ring buffer keep running, so nothing is lost in the gap
+- The transcript file stays open and records the switch point
+- The direction appears briefly at the bottom-right as `KO → EN`, then fades
 
-기본은 **고정 박스**입니다 — 폭·높이·위치가 항상 같고, 캡션이 없어도 사라지지
-않으며, 기본 2줄 높이입니다. 텍스트는 아래쪽 정렬이라 1줄이든 2줄이든 최신 줄이
-같은 자리에 남습니다.
+## Caption box
 
-`설정 → 캡션 박스 항상 표시`를 끄면 PLAN.md §6.2의 원래 동작(내용에 맞춰 크기가
-변하고, 비면 사라짐)으로 돌아갑니다. 높이는 `캡션 줄 수`(1~4)를 따릅니다.
+- Fixed size and position by default, sized for **2 lines**, and it stays on screen even when empty
+- Text is bottom-aligned, so the newest line never moves as lines accumulate
+- Default width is **90%** of the window (5% margin each side), adjustable from 60–100%
+- Turn off **설정 → 캡션 박스 항상 표시** to make the box hug its content and disappear when empty
 
-기본 폭은 화면의 **90%**(좌우 여백 5%씩)이며, 환경설정의 `박스 최대 폭`
-슬라이더로 60~100% 사이에서 조절합니다.
+| Setting | Default | Range |
+|---|---|---|
+| Background colour | `#000000` | any |
+| Box colour | `#1B4965` | any |
+| Box opacity | 100% | 60–100% |
+| Text colour | `#FFFFFF` | any |
+| Corner radius | 24 px | 0–48 |
+| Box max width | 90% | 60–100% |
+| Bottom margin | 8% | 2–20% |
+| Font size | 44 px | 24–96 |
+| Max lines | 2 | 1–4 |
 
-## 번역 기록 저장
+Unconfirmed text is drawn at 55% alpha so you can see a phrase being revised
+before it settles.
 
-통역을 시작하면 번역 내용을 Markdown 파일로 남깁니다. 파일명은 **통역을 시작한
-날짜·시간**을 따릅니다 — `2026-07-24_143052.md`.
+## Clearing on silence
 
-기본 저장 위치는 `~/Documents/LiveCap`이며, 환경설정에서 바꿀 수 있습니다.
-`통역 → 기록 폴더 열기`로 Finder에서 바로 열 수 있고, `통역 → 번역 기록 저장`을
-끄면 남기지 않습니다 (다음 통역 시작부터 적용).
+- Captions clear **3 seconds** after the last transcription fragment arrives
+- Adjustable from 0–10 s in Preferences; `0` keeps captions on screen indefinitely
+- The trigger is fragment arrival, not audio level — fragments keep coming about once a second while someone is speaking, so captions never clear mid-sentence
+
+## Audio input
+
+Pick a device under **설정 → 오디오 입력 장치**.
+
+- The list is rescanned every time you open the menu, so a USB interface can be unplugged and reconnected
+- Devices are stored **by name**, not index — indexes change across reconnects
+- If a stored device is missing, LiveCap falls back to the system default and says so
+- Set your mixer peak near **-12 dBFS**; the app applies no software gain
+
+Internally the device is opened at its native rate (usually 48 kHz) and
+resampled to 16 kHz with `soxr`, never by asking CoreAudio for 16 kHz directly.
+
+## Transcripts
+
+Each session writes a Markdown file named after its start time —
+`2026-07-24_143052.md`, in `~/Documents/LiveCap` by default.
 
 ```markdown
 # LiveCap 번역 기록
@@ -93,108 +131,86 @@ GEMINI_API_KEY=AIza...
 `00:07` Revenue is up 14% year over year.
 
 > _재연결 — 10:02 지점, 공백 842ms_
-
-...
 ```
 
-각 줄을 쓸 때마다 즉시 디스크에 반영하므로 앱이 갑자기 종료돼도 그때까지 내용이
-남습니다. 재연결 지점도 표시되어 나중에 유실 구간을 찾을 때 씁니다. 한 줄도
-받지 못한 기록 파일은 종료 시 지웁니다.
+- Every line is flushed immediately, so a crash cannot lose what was already written
+- Reconnects and direction switches are marked inline
+- A session that produced no captions deletes its own file on exit
+- Toggle with **통역 → 번역 기록 저장**; open the folder with **통역 → 기록 폴더 열기**
 
-## 무음 후 캡션 지우기
+## Cost
 
-말이 멎고 **3초**가 지나면 캡션을 비웁니다. 화면에 이전 문장이 계속 떠 있지
-않게 하기 위한 것으로, 환경설정의 `무음 후 캡션 지우기`에서 0~10초 사이로
-조절할 수 있습니다. **0으로 두면 지우지 않고 계속 남겨둡니다.**
-
-기준은 "마지막 전사 조각이 도착한 시점"입니다. 말하는 중에는 조각이 약 1초
-간격으로 계속 들어오므로(Phase 0 측정) 문장 중간에 지워지지 않습니다.
-
-## 단축키
-
-| 동작 | 단축키 |
+| Metric | Value |
 |---|---|
-| **통역 시작/중지 전환** | **0** |
-| **한국어 → 영어** | **1** |
-| **영어 → 한국어** | **2** |
-| 통역 시작 | ⌘R |
-| 통역 중지 | ⌘. |
-| 캡션 지우기 | ⌘K |
-| 환경설정 | ⌘, |
-| 종료 | ⌘Q |
+| Input | $3.50 / 1M tokens (~$0.0053/min) |
+| Output | $21.00 / 1M tokens (~$0.0315/min) |
+| Effective | **~$0.037/min** |
+| 30-minute session | **~$1.10** (measured: $1.11) |
 
-`0`은 누를 때마다 시작과 중지를 오갑니다. 메뉴에는 실수로 중지를 누르는 사고를
-줄이기 위해 `통역 시작`·`통역 중지`를 따로 두었습니다 (PLAN.md §6.3).
+Audio output tokens are billed even though LiveCap discards the audio — the
+model is audio-only and the output cannot be switched off.
 
-## 번역 방향
+## Architecture
 
-`1`은 한국어→영어, `2`는 영어→한국어입니다. `설정 → 번역 방향`에서도 고를 수
-있습니다.
+Three threads. Crossing between them is only ever done in the ways listed here.
 
-Live API의 `TranslationConfig`에는 **출발 언어 필드가 없습니다** — 모델이 알아서
-감지합니다. 따라서 "방향"은 실제로는 목적지 언어 하나로 결정되며, 이미 목적지
-언어인 발화는 (`echo_target_language=False`이므로) 캡션이 나오지 않습니다.
-한국어·영어가 섞인 회의에서 양쪽을 동시에 번역하려면 세션을 두 개 열어야 하고
-비용이 2배가 됩니다 — 현재는 지원하지 않습니다.
-
-통역 중에 방향을 바꾸면 번역 세션만 다시 엽니다. **오디오 캡처와 링 버퍼는
-유지되므로 전환 중에도 소리가 유실되지 않고**, 기록 파일도 그대로 이어지며
-전환 지점이 표시됩니다.
-
-방향이 바뀌거나 통역이 시작될 때 캡션 박스 **오른쪽 아래**에 `KO → EN` 형태로
-2초간 회색으로 표시된 뒤 서서히 사라집니다. `설정 → 번역 방향 표시`로 끌 수
-있습니다.
-
-## 상태 표시등
-
-캡션 박스 오른쪽 밑의 동그라미가 상태를 알립니다. 연결 중이라는 **글자는 띄우지
-않습니다** — 캡션을 가리지 않기 위해서입니다.
-
-| 표시 | 뜻 |
+| Thread | Responsibility |
 |---|---|
-| 회색 (고정) | 대기 중 — 프로그램 시작 직후, 통역 중지 상태 |
-| 녹색 (깜빡임) | 연결 중 · 재연결 중 |
-| 녹색 (고정) | 연결 완료, 통역 중 |
-| 빨강 (고정) | 오류 |
-
-오류일 때만은 원인을 알아야 하므로 캡션 자리에 문구도 함께 남깁니다
-(`API 키가 필요합니다`, `오디오 입력 장치를 찾을 수 없습니다` 등).
-
-## 개발
-
-```bash
-pytest                                  # 전체 테스트
-ruff check .                            # 린트
-
-python spikes/s0_transcription_timing.py          # Phase 0 — 전사 도착 패턴 측정
-python spikes/s1_capture_check.py --seconds 60    # Phase 1 — 캡처 품질 검증
-```
-
-`spikes/s0_transcription_timing.py`는 API 키가 필요합니다. 측정 결과는
-[spikes/RESULTS.md](spikes/RESULTS.md)에 기록하고, 그에 맞춰 환경설정의
-**캡션 커밋 정책**을 고정하십시오. 측정 전에는 `자동 판별`로 동작합니다.
-
-## 구조
+| PortAudio callback | Downmix to mono, resample to 16 kHz, write to a lock-free ring buffer. No allocation, no locks, no Qt. |
+| asyncio worker | Send 100 ms chunks to the Live API, receive transcriptions, manage reconnects. Emits Qt signals. |
+| Qt main | All widgets. Never touched from the other two threads. |
 
 ```
 src/livecap/
-├── app.py               진입점
-├── config.py            Settings + QSettings 영속화 + 키체인
-├── audio.py             AudioCapture, RingBuffer (48k→16k, int16 LE)
-├── translator.py        LiveTranslator (asyncio, 세션 재개·선제 재연결)
-├── caption_buffer.py    전사 조각 → 표시 줄 (Qt·네트워크 의존성 없음)
+├── app.py               entry point
+├── config.py            Settings, QSettings persistence, .env and Keychain lookup
+├── audio.py             AudioCapture, RingBuffer (48k → 16k, int16 LE)
+├── translator.py        LiveTranslator — sessions, resumption, pre-emptive reconnect
+├── transcript.py        Markdown transcript writer
+├── caption_buffer.py    transcription fragments → display lines (no Qt, no network)
 └── ui/
-    ├── main_window.py   CaptionWindow + 시스템 메뉴바
-    ├── caption_view.py  배경 + 라운드 캡션 박스 페인팅
+    ├── main_window.py   CaptionWindow and the system menu bar
+    ├── caption_view.py  background, caption box, status indicator
     └── settings_dialog.py
 ```
 
-세 개의 스레드가 돕니다. 오디오 콜백에서 Qt 객체를 만지지 않고, asyncio
-스레드에서 위젯을 직접 갱신하지 않습니다. 스레드 경계는 항상 `pyqtSignal`을
-경유합니다.
+### Session endurance
 
-## 비용
+An audio session lasts about 15 minutes and the WebSocket about 10, so lasting
+30 minutes needs all three of:
 
-입력 $3.50/1M 토큰, 출력 $21.00/1M — 실효 분당 약 $0.0368, **30분 세션당 약
-$1.10**. 캡션만 쓰더라도 모델이 오디오 전용이라 오디오 출력 토큰은 그대로
-과금됩니다.
+- `context_window_compression` with a sliding window, to extend the session itself
+- `session_resumption`, keeping the latest `new_handle` for the next connection
+- Opening a replacement session **before** closing the old one when `go_away` arrives
+
+Measured over 30 minutes: `go_away` arrived 3 times at 9-minute intervals, each
+swap took 370–459 ms, and no sentence was lost.
+
+## Development
+
+```bash
+cd ~/work/live-translation && .venv/bin/python -m pytest -q
+```
+
+```bash
+cd ~/work/live-translation && .venv/bin/python -m ruff check .
+```
+
+- 181 tests, none requiring an API key or network
+- UI tests render offscreen and inspect pixels directly
+- `caption_buffer.py` has no Qt or network dependency and is covered by unit tests
+- Reconnect logic is tested against a fake Live session
+
+Measurement scripts live in `spikes/`, and their findings are recorded in
+[spikes/RESULTS.md](spikes/RESULTS.md).
+
+| Script | Purpose |
+|---|---|
+| `s0_transcription_timing.py` | How transcription fragments arrive (drives caption policy) |
+| `s1_capture_check.py` | Audio capture accuracy, underruns, WAV dump |
+| `s2_headless_run.py` | Long unattended runs, reconnect stats, transcript vs. script |
+| `make_tts_fixture.py` | Build known-script test audio with the macOS TTS voices |
+
+## License
+
+MIT — see [LICENSE](LICENSE).

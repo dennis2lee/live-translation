@@ -1,3 +1,3 @@
-"""LiveCap — 한→영 실시간 동시통역 캡션 앱."""
+"""LiveCap — real-time speech translation captions for macOS."""
 
 __version__ = "0.1.0"

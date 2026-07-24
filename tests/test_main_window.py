@@ -1,6 +1,6 @@
-"""메뉴바 배선 스모크 테스트 — PLAN.md §6.3.
+"""Smoke tests for the menu bar wiring.
 
-실제 오디오 장치나 API 키 없이도 창이 뜨고 메뉴가 구성되어야 한다.
+The window must build and its menus populate without an audio device or API key.
 """
 
 from __future__ import annotations
@@ -26,7 +26,7 @@ def qapp():
 
 @pytest.fixture
 def window(qapp, monkeypatch):
-    # QSettings에 실제로 쓰지 않도록 막는다.
+    # Never touch the real QSettings store.
     monkeypatch.setattr(config, "save", lambda _s: None)
     monkeypatch.setattr(mw.config, "save", lambda _s: None)
     w = mw.CaptionWindow(Settings())
@@ -47,11 +47,11 @@ def find_menu(window, title):
 
 
 def test_all_three_menus_exist(window):
-    assert menu_titles(window) == ["LiveCap", "통역", "설정"]
+    assert menu_titles(window) == ["LiveCap", "Translate", "Settings"]
 
 
 def test_start_is_enabled_and_stop_disabled_while_idle(window):
-    """토글이 아니라 별도 항목 두 개, 상태에 따라 하나씩만 활성."""
+    """Two separate items, with exactly one enabled at a time."""
     assert window._act_start.isEnabled() is True
     assert window._act_stop.isEnabled() is False
 
@@ -64,33 +64,33 @@ def test_start_and_stop_swap_when_running(window):
 
 def test_status_item_is_display_only(window):
     assert window._act_status.isEnabled() is False
-    assert window._act_status.text() == "상태: 대기 중"
+    assert window._act_status.text() == "Status: Idle"
 
 
 def test_status_item_tracks_state(window):
     window._on_state_changed(State.RECONNECTING.value, "")
-    assert "재연결 중" in window._act_status.text()
+    assert "Reconnecting" in window._act_status.text()
 
 
 def test_translation_menu_has_the_specified_shortcuts(window):
     shortcuts = {
         a.text(): a.shortcut().toString()
-        for a in find_menu(window, "통역").actions()
+        for a in find_menu(window, "Translate").actions()
         if not a.isSeparator()
     }
-    assert shortcuts["통역 시작"] == "Ctrl+R"
-    assert shortcuts["통역 중지"] == "Ctrl+."
-    assert shortcuts["캡션 지우기"] == "Ctrl+K"
+    assert shortcuts["Start Translating"] == "Ctrl+R"
+    assert shortcuts["Stop Translating"] == "Ctrl+."
+    assert shortcuts["Clear Captions"] == "Ctrl+K"
 
 
 def test_device_menu_is_repopulated_on_open(window, monkeypatch):
-    """USB 인터페이스는 도중에 연결·해제될 수 있으므로 열 때마다 갱신한다."""
+    """A USB interface can appear or vanish, so rebuild the list on every open."""
     monkeypatch.setattr(
         mw, "list_input_devices", lambda: [InputDevice(0, "Scarlett 2i2", 2, 48000.0)]
     )
     window._populate_device_menu()
     labels = [a.text() for a in window._device_menu.actions() if not a.isSeparator()]
-    assert labels[0] == "시스템 기본 입력"
+    assert labels[0] == "System Default Input"
     assert any("Scarlett 2i2" in label for label in labels)
 
     monkeypatch.setattr(
@@ -106,7 +106,7 @@ def test_device_menu_handles_no_devices(window, monkeypatch):
     monkeypatch.setattr(mw, "list_input_devices", lambda: [])
     window._populate_device_menu()
     labels = [a.text() for a in window._device_menu.actions() if not a.isSeparator()]
-    assert "(입력 장치를 찾을 수 없습니다)" in labels
+    assert "(no input device found)" in labels
 
 
 def test_choosing_a_device_stores_the_name_not_the_index(window, monkeypatch):
@@ -152,7 +152,7 @@ def test_start_without_api_key_shows_status_not_a_modal(window, monkeypatch):
     monkeypatch.setattr(mw.config, "load_api_key", lambda: None)
     window.start_translation()
     assert window._state is State.ERROR
-    assert "API 키" in window._view._status
+    assert "API key" in window._view._status
 
 
 def test_missing_audio_device_shows_status_not_a_modal(window, monkeypatch):
@@ -163,12 +163,12 @@ def test_missing_audio_device_shows_status_not_a_modal(window, monkeypatch):
             pass
 
         def start(self):
-            raise RuntimeError("오디오 입력 장치를 찾을 수 없습니다")
+            raise RuntimeError("No audio input device found")
 
     monkeypatch.setattr(mw, "AudioCapture", _Failing)
     window.start_translation()
     assert window._state is State.ERROR
-    assert "오디오 입력 장치" in window._view._status
+    assert "No audio input device" in window._view._status
 
 
 def test_target_text_flows_into_the_caption_view(window):
@@ -207,7 +207,7 @@ def test_default_box_width_leaves_five_percent_margins(window):
     assert window._settings.box_max_width_pct == 90
 
 
-# --- 번역 방향 프리셋 ------------------------------------------------------
+# --- direction presets ----------------------------------------------------
 
 
 def test_default_direction_is_korean_to_english(window):
@@ -220,8 +220,8 @@ def test_direction_menu_items_use_keys_one_and_two(window):
     shortcuts = {
         a.text(): a.shortcut().toString() for a in window._direction_actions.values()
     }
-    assert shortcuts["한국어 → 영어"] == "1"
-    assert shortcuts["영어 → 한국어"] == "2"
+    assert shortcuts["Korean → English"] == "1"
+    assert shortcuts["English → Korean"] == "2"
 
 
 def test_setting_direction_changes_the_target_language(window):
@@ -265,7 +265,7 @@ def test_custom_target_language_gets_a_generic_label(window):
     assert not any(a.isChecked() for a in window._direction_actions.values())
 
 
-# --- 0번 키 토글 -----------------------------------------------------------
+# --- the 0 key ------------------------------------------------------------
 
 
 def test_zero_key_is_bound_to_the_toggle(window):
@@ -285,10 +285,10 @@ def test_toggle_starts_when_idle_and_stops_when_running(window, monkeypatch):
 
 
 def test_start_and_stop_remain_separate_menu_items(window):
-    """실수로 중지를 누르는 사고를 줄이기 위해 메뉴는 둘로 유지한다."""
-    labels = [a.text() for a in find_menu(window, "통역").actions() if not a.isSeparator()]
-    assert "통역 시작" in labels
-    assert "통역 중지" in labels
+    """The menu keeps both items so a mis-click cannot stop a live session."""
+    labels = [a.text() for a in find_menu(window, "Translate").actions() if not a.isSeparator()]
+    assert "Start Translating" in labels
+    assert "Stop Translating" in labels
 
 
 def test_starting_translation_announces_the_direction(window, monkeypatch):
@@ -325,7 +325,7 @@ class _StubTranslator:
 def test_switching_direction_while_running_keeps_audio_and_transcript(
     window, monkeypatch, tmp_path
 ):
-    """오디오 캡처와 링 버퍼, 기록 파일은 유지하고 번역 세션만 다시 연다."""
+    """Only the translator session reopens; capture, buffer and transcript persist."""
     made: list[str] = []
     stopped: list[str] = []
 
@@ -351,15 +351,15 @@ def test_switching_direction_while_running_keeps_audio_and_transcript(
 
     window.set_direction(mw.Direction.EN_TO_KO)
 
-    assert made == ["en", "ko"]      # 새 목적지로 다시 연결
-    assert stopped == ["stop"]       # 구 번역기만 정리
-    assert window._capture is capture  # 캡처는 그대로 — 오디오가 끊기지 않는다
-    assert window._writer is writer_before  # 기록 파일도 그대로
+    assert made == ["en", "ko"]             # reconnected with the new target
+    assert stopped == ["stop"]              # only the old translator torn down
+    assert window._capture is capture       # capture continues, audio unbroken
+    assert window._writer is writer_before  # same transcript file
 
-    # 닫기 전에도 디스크에 반영되어 있어야 한다.
+    # Content must be on disk before close().
     text = writer_before.path.read_text(encoding="utf-8")
     assert "Before the switch." in text
-    assert "번역 방향 — EN → KO" in text
+    assert "direction: EN → KO" in text
 
 
 def test_switching_direction_while_idle_does_not_start_a_session(window, monkeypatch):

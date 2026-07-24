@@ -1,8 +1,11 @@
-"""오디오 캡처 파이프라인 — PLAN.md §5.
+"""Audio capture pipeline.
 
-USB 인터페이스를 네이티브 레이트로 열고, 모노 다운믹스 → soxr 스트리밍 리샘플
-→ int16 LE → 링 버퍼 순으로 흘린다. 링 버퍼는 연결 상태와 무관하게 계속
-채워지므로 재연결 중에도 오디오가 유실되지 않는다.
+Opens the USB interface at its native rate, then downmixes to mono, resamples
+to 16 kHz with the streaming soxr converter, converts to int16 LE, and writes
+into a ring buffer.
+
+The ring buffer keeps filling regardless of connection state, so audio survives
+a reconnect: whatever accumulated during the gap is pushed to the new session.
 """
 
 from __future__ import annotations
@@ -27,12 +30,14 @@ CALLBACK_MS = 20
 
 
 class RingBuffer:
-    """단일 생산자(오디오 콜백) / 단일 소비자(asyncio send task) 링 버퍼.
+    """Single-producer (audio callback) / single-consumer (asyncio send task) buffer.
 
-    락을 쓰지 않는다. 쓰기 위치는 생산자만, 읽기 위치는 소비자만 갱신하며
-    둘 다 단조 증가하는 파이썬 int라 GIL 하에서 읽기/쓰기가 원자적이다.
-    가득 차면 생산자는 블로킹하지 않고 그대로 덮어쓰며, 소비자가 다음 읽기에서
-    자신이 추월당했음을 감지해 가장 오래된 데이터를 건너뛴다.
+    Lock-free. Only the producer advances the write position and only the
+    consumer advances the read position; both are monotonic Python ints, whose
+    reads and writes are atomic under the GIL.
+
+    When full, the producer overwrites rather than blocking, and the consumer
+    detects on its next read that it was lapped and skips the oldest data.
     """
 
     def __init__(self, capacity_bytes: int) -> None:
@@ -40,9 +45,9 @@ class RingBuffer:
             raise ValueError("capacity_bytes must be positive")
         self._cap = capacity_bytes
         self._buf = bytearray(capacity_bytes)
-        self._write_pos = 0  # 생산자만 갱신 (누적 바이트 수)
-        self._read_pos = 0  # 소비자만 갱신 (누적 바이트 수)
-        self._dropped = 0  # 소비자만 갱신
+        self._write_pos = 0  # producer only, cumulative bytes
+        self._read_pos = 0  # consumer only, cumulative bytes
+        self._dropped = 0  # consumer only
 
     @property
     def capacity(self) -> int:
@@ -50,20 +55,20 @@ class RingBuffer:
 
     @property
     def dropped_bytes(self) -> int:
-        """오버플로로 버려진 누적 바이트 수."""
+        """Total bytes discarded to overflow."""
         return self._dropped
 
     def available(self) -> int:
-        """읽을 수 있는 바이트 수 (덮어쓰기 손실 반영 전 값)."""
+        """Readable bytes, before accounting for overwritten data."""
         return min(self._write_pos - self._read_pos, self._cap)
 
     def write(self, data: bytes) -> None:
-        """생산자 전용. 절대 블로킹하지 않는다."""
+        """Producer only. Never blocks."""
         n = len(data)
         if n == 0:
             return
         if n >= self._cap:
-            # 한 번에 용량을 넘는 쓰기 — 마지막 cap 바이트만 남긴다.
+            # A single write larger than the buffer — keep only the last cap bytes.
             data = data[-self._cap :]
             n = self._cap
 
@@ -78,11 +83,11 @@ class RingBuffer:
         self._write_pos += n
 
     def read(self, n: int) -> bytes | None:
-        """소비자 전용. n바이트가 모이지 않았으면 None."""
+        """Consumer only. Returns None until n bytes are available."""
         if n <= 0 or n > self._cap:
             raise ValueError("n must be in 1..capacity")
 
-        # 추월당했으면 가장 오래된 데이터를 버리고 따라잡는다.
+        # If we were lapped, drop the oldest data and catch up.
         lag = self._write_pos - self._read_pos
         if lag > self._cap:
             skipped = lag - self._cap
@@ -100,7 +105,7 @@ class RingBuffer:
         else:
             out = bytes(self._buf[start:]) + bytes(self._buf[: end - self._cap])
 
-        # 복사 도중 생산자에게 추월당했는지 확인. 당했다면 그 데이터는 오염됐다.
+        # If the producer lapped us mid-copy, that data is corrupt — retry.
         if self._write_pos - self._read_pos > self._cap:
             return self.read(n)
 
@@ -108,7 +113,7 @@ class RingBuffer:
         return out
 
     def clear(self) -> None:
-        """소비자 전용. 쌓인 것을 모두 버린다."""
+        """Consumer only. Discard everything buffered."""
         self._read_pos = self._write_pos
 
 
@@ -121,11 +126,11 @@ class InputDevice:
 
 
 def list_input_devices() -> list[InputDevice]:
-    """입력 채널이 있는 장치만 열거한다. 메뉴를 열 때마다 호출할 것."""
+    """Enumerate devices that have input channels. Call this every time the menu opens."""
     out: list[InputDevice] = []
     try:
         devices = sd.query_devices()
-    except Exception as exc:  # PortAudio가 죽어 있는 경우
+    except Exception as exc:  # PortAudio is wedged
         _log.error("could not query audio devices: %s", exc)
         return out
     for i, d in enumerate(devices):
@@ -142,7 +147,7 @@ def list_input_devices() -> list[InputDevice]:
 
 
 def resolve_device(name: str) -> InputDevice | None:
-    """이름으로 장치를 찾는다. 인덱스는 USB 재연결 시 바뀌므로 쓰지 않는다."""
+    """Look a device up by name. Indexes change on USB reconnect, so never store those."""
     devices = list_input_devices()
     if not devices:
         return None
@@ -163,12 +168,12 @@ def resolve_device(name: str) -> InputDevice | None:
 
 
 def float_to_pcm16(x: np.ndarray) -> bytes:
-    """float32 [-1,1] → 16-bit signed PCM little-endian."""
+    """float32 in [-1, 1] to 16-bit signed PCM, little-endian."""
     return np.clip(x * 32767.0, -32768.0, 32767.0).astype("<i2").tobytes()
 
 
 class AudioCapture:
-    """장치를 네이티브 레이트로 열고 16k PCM을 링 버퍼로 밀어 넣는다."""
+    """Opens a device at its native rate and feeds 16 kHz PCM into the ring buffer."""
 
     def __init__(
         self,
@@ -200,20 +205,20 @@ class AudioCapture:
         return self._stream is not None and self._stream.active
 
     def start(self) -> InputDevice:
-        """스트림을 연다. 장치를 못 찾으면 RuntimeError."""
+        """Open the stream. Raises RuntimeError if no device can be found."""
         with self._lock:
             if self._stream is not None:
                 raise RuntimeError("capture already started")
 
             dev = resolve_device(self._device_name)
             if dev is None:
-                raise RuntimeError("오디오 입력 장치를 찾을 수 없습니다")
+                raise RuntimeError("No audio input device found")
 
             self._native_rate = int(dev.default_samplerate) or 48_000
             self._channels = min(dev.channels, 2)
             self._underruns = 0
-            # 스트리밍 리샘플러는 청크 경계 상태를 유지한다. 일회성 soxr.resample()을
-            # 청크마다 부르면 경계에서 클릭 노이즈가 생긴다.
+            # The streaming resampler carries filter state across chunk boundaries.
+            # Calling the one-shot soxr.resample() per chunk clicks at every seam.
             self._resampler = soxr.ResampleStream(
                 self._native_rate, TARGET_RATE, 1, dtype="float32", quality="HQ"
             )
@@ -257,12 +262,12 @@ class AudioCapture:
                 self.ring.dropped_bytes,
             )
 
-    # --- PortAudio 콜백 스레드 ---------------------------------------------
-    # 여기서는 Qt 객체를 만지지 않고, 락도 잡지 않으며, 할당을 최소화한다.
+    # --- PortAudio callback thread ----------------------------------------
+    # No Qt objects, no locks, and as little allocation as possible.
 
     def _on_audio(self, indata: np.ndarray, frames: int, time_info: object, status: object) -> None:
         if status:
-            # CallbackFlags는 bool로 평가되면 언더런/오버플로가 있었다는 뜻이다.
+            # A truthy CallbackFlags means there was an underrun or overflow.
             self._underruns += 1
         resampler = self._resampler
         if resampler is None:

@@ -1,8 +1,10 @@
-"""설정 스키마와 영속화 — PLAN.md §8.
+"""Settings schema and persistence.
 
-`QSettings("LiveCap", "LiveCap")` → ~/Library/Preferences/ 에 plist 생성.
-API 키는 Settings에 넣지 않는다. 우선순위는
-환경변수 → 리포지토리 루트의 `.env` → macOS 키체인 → 환경설정 다이얼로그 입력.
+`QSettings("LiveCap", "LiveCap")` writes a plist under ~/Library/Preferences/.
+
+The API key is deliberately not part of Settings. It is looked up in order:
+environment variable, `.env` at the repository root, macOS Keychain, then
+whatever is typed into the preferences dialog.
 """
 
 from __future__ import annotations
@@ -25,10 +27,10 @@ APP = "LiveCap"
 
 
 class Direction(StrEnum):
-    """번역 방향 프리셋.
+    """Translation direction preset.
 
-    Live API의 `TranslationConfig`에는 출발 언어 필드가 없다(모델이 감지한다).
-    따라서 프리셋은 실제로는 '목적지 언어' 하나로 환원된다.
+    The Live API's `TranslationConfig` has no source-language field — the model
+    detects it. A "direction" therefore reduces to a target language.
     """
 
     KO_TO_EN = "ko2en"
@@ -46,13 +48,13 @@ DIRECTION_LABEL: dict[Direction, str] = {
 }
 
 DIRECTION_MENU_TEXT: dict[Direction, str] = {
-    Direction.KO_TO_EN: "한국어 → 영어",
-    Direction.EN_TO_KO: "영어 → 한국어",
+    Direction.KO_TO_EN: "Korean → English",
+    Direction.EN_TO_KO: "English → Korean",
 }
 
 
 def direction_for_target(target_language_code: str) -> Direction | None:
-    """목적지 언어에 해당하는 프리셋. 프리셋 밖의 언어면 None."""
+    """The preset for a target language, or None if it is not one of them."""
     code = (target_language_code or "").strip().lower()
     for direction, target in DIRECTION_TARGET.items():
         if target == code:
@@ -61,7 +63,7 @@ def direction_for_target(target_language_code: str) -> Direction | None:
 
 
 def direction_label(target_language_code: str) -> str:
-    """오버레이에 띄울 문구. 프리셋 밖이면 목적지만 표시한다."""
+    """Label for the overlay. Falls back to just the target for other languages."""
     direction = direction_for_target(target_language_code)
     if direction is not None:
         return DIRECTION_LABEL[direction]
@@ -72,35 +74,35 @@ KEYRING_USER = "gemini-api-key"
 
 @dataclass
 class Settings:
-    # 색상 (hex)
+    # colours (hex)
     bg_color: str = "#000000"
     box_color: str = "#1B4965"
     text_color: str = "#FFFFFF"
     box_opacity: float = 1.0  # 0.6 ~ 1.0
 
-    # 레이아웃
+    # layout
     corner_radius: int = 24  # 0 ~ 48
-    box_max_width_pct: int = 90  # 60 ~ 100 (좌우 여백 5%씩)
+    box_max_width_pct: int = 90  # 60-100, leaving a 5% margin each side
     bottom_margin_pct: int = 8  # 2 ~ 20
     font_size: int = 44  # 24 ~ 96
     max_lines: int = 2  # 1 ~ 4
 
-    # 캡션 박스를 항상 같은 크기·위치로 띄운다 (텍스트가 없어도 유지).
-    # 끄면 PLAN.md §6.2의 원래 동작 — 내용에 맞춰 크기가 변하고, 비면 사라진다.
+    # Keep the caption box at a fixed size and position, even when empty.
+    # Turning this off makes it hug its content and disappear when empty.
     fixed_box: bool = True
 
-    # 말이 멎고 이만큼 지나면 캡션을 비운다. 0이면 계속 남겨둔다.
+    # Clear captions this long after speech stops. 0 keeps them on screen.
     clear_after_seconds: float = 3.0  # 0 ~ 30
 
-    # 번역 기록 저장 (파일명은 통역 시작 날짜·시간)
+    # Transcript recording. The filename is the session start timestamp.
     save_transcript: bool = True
     transcript_dir: str = transcript.DEFAULT_DIR
 
-    # 방향이 바뀌거나 통역이 시작될 때 캡션 박스 아래에 KO → EN 식으로 잠깐 띄운다.
+    # Briefly show `KO → EN` below the caption box on start and on direction change.
     show_direction_hint: bool = True
 
-    # 동작
-    audio_device_name: str = ""  # 빈 문자열이면 시스템 기본 입력
+    # behaviour
+    audio_device_name: str = ""  # empty means the system default input
     show_source_text: bool = False
     fullscreen: bool = False
     silence_gate: bool = False
@@ -109,12 +111,12 @@ class Settings:
     target_language_code: str = "en"
     echo_target_language: bool = False
 
-    # 캡션 커밋 정책. Phase 0 측정 결과(spikes/RESULTS.md, 2026-07-24)에 따라
-    # 정책 A로 고정한다 — 조각이 중간값 14자로 약 1초마다 점진 도착한다.
+    # Caption commit policy, fixed to A by measurement (spikes/RESULTS.md):
+    # fragments arrive incrementally, median 14 chars, about once per second.
     caption_policy: str = Policy.INCREMENTAL.value
 
     def clamped(self) -> Settings:
-        """범위를 벗어난 값을 명세 범위로 되돌린 사본."""
+        """A copy with every value clamped back into its documented range."""
         return Settings(
             bg_color=_hex(self.bg_color, "#000000"),
             box_color=_hex(self.box_color, "#1B4965"),
@@ -166,7 +168,7 @@ def _hex(v: str, fallback: str) -> str:
     return fallback
 
 
-# --- 영속화 ---------------------------------------------------------------
+# --- persistence ----------------------------------------------------------
 
 
 def _qsettings() -> QSettings:
@@ -174,7 +176,7 @@ def _qsettings() -> QSettings:
 
 
 def load() -> Settings:
-    """QSettings에서 읽는다. 없거나 깨진 값은 기본값으로 되돌린다."""
+    """Read from QSettings. Missing or malformed values fall back to defaults."""
     qs = _qsettings()
     defaults = Settings()
     kwargs: dict[str, object] = {}
@@ -205,33 +207,33 @@ def save(settings: Settings) -> None:
 
 
 def reset() -> Settings:
-    """기본값으로 되돌리기."""
+    """Reset everything to defaults."""
     qs = _qsettings()
     qs.clear()
     qs.sync()
     return Settings()
 
 
-# --- API 키 ---------------------------------------------------------------
+# --- API key --------------------------------------------------------------
 
 
 API_KEY_VARS = ("GEMINI_API_KEY", "GOOGLE_API_KEY")
-_PLACEHOLDER_MARKERS = ("여기에", "your", "xxx", "<", "붙여넣")
+_PLACEHOLDER_MARKERS = ("your", "xxx", "<", "here")
 
 
 def dotenv_path() -> Path:
-    """`.env`의 위치. LIVECAP_ENV_FILE로 덮어쓸 수 있다."""
+    """Where `.env` lives. Overridable with LIVECAP_ENV_FILE."""
     override = os.environ.get("LIVECAP_ENV_FILE")
     if override:
         return Path(override).expanduser()
-    # src/livecap/config.py → 리포지토리 루트
+    # src/livecap/config.py -> repository root
     root = Path(__file__).resolve().parents[2]
     local = Path.cwd() / ".env"
     return local if local.is_file() else root / ".env"
 
 
 def read_dotenv(path: Path | None = None) -> dict[str, str]:
-    """아주 단순한 KEY=VALUE 파서. 주석·빈 줄·따옴표·`export ` 접두를 처리한다."""
+    """Minimal KEY=VALUE parser: comments, blank lines, quotes, `export ` prefix."""
     path = path or dotenv_path()
     values: dict[str, str] = {}
     try:
@@ -255,10 +257,10 @@ def read_dotenv(path: Path | None = None) -> dict[str, str]:
 
 
 def apply_dotenv_to_environ() -> list[str]:
-    """`.env`의 값을 os.environ에 채운다. 이미 있는 환경변수는 덮어쓰지 않는다.
+    """Copy `.env` values into os.environ without overwriting existing variables.
 
-    앱 시작 시 한 번 호출한다. 돌려주는 것은 채워 넣은 키 이름 목록이며,
-    값은 로그에 남기지 않는다.
+    Call once at startup. Returns the names that were set — never the values,
+    which must not reach the log.
     """
     applied: list[str] = []
     for key, value in read_dotenv().items():
@@ -274,10 +276,10 @@ def _is_placeholder(value: str) -> bool:
 
 
 def load_api_key() -> str | None:
-    """환경변수 → .env → 키체인 순으로 조회.
+    """Look up the key: environment, then .env, then the Keychain.
 
-    소스나 QSettings plist에는 절대 저장하지 않는다.
-    .env에 예시 문구가 그대로 남아 있으면 키가 없는 것으로 취급한다.
+    Never stored in source or in the QSettings plist. An unedited placeholder
+    left in `.env` counts as no key at all.
     """
     for env in API_KEY_VARS:
         v = os.environ.get(env)
@@ -301,7 +303,7 @@ def load_api_key() -> str | None:
 
 
 def save_api_key(key: str) -> bool:
-    """macOS 키체인에 저장."""
+    """Store the key in the macOS Keychain."""
     try:
         import keyring
 

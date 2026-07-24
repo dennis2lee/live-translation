@@ -1,1 +1,1 @@
-"""Qt UI 계층. 이 패키지 밖에서 위젯을 직접 만지지 말 것."""
+"""Qt UI layer. Nothing outside this package touches widgets directly."""

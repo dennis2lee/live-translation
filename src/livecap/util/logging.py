@@ -1,4 +1,4 @@
-"""로깅 설정. 오디오 콜백에서는 절대 호출하지 말 것."""
+"""Logging setup. Never call this from the audio callback."""
 
 from __future__ import annotations
 
@@ -10,7 +10,7 @@ _CONFIGURED = False
 
 
 def setup(level: int | None = None) -> None:
-    """루트 로거를 stderr로 한 번만 설정한다."""
+    """Configure the root logger to write to stderr, once."""
     global _CONFIGURED
     if _CONFIGURED:
         return
@@ -23,7 +23,7 @@ def setup(level: int | None = None) -> None:
     root = logging.getLogger()
     root.setLevel(level)
     root.addHandler(handler)
-    # SDK가 매 프레임 DEBUG를 쏟아내지 않도록 눌러둔다.
+    # Keep the SDK from emitting a DEBUG line per frame.
     logging.getLogger("google_genai").setLevel(logging.WARNING)
     logging.getLogger("websockets").setLevel(logging.WARNING)
     _CONFIGURED = True

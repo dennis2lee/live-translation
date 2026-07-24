@@ -1,4 +1,4 @@
-"""진입점 — QApplication 부트스트랩."""
+"""Entry point — QApplication bootstrap."""
 
 from __future__ import annotations
 
@@ -14,11 +14,11 @@ from .util import logging as log
 
 
 def main() -> int:
-    # .env를 먼저 읽어야 LIVECAP_DEBUG 같은 값이 로깅 설정에 반영된다.
+    # Load .env first so values like LIVECAP_DEBUG reach the logging setup.
     loaded = config.apply_dotenv_to_environ()
     log.setup()
     if loaded:
-        # 키 '이름'만 남긴다. 값은 절대 로그에 찍지 않는다.
+        # Log the variable names only. Never log a key's value.
         log.get(__name__).info("loaded from .env: %s", ", ".join(sorted(loaded)))
 
     app = QApplication(sys.argv)
@@ -28,7 +28,7 @@ def main() -> int:
 
     window = CaptionWindow(config.load())
 
-    # Ctrl-C가 Qt 이벤트 루프에 먹히지 않도록 주기적으로 파이썬에 제어를 넘긴다.
+    # Give Python a chance to run so Ctrl-C is not swallowed by the Qt event loop.
     signal.signal(signal.SIGINT, lambda *_: app.quit())
     idle = QTimer()
     idle.start(200)

@@ -1,7 +1,7 @@
-"""CaptionWindow + 시스템 메뉴바 — PLAN.md §6.1, §6.3.
+"""CaptionWindow and the native macOS menu bar.
 
-스레드 경계는 반드시 pyqtSignal을 경유한다. asyncio 스레드에서 위젯을 직접
-갱신하지 않는다.
+Thread boundaries are crossed with pyqtSignal only. Widgets are never updated
+from the asyncio thread.
 """
 
 from __future__ import annotations
@@ -40,14 +40,14 @@ FONT_SIZE_CHOICES = (24, 32, 44, 56, 72, 96)
 LINE_COUNT_CHOICES = (1, 2, 3, 4)
 
 STATUS_TEXT = {
-    State.IDLE: "대기 중",
-    State.CONNECTING: "연결 중",
-    State.RUNNING: "통역 중",
-    State.RECONNECTING: "재연결 중",
-    State.ERROR: "오류",
+    State.IDLE: "Idle",
+    State.CONNECTING: "Connecting",
+    State.RUNNING: "Translating",
+    State.RECONNECTING: "Reconnecting",
+    State.ERROR: "Error",
 }
 
-# 연결 중·재연결 중은 글자가 아니라 캡션 박스 오른쪽 밑의 표시등으로 알린다.
+# Connecting and reconnecting are reported by the indicator dot, not by text.
 INDICATOR_FOR_STATE = {
     State.IDLE: Indicator.IDLE,
     State.CONNECTING: Indicator.BUSY,
@@ -58,7 +58,7 @@ INDICATOR_FOR_STATE = {
 
 
 class _Bridge(QObject):
-    """asyncio 스레드 → Qt 메인 스레드 시그널 브리지."""
+    """Signal bridge from the asyncio thread to the Qt main thread."""
 
     source_text = pyqtSignal(str)
     target_text = pyqtSignal(str)
@@ -107,111 +107,112 @@ class CaptionWindow(QMainWindow):
         self._sync_actions()
         self._refresh_overlay()
 
-        # 진짜 전체화면이면 macOS가 시스템 메뉴바를 숨겨 통역 시작/중지가 불편하다.
-        # 기본은 메뉴바가 항상 보이는 최대화 창.
+        # True full screen hides the macOS menu bar, which makes starting and
+        # stopping awkward. Default to a maximised window with the bar visible.
         if settings.fullscreen:
             self.showFullScreen()
         else:
             self.showMaximized()
 
-    # --- 메뉴 -------------------------------------------------------------
+    # --- menus ------------------------------------------------------------
 
     def _build_menus(self) -> None:
         bar = self.menuBar()
         bar.setNativeMenuBar(True)
 
         app_menu = bar.addMenu("LiveCap")
-        about = QAction("LiveCap 정보", self)
+        about = QAction("About LiveCap", self)
         about.setMenuRole(QAction.MenuRole.AboutRole)
         about.triggered.connect(self._show_about)
         app_menu.addAction(about)
 
-        prefs = QAction("환경설정…", self)
+        prefs = QAction("Preferences…", self)
         prefs.setMenuRole(QAction.MenuRole.PreferencesRole)
         prefs.setShortcut(QKeySequence("Ctrl+,"))
         prefs.triggered.connect(self._open_settings)
         app_menu.addAction(prefs)
 
-        quit_act = QAction("LiveCap 종료", self)
+        quit_act = QAction("Quit LiveCap", self)
         quit_act.setMenuRole(QAction.MenuRole.QuitRole)
         quit_act.setShortcut(QKeySequence("Ctrl+Q"))
         quit_act.triggered.connect(self.close)
         app_menu.addAction(quit_act)
 
-        # --- 통역 ---
-        run_menu = bar.addMenu("통역")
-        self._act_start = QAction("통역 시작", self)
+        # --- Translate ---
+        run_menu = bar.addMenu("Translate")
+        self._act_start = QAction("Start Translating", self)
         self._act_start.setShortcut(QKeySequence("Ctrl+R"))
         self._act_start.triggered.connect(self.start_translation)
         run_menu.addAction(self._act_start)
 
-        # 토글이 아니라 별도 항목 두 개 — 실수로 중지를 누르는 사고를 줄인다.
-        self._act_stop = QAction("통역 중지", self)
+        # Two separate items rather than one toggle, so a mis-click cannot stop
+        # a live session.
+        self._act_stop = QAction("Stop Translating", self)
         self._act_stop.setShortcut(QKeySequence("Ctrl+."))
         self._act_stop.triggered.connect(self.stop_translation)
         run_menu.addAction(self._act_stop)
 
         run_menu.addSeparator()
-        clear = QAction("캡션 지우기", self)
+        clear = QAction("Clear Captions", self)
         clear.setShortcut(QKeySequence("Ctrl+K"))
         clear.triggered.connect(self._clear_captions)
         run_menu.addAction(clear)
 
-        # 0번 키로 시작/중지를 오간다. 메뉴 항목은 실수 방지를 위해 둘로 유지한다.
-        self._act_toggle = QAction("통역 시작/중지 전환", self)
+        # The 0 key toggles. The menu keeps two items to avoid accidental stops.
+        self._act_toggle = QAction("Toggle Translation", self)
         self._act_toggle.setShortcut(QKeySequence("0"))
         self._act_toggle.triggered.connect(self.toggle_translation)
         self.addAction(self._act_toggle)
 
         run_menu.addSeparator()
-        self._act_save_transcript = QAction("번역 기록 저장", self, checkable=True)
+        self._act_save_transcript = QAction("Save Transcript", self, checkable=True)
         self._act_save_transcript.setToolTip(
-            "통역 시작 날짜·시간으로 이름 붙인 .md 파일에 번역 내용을 남깁니다.\n"
-            "다음 통역 시작부터 적용됩니다."
+            "Write the translation to a .md file named after the start time.\n"
+            "Takes effect from the next session."
         )
         self._act_save_transcript.triggered.connect(lambda c: self._update(save_transcript=c))
         run_menu.addAction(self._act_save_transcript)
 
-        open_dir = QAction("기록 폴더 열기", self)
+        open_dir = QAction("Open Transcript Folder", self)
         open_dir.triggered.connect(self._open_transcript_dir)
         run_menu.addAction(open_dir)
 
         run_menu.addSeparator()
-        self._act_status = QAction("상태: 대기 중", self)
+        self._act_status = QAction("Status: Idle", self)
         self._act_status.setEnabled(False)
         run_menu.addAction(self._act_status)
 
-        # --- 설정 ---
-        cfg = bar.addMenu("설정")
+        # --- Settings ---
+        cfg = bar.addMenu("Settings")
 
-        dir_menu = cfg.addMenu("번역 방향")
+        dir_menu = cfg.addMenu("Direction")
         self._direction_group = QActionGroup(self)
         self._direction_group.setExclusive(True)
         self._direction_actions: dict[Direction, QAction] = {}
         for i, direction in enumerate(Direction, start=1):
             act = QAction(DIRECTION_MENU_TEXT[direction], self, checkable=True)
-            act.setShortcut(QKeySequence(str(i)))  # 1 = 한→영, 2 = 영→한
+            act.setShortcut(QKeySequence(str(i)))  # 1 = KO→EN, 2 = EN→KO
             act.triggered.connect(lambda _c, d=direction: self.set_direction(d))
             self._direction_group.addAction(act)
             dir_menu.addAction(act)
             self._direction_actions[direction] = act
 
-        self._act_direction_hint = QAction("번역 방향 표시", self, checkable=True)
+        self._act_direction_hint = QAction("Show Direction", self, checkable=True)
         self._act_direction_hint.setToolTip(
-            "방향이 바뀌거나 통역이 시작될 때 캡션 박스 아래에\n"
-            "KO → EN 형태로 2초간 띄웠다가 사라집니다."
+            "On start and on a direction change, show KO → EN below the\n"
+            "caption box for two seconds, then fade it out."
         )
         self._act_direction_hint.triggered.connect(
             lambda c: self._update(show_direction_hint=c)
         )
         cfg.addAction(self._act_direction_hint)
         cfg.addSeparator()
-        cfg.addAction(self._color_action("배경색…", "bg_color", alpha=False))
-        cfg.addAction(self._color_action("캡션 박스 색…", "box_color", alpha=True))
-        cfg.addAction(self._color_action("글자색…", "text_color", alpha=False))
+        cfg.addAction(self._color_action("Background Colour…", "bg_color", alpha=False))
+        cfg.addAction(self._color_action("Box Colour…", "box_color", alpha=True))
+        cfg.addAction(self._color_action("Text Colour…", "text_color", alpha=False))
         cfg.addSeparator()
 
-        size_menu = cfg.addMenu("글자 크기")
+        size_menu = cfg.addMenu("Font Size")
         self._font_group = QActionGroup(self)
         self._font_group.setExclusive(True)
         for size in FONT_SIZE_CHOICES:
@@ -220,7 +221,7 @@ class CaptionWindow(QMainWindow):
             self._font_group.addAction(a)
             size_menu.addAction(a)
 
-        lines_menu = cfg.addMenu("캡션 줄 수")
+        lines_menu = cfg.addMenu("Caption Lines")
         self._lines_group = QActionGroup(self)
         self._lines_group.setExclusive(True)
         for n in LINE_COUNT_CHOICES:
@@ -229,31 +230,31 @@ class CaptionWindow(QMainWindow):
             self._lines_group.addAction(a)
             lines_menu.addAction(a)
 
-        # 오디오 입력 장치 — USB 인터페이스는 도중에 연결·해제될 수 있으므로
-        # 메뉴를 열 때마다 목록을 새로 만든다.
-        self._device_menu = cfg.addMenu("오디오 입력 장치")
+        # A USB interface can be plugged or unplugged at any time, so rebuild
+        # the device list every time the menu opens.
+        self._device_menu = cfg.addMenu("Audio Input")
         self._device_menu.aboutToShow.connect(self._populate_device_menu)
         self._device_group: QActionGroup | None = None
 
         cfg.addSeparator()
-        self._act_fixed_box = QAction("캡션 박스 항상 표시", self, checkable=True)
+        self._act_fixed_box = QAction("Always Show Caption Box", self, checkable=True)
         self._act_fixed_box.setToolTip(
-            "박스를 항상 같은 크기·위치로 유지합니다.\n"
-            "끄면 내용에 맞춰 크기가 변하고, 캡션이 없을 때 사라집니다."
+            "Keep the box at a fixed size and position.\n"
+            "Turn off to let it hug its content and disappear when empty."
         )
         self._act_fixed_box.triggered.connect(lambda c: self._update(fixed_box=c))
         cfg.addAction(self._act_fixed_box)
 
-        self._act_source = QAction("원문(한국어) 함께 표시", self, checkable=True)
+        self._act_source = QAction("Show Source Text", self, checkable=True)
         self._act_source.triggered.connect(lambda c: self._update(show_source_text=c))
         cfg.addAction(self._act_source)
 
-        self._act_fullscreen = QAction("전체화면", self, checkable=True)
+        self._act_fullscreen = QAction("Full Screen", self, checkable=True)
         self._act_fullscreen.triggered.connect(self._toggle_fullscreen)
         cfg.addAction(self._act_fullscreen)
 
         cfg.addSeparator()
-        reset = QAction("기본값으로 되돌리기", self)
+        reset = QAction("Reset to Defaults", self)
         reset.triggered.connect(self._reset_settings)
         cfg.addAction(reset)
 
@@ -263,13 +264,13 @@ class CaptionWindow(QMainWindow):
         return act
 
     def _populate_device_menu(self) -> None:
-        """감지된 입력 장치를 라디오 선택으로 채운다."""
+        """Fill the submenu with the detected input devices as radio items."""
         self._device_menu.clear()
         group = QActionGroup(self)
         group.setExclusive(True)
         self._device_group = group
 
-        default = QAction("시스템 기본 입력", self, checkable=True)
+        default = QAction("System Default Input", self, checkable=True)
         default.setChecked(not self._settings.audio_device_name)
         default.triggered.connect(lambda: self._choose_device(""))
         group.addAction(default)
@@ -278,7 +279,7 @@ class CaptionWindow(QMainWindow):
 
         devices = list_input_devices()
         if not devices:
-            none_act = QAction("(입력 장치를 찾을 수 없습니다)", self)
+            none_act = QAction("(no input device found)", self)
             none_act.setEnabled(False)
             self._device_menu.addAction(none_act)
             return
@@ -292,7 +293,7 @@ class CaptionWindow(QMainWindow):
             self._device_menu.addAction(a)
 
     def _choose_device(self, name: str) -> None:
-        """장치는 인덱스가 아니라 이름으로 저장한다 (USB 재연결 시 인덱스가 바뀜)."""
+        """Store devices by name, not index — indexes change on USB reconnect."""
         if name == self._settings.audio_device_name:
             return
         self._update(audio_device_name=name)
@@ -306,7 +307,7 @@ class CaptionWindow(QMainWindow):
         self._act_start.setEnabled(not running)
         self._act_stop.setEnabled(running)
         detail = f" ({self._error_detail})" if self._error_detail else ""
-        self._act_status.setText(f"상태: {STATUS_TEXT.get(self._state, '대기 중')}{detail}")
+        self._act_status.setText(f"Status: {STATUS_TEXT.get(self._state, 'Idle')}{detail}")
         for a in self._font_group.actions():
             a.setChecked(int(a.text()) == self._settings.font_size)
         for a in self._lines_group.actions():
@@ -320,14 +321,14 @@ class CaptionWindow(QMainWindow):
         self._act_source.setChecked(self._settings.show_source_text)
         self._act_fullscreen.setChecked(self._settings.fullscreen)
 
-    # --- 설정 변경 --------------------------------------------------------
+    # --- settings changes -------------------------------------------------
 
     def _apply_buffer_settings(self) -> None:
         self._buffer.set_max_lines(self._settings.max_lines)
         self._buffer.clear_after_seconds = self._settings.clear_after_seconds
 
     def _update(self, **changes: object) -> None:
-        """설정을 바꾸고 즉시 반영·저장한다. 통역 세션은 끊지 않는다."""
+        """Apply and persist a settings change without dropping the session."""
         self._settings = replace(self._settings, **changes).clamped()  # type: ignore[arg-type]
         config.save(self._settings)
         self._apply_buffer_settings()
@@ -387,7 +388,7 @@ class CaptionWindow(QMainWindow):
             subprocess.run(["open", str(path)], check=False)
         except OSError as exc:
             _log.error("could not open transcript directory: %s", exc)
-            self._view.set_status(f"기록 폴더를 열 수 없습니다: {path}")
+            self._view.set_status(f"Cannot open transcript folder: {path}")
 
     def _show_about(self) -> None:
         from .. import __version__
@@ -396,28 +397,29 @@ class CaptionWindow(QMainWindow):
             self,
             "LiveCap",
             f"<b>LiveCap {__version__}</b><br><br>"
-            "한국어 발화를 영어로 실시간 통역해 캡션으로 띄웁니다.<br>"
-            "엔진: Google Gemini Live API",
+            "Real-time speech translation captions.<br>"
+            "Engine: Google Gemini Live API",
         )
 
-    # --- 통역 제어 --------------------------------------------------------
+    # --- translation control ----------------------------------------------
 
     def toggle_translation(self) -> None:
-        """0번 키 — 대기 중이면 시작, 아니면 중지."""
+        """The 0 key: start when idle, stop otherwise."""
         if self._state is State.IDLE:
             self.start_translation()
         else:
             self.stop_translation()
 
     def set_direction(self, direction: Direction) -> None:
-        """번역 방향 프리셋을 바꾼다 (1 = 한→영, 2 = 영→한).
+        """Change the direction preset (1 = KO→EN, 2 = EN→KO).
 
-        목적지 언어는 세션 연결 시점에 정해지므로 통역 중이면 번역기만 다시
-        연결한다. 오디오 캡처와 링 버퍼는 그대로 두므로 소리는 유실되지 않는다.
+        The target language is fixed when the session connects, so a live
+        session reconnects the translator only. Audio capture and the ring
+        buffer keep running, so nothing is lost in the gap.
         """
         target = DIRECTION_TARGET[direction]
         if target == self._settings.target_language_code:
-            self._announce_direction()  # 같은 방향을 다시 눌러도 표시는 해준다
+            self._announce_direction()  # still show it when re-selecting the same direction
             return
 
         self._update(target_language_code=target)
@@ -435,7 +437,7 @@ class CaptionWindow(QMainWindow):
             self._view.show_hint(direction_label(self._settings.target_language_code))
 
     def _restart_translator(self) -> None:
-        """오디오·기록은 유지한 채 번역 세션만 새 목적지 언어로 다시 연다."""
+        """Reopen only the translator session, keeping audio and the transcript."""
         if self._capture is None:
             return
         api_key = config.load_api_key()
@@ -470,7 +472,7 @@ class CaptionWindow(QMainWindow):
         if not api_key:
             self._state = State.ERROR
             self._error_detail = ""
-            self._view.set_status("API 키가 필요합니다 (환경설정에서 입력)")
+            self._view.set_status("API key required — enter it in Preferences")
             self._sync_actions()
             return
 
@@ -487,7 +489,9 @@ class CaptionWindow(QMainWindow):
 
         if self._settings.audio_device_name and dev.name != self._settings.audio_device_name:
             _log.warning("requested device unavailable — using %r", dev.name)
-            self._view.set_status(f"{self._settings.audio_device_name} 없음 — {dev.name} 사용")
+            self._view.set_status(
+                f"{self._settings.audio_device_name} unavailable — using {dev.name}"
+            )
 
         self._translator = self._make_translator(self._capture.ring, api_key)
         self._started_at = time.monotonic()
@@ -501,7 +505,7 @@ class CaptionWindow(QMainWindow):
             if writer.open(datetime.now()) is not None:
                 self._writer = writer
             else:
-                self._view.set_status("번역 기록을 저장할 수 없습니다 (폴더 권한 확인)")
+                self._view.set_status("Cannot write the transcript — check folder permissions")
 
         self._translator.start()
         self._state = State.CONNECTING
@@ -509,7 +513,7 @@ class CaptionWindow(QMainWindow):
         self._sync_actions()
         self._refresh_overlay()
         self._reset_cursor_timer()
-        self._announce_direction()  # 시작할 때 현재 방향을 알려준다
+        self._announce_direction()  # report the current direction on start
 
     def stop_translation(self) -> None:
         reconnects = self._translator.stats.reconnects if self._translator is not None else 0
@@ -519,7 +523,7 @@ class CaptionWindow(QMainWindow):
         if self._capture is not None:
             self._capture.stop()
             self._capture = None
-        # 마지막 미확정 문장까지 기록에 남긴다.
+        # Make sure the final unsettled sentence reaches the transcript.
         self._buffer.flush()
         self._record_new_lines()
         if self._writer is not None:
@@ -539,7 +543,7 @@ class CaptionWindow(QMainWindow):
         self._view.clear()
         self._refresh_overlay()
 
-    # --- 시그널 수신 (메인 스레드) ----------------------------------------
+    # --- signal handlers, on the main thread ------------------------------
 
     def _on_source_text(self, text: str) -> None:
         self._view.set_source_text(text)
@@ -550,7 +554,7 @@ class CaptionWindow(QMainWindow):
         self._record_new_lines()
 
     def _record_new_lines(self) -> None:
-        """확정된 줄을 기록 파일로 흘려보낸다. 화면 표시와는 독립이다."""
+        """Feed settled lines to the transcript, independent of what is displayed."""
         if self._writer is None:
             return
         elapsed = time.monotonic() - self._started_at
@@ -584,18 +588,18 @@ class CaptionWindow(QMainWindow):
         self._refresh_overlay()
 
     def _refresh_overlay(self) -> None:
-        """상태 표시등을 갱신한다. 모달은 띄우지 않는다.
+        """Update the indicator. Never opens a modal dialog.
 
-        연결 중·재연결 중은 표시등이 알려주므로 글자를 띄우지 않는다.
-        오류만은 원인을 알아야 하므로 캡션 자리에 문구를 남긴다.
+        Connecting and reconnecting are conveyed by the dot alone. Errors also
+        print their cause, because a red dot is not actionable on its own.
         """
         self._view.set_indicator(INDICATOR_FOR_STATE.get(self._state, Indicator.IDLE))
         if self._state is State.ERROR:
-            self._view.set_status(self._error_detail or "연결에 실패했습니다")
+            self._view.set_status(self._error_detail or "Connection failed")
         else:
             self._view.set_status("")
 
-    # --- 커서 숨김 --------------------------------------------------------
+    # --- cursor hiding ----------------------------------------------------
 
     def mouseMoveEvent(self, event) -> None:  # noqa: N802 (Qt naming)
         self._show_cursor()
@@ -616,7 +620,7 @@ class CaptionWindow(QMainWindow):
             self.unsetCursor()
             self._cursor_hidden = False
 
-    # --- 종료 -------------------------------------------------------------
+    # --- shutdown ---------------------------------------------------------
 
     def closeEvent(self, event) -> None:  # noqa: N802 (Qt naming)
         self.stop_translation()

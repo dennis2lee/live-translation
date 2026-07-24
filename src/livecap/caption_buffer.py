@@ -1,9 +1,10 @@
-"""전사 조각 → 화면 줄 조립 — PLAN.md §7.
+"""Assembles transcription fragments into display lines.
 
-`output_transcription.text`는 partial/final 구분이 없고 순서 보장도 없다.
-조각을 모아 표시 줄로 만드는 책임은 전적으로 클라이언트에 있다.
+`output_transcription.text` has no partial/final marker and no ordering
+guarantee, so turning fragments into lines is entirely the client's job.
 
-이 모듈은 Qt·네트워크 의존성이 없어야 한다 (단위 테스트로 덮는다).
+This module must stay free of Qt and network dependencies, and covered by unit
+tests.
 """
 
 from __future__ import annotations
@@ -20,23 +21,24 @@ _AUTO_UTTERANCE_CHARS = 25
 
 
 class Policy(StrEnum):
-    """PLAN.md §7의 커밋 정책."""
+    """When to promote pending text into a committed line."""
 
     AUTO = "auto"
-    """첫 조각들을 보고 A/B를 자동 판별. Phase 0 결과가 없을 때의 기본값."""
+    """Decide from the first few fragments. Only useful before measuring."""
 
     INCREMENTAL = "incremental"
-    """정책 A — 조각이 글자/단어 단위로 자주 도착."""
+    """Fragments arrive per word or phrase. This is what the API actually does."""
 
     UTTERANCE = "utterance"
-    """정책 B — 발화 단위로 뭉텅이로 도착."""
+    """Fragments arrive one whole utterance at a time."""
 
 
 @dataclass
 class CaptionBuffer:
-    """도착한 전사 조각을 확정 줄과 미확정 텍스트로 나눠 보관한다.
+    """Holds arriving fragments as committed lines plus pending text.
 
-    시간은 인자로 주입받는다(`now`). 내부에서 시계를 읽지 않으므로 테스트가 결정적이다.
+    Time is injected via `now` rather than read from a clock, which keeps the
+    tests deterministic.
     """
 
     max_lines: int = 2
@@ -44,7 +46,7 @@ class CaptionBuffer:
     idle_commit_seconds: float = IDLE_COMMIT_SECONDS
 
     clear_after_seconds: float = CLEAR_AFTER_SECONDS
-    """마지막 조각 이후 이만큼 지나면 캡션을 비운다. 0이면 비활성."""
+    """Clear captions this long after the last fragment. 0 disables clearing."""
 
     _committed: deque[str] = field(default_factory=lambda: deque(maxlen=2), init=False)
     _pending: str = field(default="", init=False)
@@ -61,36 +63,36 @@ class CaptionBuffer:
         if self.policy is not Policy.AUTO:
             self._resolved = self.policy
 
-    # --- 조회 -------------------------------------------------------------
+    # --- queries ----------------------------------------------------------
 
     @property
     def committed_lines(self) -> list[str]:
-        """확정된 줄. 최신이 마지막."""
+        """Settled lines, newest last."""
         return list(self._committed)
 
     @property
     def pending_text(self) -> str:
-        """아직 확정되지 않은 텍스트 (흐린 색으로 표시)."""
+        """Text not yet settled. Drawn dimmed."""
         return self._pending
 
     @property
     def effective_policy(self) -> Policy:
-        """AUTO가 아직 판별 전이면 INCREMENTAL로 간주한다."""
+        """AUTO counts as INCREMENTAL until enough fragments have been seen."""
         return self._resolved or Policy.INCREMENTAL
 
     @property
     def is_empty(self) -> bool:
-        """표시할 것이 없으면 True — 이때 캡션 박스 자체를 숨긴다."""
+        """True when there is nothing to show."""
         return not self._committed and not self._pending
 
     def display_lines(self) -> list[tuple[str, bool]]:
-        """(텍스트, 확정여부) 목록. 최대 max_lines개, 오래된 앞부분을 버린다."""
+        """(text, settled) pairs, at most max_lines, dropping the oldest."""
         lines: list[tuple[str, bool]] = [(t, True) for t in self._committed]
         if self._pending:
             lines.append((self._pending, False))
         return lines[-self.max_lines :]
 
-    # --- 갱신 -------------------------------------------------------------
+    # --- updates ----------------------------------------------------------
 
     def set_max_lines(self, n: int) -> None:
         n = max(1, n)
@@ -100,10 +102,10 @@ class CaptionBuffer:
         self._committed = deque(self._committed, maxlen=n)
 
     def feed(self, text: str, now: float) -> bool:
-        """전사 조각을 넣는다. 화면이 바뀌어야 하면 True."""
+        """Take one transcription fragment. True when the display should change."""
         if not text:
             return False
-        # 순서 미보장 대비 — 같은 텍스트가 연속 중복 도착하면 무시.
+        # Ordering is not guaranteed, so ignore an immediately repeated fragment.
         if text == self._last_text:
             return False
         self._last_text = text
@@ -118,18 +120,18 @@ class CaptionBuffer:
                     Policy.UTTERANCE if median >= _AUTO_UTTERANCE_CHARS else Policy.INCREMENTAL
                 )
 
-        # 재연결 직후 첫 조각은 이전 문장의 이어짐일 수 있다. 줄을 새로 시작하지 않고
-        # 마지막 확정 줄을 미확정 상태로 되돌려 이어 붙인다.
+        # The first fragment after a reconnect may continue the previous sentence,
+        # so pull the last committed line back into pending rather than starting new.
         if self._continue_next:
             self._continue_next = False
             if not self._pending and self._committed:
                 resumed = self._committed.pop()
                 self._pending = resumed
                 if self._new_commits and self._new_commits[-1] == resumed:
-                    # 아직 기록으로 넘어가지 않았다 — 합본을 통째로 내보내면 된다.
+                    # Not handed to the transcript yet — emit the merged line whole.
                     self._new_commits.pop()
                 else:
-                    # 이미 기록에 쓰였다 — 이어진 부분만 내보내 중복을 막는다.
+                    # Already written out — emit only the continuation, not a duplicate.
                     self._resumed_prefix = resumed
 
         self._pending = _join(self._pending, text)
@@ -141,11 +143,11 @@ class CaptionBuffer:
         return True
 
     def tick(self, now: float) -> bool:
-        """주기 호출. 유휴 시간에 따라 미확정분을 확정하고, 더 지나면 비운다."""
+        """Call periodically. Settles idle text, then clears after longer silence."""
         changed = False
         idle = now - self._last_feed_at
 
-        # 정책 A — 종결 부호 없이 끊긴 미확정분을 확정한다.
+        # Settle a phrase that stopped without sentence-final punctuation.
         if (
             self.effective_policy is Policy.INCREMENTAL
             and self._pending
@@ -154,10 +156,10 @@ class CaptionBuffer:
             self._commit()
             changed = True
 
-        # 말이 멎으면 캡션을 비운다 (정책 A/B 공통).
+        # Clear once speech has stopped. Applies to both policies.
         if self.clear_after_seconds and not self.is_empty and idle >= self.clear_after_seconds:
-            # 지우기 전에 미확정분을 확정한다 — 안 그러면 기록에서 사라진다.
-            # (clear_after_seconds를 idle_commit_seconds보다 짧게 잡은 경우)
+            # Settle first, or pending text vanishes from the transcript when
+            # clear_after_seconds is set shorter than idle_commit_seconds.
             self._commit()
             self.clear()
             changed = True
@@ -165,36 +167,35 @@ class CaptionBuffer:
         return changed
 
     def drain_new_commits(self) -> list[str]:
-        """마지막 호출 이후 확정된 줄을 꺼내 간다 (기록 저장용).
+        """Take the lines settled since the last call, for the transcript.
 
-        화면 표시와 무관하게 한 번씩만 나온다. `clear()`로 화면을 비워도
-        아직 꺼내 가지 않은 줄은 사라지지 않는다.
+        Independent of what is on screen: each line comes out exactly once, and
+        clearing the display does not discard lines that were never drained.
         """
         out = self._new_commits
         self._new_commits = []
         return out
 
     def flush(self) -> bool:
-        """미확정분을 강제로 확정한다 (통역 중지 시 마지막 문장을 남기기 위해)."""
+        """Force-settle pending text, so stopping keeps the last sentence."""
         if not self._pending:
             return False
         self._commit()
         return True
 
     def note_reconnect(self) -> None:
-        """재연결이 일어났음을 알린다. 다음 조각을 이전 줄에 이어 붙인다."""
+        """Tell the buffer a reconnect happened, so the next fragment continues the line."""
         self._continue_next = True
         self._last_text = None
 
     def clear(self) -> None:
-        """캡션 지우기 (⌘K)."""
         self._committed.clear()
         self._pending = ""
         self._last_text = None
         self._continue_next = False
         self._resumed_prefix = ""
 
-    # --- 내부 -------------------------------------------------------------
+    # --- internals --------------------------------------------------------
 
     def _commit(self) -> None:
         line = self._pending.strip()
@@ -212,23 +213,24 @@ class CaptionBuffer:
 
 
 def _is_cjk(ch: str) -> bool:
-    """한글·한자·가나. 이 문자들 사이에는 공백을 끼워 넣지 않는다."""
+    """Hangul, kana or han. Never insert a space between these."""
     code = ord(ch)
     return (
-        0xAC00 <= code <= 0xD7A3  # 한글 음절
-        or 0x1100 <= code <= 0x11FF  # 한글 자모
-        or 0x3040 <= code <= 0x30FF  # 히라가나·가타카나
-        or 0x4E00 <= code <= 0x9FFF  # 한자
+        0xAC00 <= code <= 0xD7A3  # Hangul syllables
+        or 0x1100 <= code <= 0x11FF  # Hangul jamo
+        or 0x3040 <= code <= 0x30FF  # hiragana and katakana
+        or 0x4E00 <= code <= 0x9FFF  # han
     )
 
 
 def _join(left: str, right: str) -> str:
-    """조각을 이어 붙인다. 양쪽이 공백을 안 주면 한 칸 넣는다.
+    """Concatenate two fragments, inserting a space only when neither supplies one.
 
-    실측(spikes/RESULTS.md) 결과 영어·한국어 모두 조각이 선행 공백을 달고 오므로
-    보통은 그대로 이어 붙이면 된다. 공백이 없는 예외적인 경우, 한글끼리는
-    **넣지 않는다** — 어절 중간에서 잘린 조각(`계획` + `입니다.`)에 공백을 넣으면
-    단어가 쪼개져 읽기 나빠지기 때문이다. 영어는 반대로 넣어야 단어가 붙지 않는다.
+    Measured behaviour (see spikes/RESULTS.md): fragments arrive with their own
+    leading space in both English and Korean, so they normally concatenate
+    directly. In the rare case a space is missing, CJK text is joined **without**
+    one — a fragment that split mid-word (`계획` + `입니다.`) would otherwise be
+    broken apart. English needs the space, or two words run together.
     """
     if not left:
         return right.lstrip()

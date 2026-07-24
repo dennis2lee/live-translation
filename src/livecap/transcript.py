@@ -1,9 +1,10 @@
-"""번역 기록을 Markdown 파일로 저장한다.
+"""Writes the translation to a Markdown file.
 
-파일명은 통역이 시작된 날짜·시간을 따른다: `2026-07-24_143052.md`.
+The filename is the time translation started: `2026-07-24_143052.md`.
 
-Qt·네트워크 의존성이 없어야 하며 단위 테스트로 덮는다.
-기록 실패가 통역을 중단시키면 안 되므로, 입출력 오류는 삼키고 로그만 남긴다.
+This module must stay free of Qt and network dependencies, and covered by unit
+tests. A failure to record must never interrupt translation, so I/O errors are
+swallowed and only logged.
 """
 
 from __future__ import annotations
@@ -33,9 +34,9 @@ def _format_elapsed(seconds: float) -> str:
 
 
 class TranscriptWriter:
-    """확정된 번역 줄을 Markdown으로 이어 쓴다.
+    """Appends settled translation lines as Markdown.
 
-    각 줄을 쓸 때마다 flush 하므로 앱이 갑자기 죽어도 그때까지 내용이 남는다.
+    Every line is flushed, so a crash cannot lose what was already written.
     """
 
     def __init__(
@@ -62,7 +63,7 @@ class TranscriptWriter:
         return self._lines_written
 
     def open(self, started_at: datetime | None = None) -> Path | None:
-        """기록 파일을 만든다. 실패하면 None (통역은 계속 진행한다)."""
+        """Create the file. Returns None on failure; translation continues regardless."""
         if self._file is not None:
             return self.path
         started_at = started_at or datetime.now()
@@ -78,10 +79,10 @@ class TranscriptWriter:
             return None
 
         self._write(
-            f"# LiveCap 번역 기록\n\n"
-            f"- **시작** {started_at:%Y-%m-%d %H:%M:%S}\n"
-            f"- **대상 언어** {self._target_language}\n"
-            + (f"- **모델** {self._model}\n" if self._model else "")
+            f"# LiveCap transcript\n\n"
+            f"- **Started** {started_at:%Y-%m-%d %H:%M:%S}\n"
+            f"- **Target language** {self._target_language}\n"
+            + (f"- **Model** {self._model}\n" if self._model else "")
             + "\n---\n\n"
         )
         _log.info("recording transcript to %s", self.path)
@@ -91,13 +92,13 @@ class TranscriptWriter:
         base = started_at.strftime(FILENAME_FORMAT)
         candidate = self._dir / f"{base}.md"
         n = 2
-        while candidate.exists():  # 같은 초에 두 번 시작한 경우
+        while candidate.exists():  # two sessions started in the same second
             candidate = self._dir / f"{base}-{n}.md"
             n += 1
         return candidate
 
     def append_line(self, text: str, elapsed_seconds: float) -> None:
-        """확정된 번역 한 줄을 추가한다."""
+        """Record one settled translation line."""
         text = text.strip()
         if not text or self._file is None:
             return
@@ -105,19 +106,19 @@ class TranscriptWriter:
         self._lines_written += 1
 
     def note_reconnect(self, elapsed_seconds: float, gap_ms: float) -> None:
-        """재연결 지점을 기록에 남긴다 — 나중에 유실 구간을 찾을 때 쓴다."""
+        """Mark where a reconnect happened, for locating gaps afterwards."""
         if self._file is None:
             return
         self._write(
-            f"> _재연결 — {_format_elapsed(elapsed_seconds)} 지점, "
-            f"공백 {gap_ms:.0f}ms_\n\n"
+            f"> _reconnected at {_format_elapsed(elapsed_seconds)}, "
+            f"gap {gap_ms:.0f} ms_\n\n"
         )
 
     def note_direction(self, label: str, elapsed_seconds: float) -> None:
-        """번역 방향이 바뀐 지점을 기록에 남긴다."""
+        """Mark where the translation direction changed."""
         if self._file is None:
             return
-        self._write(f"> _번역 방향 — {label} ({_format_elapsed(elapsed_seconds)})_\n\n")
+        self._write(f"> _direction: {label} at {_format_elapsed(elapsed_seconds)}_\n\n")
 
     def close(self, *, elapsed_seconds: float = 0.0, reconnects: int = 0) -> Path | None:
         if self._file is None:
@@ -125,10 +126,10 @@ class TranscriptWriter:
         ended = datetime.now()
         self._write(
             "---\n\n"
-            f"- **종료** {ended:%Y-%m-%d %H:%M:%S}\n"
-            f"- **길이** {_format_elapsed(elapsed_seconds)}\n"
-            f"- **줄 수** {self._lines_written}\n"
-            f"- **재연결** {reconnects}회\n"
+            f"- **Ended** {ended:%Y-%m-%d %H:%M:%S}\n"
+            f"- **Duration** {_format_elapsed(elapsed_seconds)}\n"
+            f"- **Lines** {self._lines_written}\n"
+            f"- **Reconnects** {reconnects}\n"
         )
         try:
             self._file.close()
@@ -137,7 +138,7 @@ class TranscriptWriter:
         self._file = None
         path = self.path
         if path is not None and self._lines_written == 0:
-            # 한 줄도 못 받은 기록은 남겨봐야 쓸모가 없다.
+            # A transcript that captured nothing is not worth keeping.
             try:
                 path.unlink()
                 _log.info("removed empty transcript %s", path)
@@ -153,7 +154,7 @@ class TranscriptWriter:
             return
         try:
             self._file.write(text)
-            self._file.flush()  # 갑자기 죽어도 여기까지는 남는다
+            self._file.flush()  # survive a crash
         except OSError as exc:
             _log.error("transcript write failed, recording stopped: %s", exc)
             with contextlib.suppress(OSError):

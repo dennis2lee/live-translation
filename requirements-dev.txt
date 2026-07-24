@@ -1,0 +1,8 @@
+# Development extras — tests and linting.
+#
+#     .venv/bin/python -m pip install -r requirements.txt -r requirements-dev.txt
+
+-r requirements.txt
+
+pytest==9.1.1
+ruff==0.16.0

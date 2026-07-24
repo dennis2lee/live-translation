@@ -1,1 +1,1 @@
-"""내부 유틸리티."""
+"""Internal utilities."""

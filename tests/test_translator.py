@@ -320,7 +320,7 @@ def test_billing_error_fails_fast_instead_of_backing_off(rec, monkeypatch):
     try:
         assert wait_until(lambda: any(s == State.ERROR.value for s, _ in states), timeout=4.0)
         detail = next(d for s, d in states if s == State.ERROR.value)
-        assert "크레딧" in detail
+        assert "credits" in detail
         # 백오프를 5초씩 5회 돌지 않고 한 번에 끝났어야 한다.
         assert rec.events.count(("connect_fail", 0)) == 1
     finally:
@@ -330,10 +330,10 @@ def test_billing_error_fails_fast_instead_of_backing_off(rec, monkeypatch):
 @pytest.mark.parametrize(
     "message,expected",
     [
-        ("Your prepayment credits are depleted.", "크레딧"),
-        ("API key not valid. Please pass a valid API key.", "API 키"),
-        ("PERMISSION_DENIED: caller does not have permission", "권한"),
-        ("models/foo was not found", "모델"),
+        ("Your prepayment credits are depleted.", "credits"),
+        ("API key not valid. Please pass a valid API key.", "API key"),
+        ("PERMISSION_DENIED: caller does not have permission", "permission"),
+        ("models/foo was not found", "Model not found"),
     ],
 )
 def test_fatal_reason_recognises_non_retryable_errors(message, expected):

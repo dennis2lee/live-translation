@@ -1,14 +1,14 @@
-"""Gemini Live API 연동 — PLAN.md §4.
+"""Gemini Live API integration.
 
-전용 asyncio 스레드에서 돈다. 세션 수명(오디오 전용 기본 15분, WebSocket 약 10분)을
-넘겨 30분을 버티기 위해 세 가지를 모두 쓴다.
+Runs on a dedicated asyncio thread. An audio session lasts about 15 minutes and
+the WebSocket about 10, so surviving 30 minutes needs all three of:
 
-  1. context_window_compression=SlidingWindow()  — 세션 자체를 연장
-  2. session_resumption                          — new_handle 보관·재사용
-  3. go_away 수신 시 선제적으로 새 연결을 열어 교체
+  1. context_window_compression=SlidingWindow()  — extend the session itself
+  2. session_resumption                          — keep and reuse new_handle
+  3. open a replacement session when go_away arrives, before closing the old one
 
-재연결 중에도 링 버퍼는 계속 채워지고, 새 세션이 열리면 쌓인 것부터 밀어 넣으므로
-문장이 유실되지 않는다.
+The ring buffer keeps filling during a reconnect and whatever accumulated is
+pushed to the new session, so no sentence is lost.
 """
 
 from __future__ import annotations
@@ -30,29 +30,29 @@ from .util import logging as log
 
 _log = log.get(__name__)
 
-# --- 프리뷰 모델 규격 상수 (변경 시 여기만 고친다) --------------------------
+# --- Preview model contract. Change these here and nowhere else. -----------
 MODEL = "gemini-3.5-live-translate-preview"
 AUDIO_MIME = "audio/pcm;rate=16000"
-RESPONSE_MODALITIES = ["AUDIO"]  # 이 모델은 오디오 출력 전용. TEXT로 바꾸면 세션이 실패한다.
+RESPONSE_MODALITIES = ["AUDIO"]  # Audio-only model. Setting TEXT fails the session.
 
 BACKOFF_SECONDS = (1.0, 2.0, 4.0, 8.0)
 MAX_CONSECUTIVE_FAILURES = 5
 
-# 재시도해도 소용없는 실패. 백오프로 시간을 끌지 않고 즉시 안내한다.
-# (마커, 사용자에게 보여줄 문구)
+# Failures that retrying cannot fix. Report immediately instead of backing off.
+# (marker, message shown to the user)
 FATAL_ERRORS: tuple[tuple[str, str], ...] = (
-    ("credits are depleted", "결제 크레딧이 소진되었습니다 — AI Studio에서 결제를 설정하십시오"),
-    ("billing", "결제 설정이 필요합니다 — 무료 등급에서는 사용할 수 없습니다"),
-    ("api key not valid", "API 키가 올바르지 않습니다"),
-    ("api_key_invalid", "API 키가 올바르지 않습니다"),
-    ("unauthenticated", "API 키 인증에 실패했습니다"),
-    ("permission_denied", "이 모델에 접근할 권한이 없습니다"),
-    ("was not found", "모델을 찾을 수 없습니다 — 모델명을 확인하십시오"),
+    ("credits are depleted", "Billing credits exhausted — set up billing in AI Studio"),
+    ("billing", "Billing required — this model is not on the free tier"),
+    ("api key not valid", "API key is not valid"),
+    ("api_key_invalid", "API key is not valid"),
+    ("unauthenticated", "API key authentication failed"),
+    ("permission_denied", "No permission to access this model"),
+    ("was not found", "Model not found — check the model name"),
 )
 
 
 def fatal_reason(exc: BaseException | None) -> str | None:
-    """재시도 불가 오류면 사용자에게 보여줄 문구를, 아니면 None을 돌려준다."""
+    """Return the message to show for a non-retryable error, else None."""
     if exc is None:
         return None
     text = str(exc).lower()
@@ -91,7 +91,7 @@ class Stats:
 
 
 class _SessionHolder:
-    """하나의 Live 세션과 그 수신 태스크를 묶는다."""
+    """One Live session bundled with its receive task."""
 
     def __init__(self) -> None:
         self.session: object | None = None
@@ -102,7 +102,7 @@ class _SessionHolder:
         self.error: BaseException | None = None
 
     async def wait_for_replacement_trigger(self) -> None:
-        """종료 예고를 받았거나 연결이 끊기면 깨어난다."""
+        """Wake when the server warns of shutdown, or the connection drops."""
         waiters = [
             asyncio.create_task(self.go_away.wait()),
             asyncio.create_task(self.closed.wait()),
@@ -115,10 +115,10 @@ class _SessionHolder:
 
 
 class LiveTranslator:
-    """링 버퍼의 PCM을 Live API로 밀어 넣고 전사 텍스트를 콜백으로 방출한다.
+    """Pushes PCM from the ring buffer to the Live API and emits transcriptions.
 
-    콜백은 asyncio 스레드에서 호출된다. Qt 위젯을 직접 만지지 말고
-    반드시 pyqtSignal을 경유해 메인 스레드로 넘길 것.
+    Callbacks run on the asyncio thread. Never touch a Qt widget from them —
+    cross to the main thread with pyqtSignal.
     """
 
     def __init__(
@@ -157,7 +157,7 @@ class LiveTranslator:
         self._state = State.IDLE
         self.stats = Stats()
 
-    # --- 공개 API (메인 스레드에서 호출) ----------------------------------
+    # --- public API, called from the main thread --------------------------
 
     @property
     def state(self) -> State:
@@ -177,8 +177,8 @@ class LiveTranslator:
         self._stop.set()
         loop, thread = self._loop, self._thread
         if loop is not None and not loop.is_closed():
-            # supervisor는 asyncio 이벤트를 기다리고 있어 threading.Event로는 깨지 않는다.
-            # 태스크를 스레드 안전하게 취소해야 정리 코드(세션 close)가 돈다.
+            # The supervisor waits on asyncio events, which a threading.Event
+            # cannot wake. Cancel the task instead, so its cleanup actually runs.
             loop.call_soon_threadsafe(self._cancel_supervisor)
         if thread is not None:
             thread.join(timeout=timeout)
@@ -189,10 +189,10 @@ class LiveTranslator:
         self._set_state(State.IDLE, "")
         _log.info("translator stopped — %s", self.stats.summary())
 
-    # --- asyncio 스레드 ---------------------------------------------------
+    # --- asyncio thread ---------------------------------------------------
 
     def _cancel_supervisor(self) -> None:
-        """asyncio 스레드에서 실행된다 (call_soon_threadsafe 경유)."""
+        """Runs on the asyncio thread, via call_soon_threadsafe."""
         task = self._supervisor
         if task is not None and not task.done():
             task.cancel()
@@ -245,15 +245,15 @@ class LiveTranslator:
         )
 
     async def _supervise(self) -> None:
-        """세션을 열고, go_away/끊김에 대응해 교체하며, 송신 루프를 유지한다."""
+        """Open sessions, replace them on go_away or drop, and keep the sender alive."""
         client = self._client()
         sender = asyncio.create_task(self._send_loop(), name="send")
         failures = 0
 
         try:
             while not self._stop.is_set():
-                # 교체할 세션이 이미 있으면 '재연결'이다. stats.reconnects로 판단하면
-                # 첫 재연결이 아직 0이라 '연결 중'으로 잘못 표시된다.
+                # Having a session to replace means this is a reconnect. Using
+                # stats.reconnects would mislabel the first one, since it is still 0.
                 self._set_state(
                     State.RECONNECTING if self._active is not None else State.CONNECTING, ""
                 )
@@ -263,13 +263,13 @@ class LiveTranslator:
                 if holder is None:
                     reason = fatal_reason(self._last_error)
                     if reason is not None:
-                        # 크레딧·인증·권한 문제는 기다린다고 낫지 않는다.
+                        # Credit, auth and permission problems do not heal with time.
                         _log.error("fatal: %s", self._last_error)
                         self._set_state(State.ERROR, reason)
                         break
                     failures += 1
                     if failures >= MAX_CONSECUTIVE_FAILURES:
-                        self._set_state(State.ERROR, "연결에 반복 실패했습니다")
+                        self._set_state(State.ERROR, "Repeated connection failures")
                         break
                     delay = BACKOFF_SECONDS[min(failures - 1, len(BACKOFF_SECONDS) - 1)]
                     _log.warning("connect failed (%d/%d) — retry in %.0fs", failures,
@@ -279,7 +279,7 @@ class LiveTranslator:
 
                 failures = 0
                 previous = self._active
-                self._active = holder  # 송신 타깃을 원자적으로 교체
+                self._active = holder  # atomically swap the send target
                 gap_ms = (time.monotonic() - gap_started) * 1000.0
 
                 if previous is not None:
@@ -292,8 +292,8 @@ class LiveTranslator:
 
                 self._set_state(State.RUNNING, "")
 
-                # 종료 예고를 받거나 연결이 끊길 때까지 이 세션으로 계속 통역한다.
-                # go_away 이후에도 구 세션은 살려두고, 새 세션이 준비되면 그때 교체한다.
+                # Keep translating on this session until it warns or drops. The old
+                # session stays alive past go_away, until the replacement is ready.
                 await holder.wait_for_replacement_trigger()
                 if self._stop.is_set():
                     break
@@ -304,7 +304,7 @@ class LiveTranslator:
                 self._active = None
 
     async def _open_session(self, client: genai.Client) -> _SessionHolder | None:
-        """새 세션을 연다. 준비될 때까지 기다렸다가 holder를 돌려준다."""
+        """Open a session and return its holder once it is ready."""
         holder = _SessionHolder()
         holder.task = asyncio.create_task(self._session_main(client, holder), name="session")
         ready_waiter = asyncio.create_task(holder.ready.wait())
@@ -330,7 +330,7 @@ class LiveTranslator:
         return None
 
     async def _session_main(self, client: genai.Client, holder: _SessionHolder) -> None:
-        """하나의 세션을 열고 수신 루프를 돈다. 종료되면 closed를 세운다."""
+        """Run one session's receive loop, setting `closed` when it ends."""
         try:
             async with client.aio.live.connect(model=MODEL, config=self._config()) as session:
                 holder.session = session
@@ -350,15 +350,15 @@ class LiveTranslator:
             if self._stop.is_set():
                 return
 
-            # 1) 종료 예고 — 선제 재연결 트리거.
-            # 여기서 return하면 async with를 빠져나가며 구 세션이 즉시 닫힌다.
-            # 교체가 끝날 때까지는 계속 수신해야 하므로 플래그만 세우고 루프를 유지한다.
+            # 1) Shutdown warning — triggers the pre-emptive reconnect.
+            # Returning here would exit the async with and close this session at once.
+            # We must keep receiving until the swap completes, so only set a flag.
             if response.go_away is not None and not holder.go_away.is_set():
                 left = getattr(response.go_away, "time_left", None)
                 _log.info("go_away received (time_left=%s) — opening replacement", left)
                 holder.go_away.set()
 
-            # 2) 세션 재개 핸들 — 최신값을 항상 보관
+            # 2) Resumption handle — always keep the newest
             upd = response.session_resumption_update
             if upd is not None and upd.resumable and upd.new_handle:
                 self._handle = upd.new_handle
@@ -367,15 +367,15 @@ class LiveTranslator:
             if sc is None:
                 continue
 
-            # 3) 원문 한국어 (기본 미표시)
+            # 3) Source-language transcription (hidden by default)
             if sc.input_transcription and sc.input_transcription.text:
                 self._on_source(sc.input_transcription.text)
 
-            # 4) 번역된 영어 — 화면에 띄울 텍스트
+            # 4) The translation — this is what goes on screen
             if sc.output_transcription and sc.output_transcription.text:
                 self._on_target(sc.output_transcription.text)
 
-            # 5) 오디오는 반드시 소비하고 폐기 (안 읽으면 스트림이 막힘)
+            # 5) Audio must be consumed and discarded, or the stream stalls
             if sc.model_turn:
                 for part in sc.model_turn.parts or ():
                     if part.inline_data is not None:
@@ -389,12 +389,12 @@ class LiveTranslator:
         holder.closed.set()
 
     async def _send_loop(self) -> None:
-        """링 버퍼 → 활성 세션. 세션이 없으면 버퍼에 그대로 쌓아둔다."""
+        """Ring buffer to the active session. With no session, audio just accumulates."""
         silent_since: float | None = None
         while not self._stop.is_set():
             holder = self._active
             if holder is None or holder.session is None or holder.closed.is_set():
-                # 재연결 중 — 링 버퍼는 계속 채워지고, 새 세션이 열리면 여기서 밀어 넣는다.
+                # Reconnecting. The buffer keeps filling; we drain it once a session opens.
                 await asyncio.sleep(IDLE_POLL_SECONDS)
                 continue
 
@@ -408,7 +408,7 @@ class LiveTranslator:
                 if _rms(chunk) < SILENCE_RMS_THRESHOLD:
                     silent_since = silent_since if silent_since is not None else now
                     if now - silent_since >= SILENCE_HOLD_SECONDS:
-                        continue  # 전송을 건너뛴다 (비용 절감)
+                        continue  # skip the send to save cost
                 else:
                     silent_since = None
 
@@ -425,7 +425,7 @@ class LiveTranslator:
                 await asyncio.sleep(IDLE_POLL_SECONDS)
 
     async def _sleep(self, seconds: float) -> None:
-        """중지 요청에 반응하는 sleep."""
+        """Sleep that notices a stop request."""
         step = 0.1
         waited = 0.0
         while waited < seconds and not self._stop.is_set():
