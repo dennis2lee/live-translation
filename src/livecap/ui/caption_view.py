@@ -6,6 +6,8 @@ QLabel + 스타일시트로는 라운드 박스 자동 크기 조절과 N줄 클
 
 from __future__ import annotations
 
+from enum import StrEnum
+
 from PyQt6.QtCore import (
     QEasingCurve,
     QPointF,
@@ -33,11 +35,43 @@ FADE_MS = 150
 SOURCE_GAP = 14.0
 SOURCE_FONT_RATIO = 0.42
 
-# 번역 방향 표시 (KO → EN)
+# 번역 방향 표시 (KO → EN) — 캡션 박스 오른쪽 아래
 HINT_HOLD_MS = 2000
 HINT_FADE_MS = 400
 HINT_GAP = 12.0
 HINT_FONT_RATIO = 0.42
+
+# 상태 표시등 — 캡션 박스 오른쪽 밑
+DOT_RADIUS_RATIO = 0.13
+DOT_MIN_RADIUS = 5.0
+DOT_GAP = 14.0
+DOT_PULSE_MS = 1200
+DOT_DIM_ALPHA = 0.15
+COLOR_LIVE = QColor("#34C759")  # 연결됨
+COLOR_IDLE = QColor("#6E6E6E")  # 대기 중
+COLOR_ERROR = QColor("#FF3B30")  # 오류
+
+
+class Indicator(StrEnum):
+    IDLE = "idle"
+    """회색, 고정 — 프로그램 시작 직후와 통역 중지 상태."""
+
+    BUSY = "busy"
+    """녹색, 깜빡임 — 연결 중·재연결 중."""
+
+    LIVE = "live"
+    """녹색, 고정 — 연결 완료."""
+
+    ERROR = "error"
+    """빨강, 고정 — 오류."""
+
+
+DOT_COLOR = {
+    Indicator.IDLE: COLOR_IDLE,
+    Indicator.BUSY: COLOR_LIVE,
+    Indicator.LIVE: COLOR_LIVE,
+    Indicator.ERROR: COLOR_ERROR,
+}
 STATUS_COLOR = QColor("#6E6E6E")
 # 한글 출력(영어→한국어)을 쓰므로 한글 글꼴을 명시한다. 빠뜨리면 Qt 폴백에
 # 맡겨지면서 굵기·자간이 라틴 문자와 어긋난다.
@@ -74,6 +108,17 @@ class CaptionView(QWidget):
         self._hint_timer = QTimer(self)
         self._hint_timer.setSingleShot(True)
         self._hint_timer.timeout.connect(self._start_hint_fade)
+
+        # 상태 표시등 — 프로그램은 회색으로 시작한다.
+        self._indicator = Indicator.IDLE
+        self._dot_alpha = 1.0
+        self._dot_pulse = QPropertyAnimation(self, b"dotAlpha", self)
+        self._dot_pulse.setDuration(DOT_PULSE_MS)
+        self._dot_pulse.setStartValue(1.0)
+        self._dot_pulse.setKeyValueAt(0.5, DOT_DIM_ALPHA)
+        self._dot_pulse.setEndValue(1.0)
+        self._dot_pulse.setLoopCount(-1)
+        self._dot_pulse.setEasingCurve(QEasingCurve.Type.InOutSine)
 
         self.setAutoFillBackground(False)
         self.setAttribute(Qt.WidgetAttribute.WA_OpaquePaintEvent, True)
@@ -114,6 +159,33 @@ class CaptionView(QWidget):
         self._hint_timer.stop()
         self._hint_alpha = 0.0
         self._hint_text = ""
+        self.update()
+
+    # --- 상태 표시등 ------------------------------------------------------
+
+    def _get_dot_alpha(self) -> float:
+        return self._dot_alpha
+
+    def _set_dot_alpha(self, v: float) -> None:
+        self._dot_alpha = v
+        self.update()
+
+    dotAlpha = pyqtProperty(float, fget=_get_dot_alpha, fset=_set_dot_alpha)
+
+    @property
+    def indicator(self) -> Indicator:
+        return self._indicator
+
+    def set_indicator(self, state: Indicator) -> None:
+        """연결 중에는 깜빡이고, 그 외에는 고정으로 켜둔다."""
+        if state is self._indicator:
+            return
+        self._indicator = state
+        if state is Indicator.BUSY:
+            self._dot_pulse.start()
+        else:
+            self._dot_pulse.stop()
+            self._dot_alpha = 1.0
         self.update()
 
     def _start_hint_fade(self) -> None:
@@ -177,7 +249,9 @@ class CaptionView(QWidget):
         s = self._settings
         p.fillRect(self.rect(), QColor(s.bg_color))
         self._paint_body(p)
-        self._paint_hint(p)  # 캡션 유무와 무관하게 그린다
+        # 캡션 유무와 무관하게 그린다.
+        self._paint_hint(p)
+        self._paint_indicator(p)
         p.end()
 
     def _paint_body(self, p: QPainter) -> None:
@@ -188,6 +262,34 @@ class CaptionView(QWidget):
         if self._box_alpha <= 0.001 or (not self._lines and not s.fixed_box):
             return
         self._paint_caption(p)
+
+    def _anchor_right(self) -> float:
+        """캡션 박스의 오른쪽 가장자리.
+
+        박스가 내용에 따라 줄어드는 모드에서도 이 값은 고정이라, 표시등이
+        글자 길이에 따라 좌우로 움직이지 않는다.
+        """
+        max_box_w = self.width() * self._settings.box_max_width_pct / 100.0
+        return (self.width() + max_box_w) / 2.0
+
+    def _dot_radius(self) -> float:
+        return max(DOT_MIN_RADIUS, self._settings.font_size * DOT_RADIUS_RATIO)
+
+    def _strip_rect(self, height: float) -> QRectF:
+        """캡션 박스 바로 아래 띠. 자리가 모자라면 화면 안으로 밀어 넣는다."""
+        top = min(self._box_bottom() + HINT_GAP, self.height() - height)
+        return QRectF(0, top, self.width(), height)
+
+    def _paint_indicator(self, p: QPainter) -> None:
+        radius = self._dot_radius()
+        strip = self._strip_rect(radius * 2)
+        color = QColor(DOT_COLOR[self._indicator])
+        color.setAlphaF(max(0.0, min(1.0, self._dot_alpha)))
+        p.setPen(Qt.PenStyle.NoPen)
+        p.setBrush(color)
+        centre = QPointF(self._anchor_right() - radius, strip.center().y())
+        p.drawEllipse(centre, radius, radius)
+        p.setBrush(Qt.BrushStyle.NoBrush)
 
     def _paint_hint(self, p: QPainter) -> None:
         if self._hint_alpha <= 0.001 or not self._hint_text:
@@ -203,10 +305,16 @@ class CaptionView(QWidget):
         color.setAlphaF(max(0.0, min(1.0, self._hint_alpha)))
         p.setPen(color)
 
-        top = self._box_bottom() + HINT_GAP
-        # 하단 여백을 좁게 잡아 자리가 모자라면 화면 안으로 밀어 넣는다.
-        top = min(top, self.height() - fm.height())
-        p.drawText(QRectF(0, top, self.width(), fm.height()), _CENTER, self._hint_text)
+        # 표시등 왼쪽에 우측 정렬로 놓아 서로 겹치지 않게 한다.
+        radius = self._dot_radius()
+        strip = self._strip_rect(max(fm.height(), radius * 2))
+        right = self._anchor_right() - radius * 2 - DOT_GAP
+        rect = QRectF(0, strip.top(), right, strip.height())
+        p.drawText(
+            rect,
+            int(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter),
+            self._hint_text,
+        )
 
     def _paint_status(self, p: QPainter) -> None:
         f = self._caption_font()

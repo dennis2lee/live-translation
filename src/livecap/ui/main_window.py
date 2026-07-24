@@ -29,7 +29,7 @@ from ..config import (
 from ..transcript import TranscriptWriter, resolve_dir
 from ..translator import MODEL, LiveTranslator, State
 from ..util import logging as log
-from .caption_view import CaptionView
+from .caption_view import CaptionView, Indicator
 from .settings_dialog import SettingsDialog
 
 _log = log.get(__name__)
@@ -47,9 +47,13 @@ STATUS_TEXT = {
     State.ERROR: "오류",
 }
 
-OVERLAY_TEXT = {
-    State.CONNECTING: "연결 중…",
-    State.RECONNECTING: "재연결 중…",
+# 연결 중·재연결 중은 글자가 아니라 캡션 박스 오른쪽 밑의 표시등으로 알린다.
+INDICATOR_FOR_STATE = {
+    State.IDLE: Indicator.IDLE,
+    State.CONNECTING: Indicator.BUSY,
+    State.RECONNECTING: Indicator.BUSY,
+    State.RUNNING: Indicator.LIVE,
+    State.ERROR: Indicator.ERROR,
 }
 
 
@@ -580,11 +584,16 @@ class CaptionWindow(QMainWindow):
         self._refresh_overlay()
 
     def _refresh_overlay(self) -> None:
-        """캡션이 없을 때만 상태 문구를 보여준다. 모달은 띄우지 않는다."""
+        """상태 표시등을 갱신한다. 모달은 띄우지 않는다.
+
+        연결 중·재연결 중은 표시등이 알려주므로 글자를 띄우지 않는다.
+        오류만은 원인을 알아야 하므로 캡션 자리에 문구를 남긴다.
+        """
+        self._view.set_indicator(INDICATOR_FOR_STATE.get(self._state, Indicator.IDLE))
         if self._state is State.ERROR:
             self._view.set_status(self._error_detail or "연결에 실패했습니다")
         else:
-            self._view.set_status(OVERLAY_TEXT.get(self._state, ""))
+            self._view.set_status("")
 
     # --- 커서 숨김 --------------------------------------------------------
 
