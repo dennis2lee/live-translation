@@ -39,6 +39,10 @@ class Settings:
     font_size: int = 44  # 24 ~ 96
     max_lines: int = 2  # 1 ~ 4
 
+    # 캡션 박스를 항상 같은 크기·위치로 띄운다 (텍스트가 없어도 유지).
+    # 끄면 PLAN.md §6.2의 원래 동작 — 내용에 맞춰 크기가 변하고, 비면 사라진다.
+    fixed_box: bool = True
+
     # 동작
     audio_device_name: str = ""  # 빈 문자열이면 시스템 기본 입력
     show_source_text: bool = False
@@ -65,6 +69,7 @@ class Settings:
             bottom_margin_pct=int(_clamp(self.bottom_margin_pct, 2, 20)),
             font_size=int(_clamp(self.font_size, 24, 96)),
             max_lines=int(_clamp(self.max_lines, 1, 4)),
+            fixed_box=bool(self.fixed_box),
             audio_device_name=self.audio_device_name,
             show_source_text=bool(self.show_source_text),
             fullscreen=bool(self.fullscreen),

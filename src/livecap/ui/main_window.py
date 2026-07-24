@@ -174,6 +174,14 @@ class CaptionWindow(QMainWindow):
         self._device_group: QActionGroup | None = None
 
         cfg.addSeparator()
+        self._act_fixed_box = QAction("캡션 박스 항상 표시", self, checkable=True)
+        self._act_fixed_box.setToolTip(
+            "박스를 항상 같은 크기·위치로 유지합니다.\n"
+            "끄면 내용에 맞춰 크기가 변하고, 캡션이 없을 때 사라집니다."
+        )
+        self._act_fixed_box.triggered.connect(lambda c: self._update(fixed_box=c))
+        cfg.addAction(self._act_fixed_box)
+
         self._act_source = QAction("원문(한국어) 함께 표시", self, checkable=True)
         self._act_source.triggered.connect(lambda c: self._update(show_source_text=c))
         cfg.addAction(self._act_source)
@@ -241,6 +249,7 @@ class CaptionWindow(QMainWindow):
             a.setChecked(int(a.text()) == self._settings.font_size)
         for a in self._lines_group.actions():
             a.setChecked(int(a.text()) == self._settings.max_lines)
+        self._act_fixed_box.setChecked(self._settings.fixed_box)
         self._act_source.setChecked(self._settings.show_source_text)
         self._act_fullscreen.setChecked(self._settings.fullscreen)
 

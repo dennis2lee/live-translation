@@ -70,7 +70,7 @@ class CaptionView(QWidget):
     def apply_settings(self, settings: Settings) -> None:
         """설정 변경을 즉시 반영한다 (앱 재시작 불필요)."""
         self._settings = settings
-        self.update()
+        self._refresh_visibility()
 
     def set_lines(self, lines: list[tuple[str, bool]]) -> None:
         self._lines = lines
@@ -91,8 +91,9 @@ class CaptionView(QWidget):
         self._refresh_visibility()
 
     def _refresh_visibility(self) -> None:
-        # 표시할 텍스트가 없으면 박스 자체를 숨긴다 (빈 박스가 뜨면 지저분함).
-        target = 1.0 if self._lines else 0.0
+        # 고정 박스 모드에서는 비어 있어도 박스를 유지한다.
+        # 끄면 표시할 텍스트가 없을 때 박스 자체를 숨긴다 (PLAN.md §6.2).
+        target = 1.0 if (self._lines or self._settings.fixed_box) else 0.0
         if self._fade.state() == QPropertyAnimation.State.Running:
             self._fade.stop()
         if self._box_alpha != target:
@@ -119,12 +120,12 @@ class CaptionView(QWidget):
         s = self._settings
         p.fillRect(self.rect(), QColor(s.bg_color))
 
-        if self._status and not self._lines:
+        if self._status and not self._lines and not s.fixed_box:
             self._paint_status(p)
             p.end()
             return
 
-        if self._box_alpha <= 0.001 or not self._lines:
+        if self._box_alpha <= 0.001 or (not self._lines and not s.fixed_box):
             p.end()
             return
 
@@ -159,14 +160,20 @@ class CaptionView(QWidget):
         for text, confirmed in self._lines:
             for piece in _wrap(text, font, max_text_w):
                 wrapped.append((piece, confirmed))
-        wrapped = wrapped[-max(1, s.max_lines) :]
-        if not wrapped:
+        max_lines = max(1, s.max_lines)
+        wrapped = wrapped[-max_lines:]
+        if not wrapped and not s.fixed_box:
             return
 
         line_h = fm.height()
-        text_w = max(fm.horizontalAdvance(t) for t, _ in wrapped)
-        box_w = min(max_box_w, text_w + 2 * PAD_H)
-        box_h = line_h * len(wrapped) + 2 * PAD_V  # 실제 줄 수에 맞춰 자동 조절
+        if s.fixed_box:
+            # 폭·높이를 고정한다. 내용에 따라 박스가 흔들리지 않는다.
+            box_w = max_box_w
+            box_h = line_h * max_lines + 2 * PAD_V
+        else:
+            text_w = max(fm.horizontalAdvance(t) for t, _ in wrapped)
+            box_w = min(max_box_w, text_w + 2 * PAD_H)
+            box_h = line_h * len(wrapped) + 2 * PAD_V  # 실제 줄 수에 맞춰 자동 조절
 
         bottom = self._box_bottom()
         box = QRectF((self.width() - box_w) / 2.0, bottom - box_h, box_w, box_h)
@@ -178,11 +185,28 @@ class CaptionView(QWidget):
         path.addRoundedRect(box, float(s.corner_radius), float(s.corner_radius))
         p.fillPath(path, box_color)
 
+        # 고정 박스가 비어 있으면 상태 문구를 박스 안에 넣는다.
+        if not wrapped:
+            if self._status:
+                sf = self._caption_font()
+                sf.setPixelSize(max(18, int(s.font_size * 0.55)))
+                p.setFont(sf)
+                status_color = QColor(STATUS_COLOR)
+                status_color.setAlphaF(self._box_alpha)
+                p.setPen(status_color)
+                p.drawText(box, _CENTER, self._status)
+            return
+
         # 텍스트
         confirmed_color = QColor(s.text_color)
         pending_color = QColor(s.text_color)
         pending_color.setAlphaF(0.55)  # 미확정은 확정색의 55% 알파
-        y = box.top() + PAD_V
+        # 고정 박스에서는 아래쪽 정렬 — 줄 수가 변해도 최신 줄이 같은 자리에 있다.
+        y = (
+            box.bottom() - PAD_V - line_h * len(wrapped)
+            if s.fixed_box
+            else box.top() + PAD_V
+        )
         for text, confirmed in wrapped:
             color = QColor(confirmed_color if confirmed else pending_color)
             color.setAlphaF(color.alphaF() * self._box_alpha)

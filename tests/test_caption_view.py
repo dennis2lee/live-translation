@@ -54,9 +54,9 @@ ONE = [("Good morning everyone.", True)]
 TWO = [("We're going to look at the Q3 numbers before moving on to the roadmap.", True)]
 
 
-def test_empty_content_paints_nothing_but_background(qapp):
-    """표시할 텍스트가 없으면 박스 자체를 숨긴다."""
-    s = Settings()
+def test_empty_content_paints_nothing_when_box_is_not_fixed(qapp):
+    """고정 박스를 끄면 표시할 텍스트가 없을 때 박스를 숨긴다 (PLAN.md §6.2)."""
+    s = Settings(fixed_box=False)
     img = render(s, [])
     assert content_bbox(img, s.bg_color) is None
 
@@ -69,8 +69,8 @@ def test_background_fills_the_whole_window(qapp):
 
 
 def test_one_line_box_is_shorter_than_two_line_box(qapp):
-    """박스 높이는 실제 줄 수에 맞춰 자동 조절된다."""
-    s = Settings()
+    """고정 박스를 끄면 박스 높이가 실제 줄 수에 맞춰 자동 조절된다."""
+    s = Settings(fixed_box=False)
     one = content_bbox(render(s, ONE), s.bg_color)
     two = content_bbox(render(s, TWO), s.bg_color)
     assert one is not None and two is not None
@@ -122,7 +122,7 @@ def test_max_width_ratio_holds_across_window_sizes(qapp):
 
 
 def test_box_hugs_short_text_instead_of_filling_max_width(qapp):
-    s = Settings(box_max_width_pct=80)
+    s = Settings(box_max_width_pct=80, fixed_box=False)
     bbox = content_bbox(render(s, [("Hi.", True)]), s.bg_color)
     assert bbox is not None
     assert (bbox[2] - bbox[0]) < 1280 * 0.40
@@ -166,6 +166,99 @@ def test_source_text_hidden_when_setting_is_off(qapp):
     without = content_bbox(render(s, ONE), s.bg_color)
     with_src = content_bbox(render(s, ONE, source="곧 시작하겠습니다."), s.bg_color)
     assert with_src == without
+
+
+# --- 고정 박스 --------------------------------------------------------------
+
+
+def text_rows(img: QImage, text_color: str) -> list[int]:
+    """글자색 픽셀이 있는 행 번호. 박스와 글자를 구분하기 위해 씀."""
+    rgb = QColor(text_color).rgb()
+    return [
+        y for y in range(img.height())
+        if any(img.pixel(x, y) == rgb for x in range(img.width()))
+    ]
+
+
+FIXED = Settings(fixed_box=True)
+
+
+def test_fixed_box_stays_visible_when_empty(qapp):
+    """캡션이 없어도 박스가 유지된다."""
+    img = render(FIXED, [])
+    assert content_bbox(img, FIXED.bg_color) is not None
+
+
+def test_fixed_box_height_is_the_same_for_one_and_two_lines(qapp):
+    one = content_bbox(render(FIXED, ONE), FIXED.bg_color)
+    two = content_bbox(render(FIXED, TWO), FIXED.bg_color)
+    empty = content_bbox(render(FIXED, []), FIXED.bg_color)
+    assert one is not None and two is not None and empty is not None
+    assert one[3] - one[1] == two[3] - two[1] == empty[3] - empty[1]
+
+
+def test_fixed_box_width_does_not_change_with_text_length(qapp):
+    short = content_bbox(render(FIXED, [("Hi.", True)]), FIXED.bg_color)
+    long_ = content_bbox(render(FIXED, TWO), FIXED.bg_color)
+    empty = content_bbox(render(FIXED, []), FIXED.bg_color)
+    assert short is not None and long_ is not None and empty is not None
+    assert short[0] == long_[0] == empty[0]
+    assert short[2] == long_[2] == empty[2]
+
+
+def test_fixed_box_position_does_not_move(qapp):
+    boxes = [
+        content_bbox(render(FIXED, lines), FIXED.bg_color)
+        for lines in ([], ONE, TWO, [("Hi.", True)])
+    ]
+    assert all(b is not None for b in boxes)
+    assert len(set(boxes)) == 1
+
+
+def test_fixed_box_fills_the_configured_max_width(qapp):
+    s = Settings(fixed_box=True, box_max_width_pct=70)
+    bbox = content_bbox(render(s, ONE), s.bg_color)
+    assert bbox is not None
+    assert abs((bbox[2] - bbox[0]) - 1280 * 0.70) <= 2
+
+
+def test_fixed_box_sized_for_two_lines_by_default(qapp):
+    """기본 2줄 높이. 3줄 설정이면 그만큼 커진다."""
+    two = content_bbox(render(Settings(fixed_box=True, max_lines=2), []), "#000000")
+    three = content_bbox(render(Settings(fixed_box=True, max_lines=3), []), "#000000")
+    assert two is not None and three is not None
+    h2, h3 = two[3] - two[1], three[3] - three[1]
+    assert h3 > h2
+    # 정확히 한 줄 높이만큼 차이나야 한다 (±2px).
+    one = content_bbox(render(Settings(fixed_box=True, max_lines=1), []), "#000000")
+    assert one is not None
+    assert abs((h3 - h2) - (h2 - (one[3] - one[1]))) <= 2
+
+
+def test_fixed_box_bottom_anchors_text_so_newest_line_stays_put(qapp):
+    """줄 수가 변해도 최신(마지막) 줄의 위치가 그대로여야 한다.
+
+    디센더 유무로 잉크 범위가 달라지므로 마지막 줄은 같은 문구로 맞춰 비교한다.
+    """
+    last = ("Second line here.", True)
+    one_rows = text_rows(render(FIXED, [last]), FIXED.text_color)
+    two_rows = text_rows(render(FIXED, [("Good morning everyone.", True), last]), FIXED.text_color)
+    assert one_rows and two_rows
+    assert abs(max(one_rows) - max(two_rows)) <= 2  # 마지막 줄 하단이 같은 자리
+    # 두 줄일 때만 위쪽으로 더 뻗는다.
+    assert min(two_rows) < min(one_rows)
+
+
+def test_fixed_box_shows_status_inside_the_box(qapp):
+    with_status = render(FIXED, [], status="재연결 중…")
+    without = render(FIXED, [])
+    box = content_bbox(without, FIXED.bg_color)
+    assert box is not None
+    # 상태 문구가 박스 밖으로 삐져나가지 않는다.
+    with_bbox = content_bbox(with_status, FIXED.bg_color)
+    assert with_bbox == box
+    # 그리고 실제로 무언가 더 그려졌다.
+    assert with_status != without
 
 
 def test_long_text_is_clipped_to_max_lines(qapp):

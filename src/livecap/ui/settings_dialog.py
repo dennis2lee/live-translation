@@ -98,6 +98,13 @@ class SettingsDialog(QDialog):
         form.addRow("박스 불투명도", opacity_row)
 
         # --- 동작 ---
+        self._fixed_box = QCheckBox("캡션 박스 항상 표시 (크기·위치 고정)")
+        self._fixed_box.setToolTip(
+            "끄면 내용에 맞춰 박스 크기가 변하고, 캡션이 없을 때 사라집니다."
+        )
+        self._fixed_box.setChecked(settings.fixed_box)
+        form.addRow("", self._fixed_box)
+
         self._show_source = QCheckBox("원문(한국어) 함께 표시")
         self._show_source.setChecked(settings.show_source_text)
         form.addRow("", self._show_source)
@@ -183,6 +190,7 @@ class SettingsDialog(QDialog):
             box_max_width_pct=self._box_width.value(),
             bottom_margin_pct=self._bottom_margin.value(),
             box_opacity=self._opacity.value() / 100.0,
+            fixed_box=self._fixed_box.isChecked(),
             show_source_text=self._show_source.isChecked(),
             fullscreen=self._fullscreen.isChecked(),
             silence_gate=self._silence_gate.isChecked(),
