@@ -1,0 +1,17 @@
+.venv/
+__pycache__/
+*.py[cod]
+*.egg-info/
+build/
+dist/
+.pytest_cache/
+.ruff_cache/
+.DS_Store
+
+# Never commit key material or captured audio
+.env
+*.pem
+*.key
+secrets.*
+captures/
+*.wav

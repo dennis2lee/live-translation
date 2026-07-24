@@ -1,0 +1,37 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "livecap"
+version = "0.1.0"
+description = "한국어 발화를 영어로 실시간 통역해 캡션으로 띄우는 macOS 앱"
+requires-python = ">=3.12"
+dependencies = [
+    "PyQt6>=6.7",
+    "google-genai>=1.0",
+    "sounddevice>=0.4.7",
+    "numpy>=1.26",
+    "soxr>=0.5",
+    "keyring>=25.0",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=8.0", "ruff>=0.6"]
+
+[project.scripts]
+livecap = "livecap.app:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["src"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B", "SIM"]
