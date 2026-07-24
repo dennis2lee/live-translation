@@ -90,7 +90,7 @@ class Settings:
     fixed_box: bool = True
 
     # 말이 멎고 이만큼 지나면 캡션을 비운다. 0이면 계속 남겨둔다.
-    clear_after_seconds: float = 2.0  # 0 ~ 30
+    clear_after_seconds: float = 3.0  # 0 ~ 30
 
     # 번역 기록 저장 (파일명은 통역 시작 날짜·시간)
     save_transcript: bool = True

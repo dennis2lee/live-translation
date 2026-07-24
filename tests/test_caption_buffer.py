@@ -263,8 +263,8 @@ def test_whitespace_only_fragment_does_not_create_a_line():
 def test_clear_after_silence_is_two_seconds_by_default():
     from livecap.caption_buffer import CLEAR_AFTER_SECONDS
 
-    assert CLEAR_AFTER_SECONDS == 2.0
-    assert CaptionBuffer().clear_after_seconds == 2.0
+    assert CLEAR_AFTER_SECONDS == 3.0
+    assert CaptionBuffer().clear_after_seconds == 3.0
 
 
 def test_captions_are_cleared_after_the_silence_window():

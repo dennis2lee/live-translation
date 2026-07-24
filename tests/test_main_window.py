@@ -184,7 +184,7 @@ def test_clear_captions_empties_the_view(window):
 
 
 def test_silence_clear_setting_reaches_the_buffer(window):
-    assert window._buffer.clear_after_seconds == 2.0
+    assert window._buffer.clear_after_seconds == 3.0
     window._update(clear_after_seconds=5.0)
     assert window._buffer.clear_after_seconds == 5.0
 
@@ -197,7 +197,7 @@ def test_tick_clears_the_view_after_silence(window, monkeypatch):
     window._on_target_text("Hello there.")
     assert window._view._lines == [("Hello there.", True)]
 
-    monkeypatch.setattr(mw.time, "monotonic", lambda: base + 2.5)
+    monkeypatch.setattr(mw.time, "monotonic", lambda: base + 3.5)
     window._on_tick()
     assert window._view._lines == []
     assert window._buffer.is_empty
