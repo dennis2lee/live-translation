@@ -49,8 +49,9 @@ class Settings:
     target_language_code: str = "en"
     echo_target_language: bool = False
 
-    # 캡션 커밋 정책 — Phase 0 결과(spikes/RESULTS.md)에 따라 고정할 수 있다.
-    caption_policy: str = Policy.AUTO.value
+    # 캡션 커밋 정책. Phase 0 측정 결과(spikes/RESULTS.md, 2026-07-24)에 따라
+    # 정책 A로 고정한다 — 조각이 중간값 14자로 약 1초마다 점진 도착한다.
+    caption_policy: str = Policy.INCREMENTAL.value
 
     def clamped(self) -> Settings:
         """범위를 벗어난 값을 명세 범위로 되돌린 사본."""
@@ -73,7 +74,7 @@ class Settings:
             caption_policy=(
                 self.caption_policy
                 if self.caption_policy in {p.value for p in Policy}
-                else Policy.AUTO.value
+                else Policy.INCREMENTAL.value
             ),
         )
 

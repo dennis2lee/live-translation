@@ -283,6 +283,53 @@ def test_config_matches_the_preview_model_contract(rec):
         t.stop()
 
 
+def test_billing_error_fails_fast_instead_of_backing_off(rec, monkeypatch):
+    """크레딧·인증 문제는 재시도해도 낫지 않으므로 즉시 안내한다."""
+    monkeypatch.setattr(tr, "BACKOFF_SECONDS", (5.0, 5.0, 5.0, 5.0))
+
+    class Depleted(FakeConnect):
+        async def __aenter__(self):
+            self._rec.events.append(("connect_fail", self._index))
+            raise RuntimeError(
+                "1011 None. Your prepayment credits are depleted. Please go to AI Studio"
+            )
+
+    states: list[tuple[str, str]] = []
+    t = make_translator(rec, [[]], on_state=lambda s, d: states.append((s.value, d)))
+    client = FakeClient(rec, [[]])
+    # aio.live.connect는 생성 시점에 바인딩되므로 그쪽을 직접 교체해야 한다.
+    client.aio.live.connect = lambda *, model, config: Depleted(rec, 0, [], fail=True)
+    t._client = lambda: client  # type: ignore[method-assign]
+    t.start()
+    try:
+        assert wait_until(lambda: any(s == State.ERROR.value for s, _ in states), timeout=4.0)
+        detail = next(d for s, d in states if s == State.ERROR.value)
+        assert "크레딧" in detail
+        # 백오프를 5초씩 5회 돌지 않고 한 번에 끝났어야 한다.
+        assert rec.events.count(("connect_fail", 0)) == 1
+    finally:
+        t.stop()
+
+
+@pytest.mark.parametrize(
+    "message,expected",
+    [
+        ("Your prepayment credits are depleted.", "크레딧"),
+        ("API key not valid. Please pass a valid API key.", "API 키"),
+        ("PERMISSION_DENIED: caller does not have permission", "권한"),
+        ("models/foo was not found", "모델"),
+    ],
+)
+def test_fatal_reason_recognises_non_retryable_errors(message, expected):
+    reason = tr.fatal_reason(RuntimeError(message))
+    assert reason is not None and expected in reason
+
+
+def test_fatal_reason_passes_through_transient_errors():
+    assert tr.fatal_reason(RuntimeError("connection reset by peer")) is None
+    assert tr.fatal_reason(None) is None
+
+
 def test_model_name_is_the_preview_translate_model():
     assert tr.MODEL == "gemini-3.5-live-translate-preview"
     assert tr.AUDIO_MIME == "audio/pcm;rate=16000"

@@ -37,6 +37,30 @@ RESPONSE_MODALITIES = ["AUDIO"]  # 이 모델은 오디오 출력 전용. TEXT�
 
 BACKOFF_SECONDS = (1.0, 2.0, 4.0, 8.0)
 MAX_CONSECUTIVE_FAILURES = 5
+
+# 재시도해도 소용없는 실패. 백오프로 시간을 끌지 않고 즉시 안내한다.
+# (마커, 사용자에게 보여줄 문구)
+FATAL_ERRORS: tuple[tuple[str, str], ...] = (
+    ("credits are depleted", "결제 크레딧이 소진되었습니다 — AI Studio에서 결제를 설정하십시오"),
+    ("billing", "결제 설정이 필요합니다 — 무료 등급에서는 사용할 수 없습니다"),
+    ("api key not valid", "API 키가 올바르지 않습니다"),
+    ("api_key_invalid", "API 키가 올바르지 않습니다"),
+    ("unauthenticated", "API 키 인증에 실패했습니다"),
+    ("permission_denied", "이 모델에 접근할 권한이 없습니다"),
+    ("was not found", "모델을 찾을 수 없습니다 — 모델명을 확인하십시오"),
+)
+
+
+def fatal_reason(exc: BaseException | None) -> str | None:
+    """재시도 불가 오류면 사용자에게 보여줄 문구를, 아니면 None을 돌려준다."""
+    if exc is None:
+        return None
+    text = str(exc).lower()
+    for marker, message in FATAL_ERRORS:
+        if marker in text:
+            return message
+    return None
+
 IDLE_POLL_SECONDS = 0.02
 SILENCE_RMS_THRESHOLD = 0.003
 SILENCE_HOLD_SECONDS = 3.0
@@ -128,6 +152,7 @@ class LiveTranslator:
 
         self._active: _SessionHolder | None = None
         self._handle: str | None = None
+        self._last_error: BaseException | None = None
         self._reconnect_requested = asyncio.Event()
         self._state = State.IDLE
         self.stats = Stats()
@@ -234,6 +259,12 @@ class LiveTranslator:
                 holder = await self._open_session(client)
 
                 if holder is None:
+                    reason = fatal_reason(self._last_error)
+                    if reason is not None:
+                        # 크레딧·인증·권한 문제는 기다린다고 낫지 않는다.
+                        _log.error("fatal: %s", self._last_error)
+                        self._set_state(State.ERROR, reason)
+                        break
                     failures += 1
                     if failures >= MAX_CONSECUTIVE_FAILURES:
                         self._set_state(State.ERROR, "연결에 반복 실패했습니다")
@@ -285,9 +316,11 @@ class LiveTranslator:
             ready_waiter.cancel()
 
         if holder.ready.is_set():
+            self._last_error = None
             return holder
 
         holder.task.cancel()
+        self._last_error = holder.error
         if holder.error is not None:
             _log.warning("session open failed: %s", holder.error)
         else:

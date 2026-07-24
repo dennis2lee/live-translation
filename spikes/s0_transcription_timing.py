@@ -30,7 +30,12 @@ from google.genai import types  # noqa: E402
 
 from livecap.audio import CHUNK_BYTES, TARGET_RATE, AudioCapture  # noqa: E402
 from livecap.config import load_api_key  # noqa: E402
-from livecap.translator import AUDIO_MIME, MODEL, RESPONSE_MODALITIES  # noqa: E402
+from livecap.translator import (  # noqa: E402
+    AUDIO_MIME,
+    MODEL,
+    RESPONSE_MODALITIES,
+    fatal_reason,
+)
 from livecap.util import logging as log  # noqa: E402
 
 
@@ -132,6 +137,17 @@ async def run(args: argparse.Namespace) -> int:
     )
 
     print(f"connecting to {MODEL} …")
+    try:
+        return await stream(client, config, args)
+    except Exception as exc:
+        reason = fatal_reason(exc)
+        if reason is None:
+            raise
+        print(f"\n연결 실패: {reason}\n  원본 오류: {str(exc)[:200]}", file=sys.stderr)
+        return 3
+
+
+async def stream(client, config, args: argparse.Namespace) -> int:
     async with client.aio.live.connect(model=MODEL, config=config) as session:
         rec = Recorder(time.monotonic())
         print("connected. streaming audio.\n")
