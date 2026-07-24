@@ -1,19 +1,19 @@
-"""Phase 2·3 수용 기준 검증 — 실제 파이프라인을 헤드리스로 장시간 돌린다.
+"""Run the real pipeline headless for a long stretch.
 
-WAV를 실시간 속도로 링 버퍼에 흘려 넣고 LiveTranslator를 그대로 구동한다.
-UI만 없을 뿐 앱과 같은 경로다.
+A WAV is fed into the ring buffer at real-time speed and LiveTranslator runs
+unchanged. Identical to the app except that there is no UI.
 
-    # Phase 2 — 5분 연속
+    # five minutes
     python spikes/s2_headless_run.py --wav spikes/fixtures/ko_6min.wav --minutes 5
 
-    # Phase 3 — 30분 완주 + 원고 대조
+    # thirty minutes, compared against the script
     python spikes/s2_headless_run.py --wav spikes/fixtures/ko_30min.wav --minutes 30 \
         --script spikes/fixtures/ko_script.txt --repeat 20
 
-검사 항목
-  - 재연결 횟수와 각 재연결의 공백 시간(ms)
-  - 원문 전사와 원고를 대조한 문장 유실 (difflib 유사도)
-  - 실측 비용 추정
+Reports
+  - reconnect count and the gap in ms for each
+  - sentences lost, by comparing the transcription against the script
+  - measured cost
 """
 
 from __future__ import annotations
@@ -35,27 +35,27 @@ from livecap.config import load_api_key  # noqa: E402
 from livecap.translator import LiveTranslator, State  # noqa: E402
 from livecap.util import logging as log  # noqa: E402
 
-# PLAN.md §11 — 입력 $0.0053/분, 출력 $0.0315/분
+# $0.0053/min input, $0.0315/min output
 COST_PER_MINUTE = 0.0053 + 0.0315
 
 
 def normalize(text: str) -> str:
-    """대조용 정규화 — 공백·구두점 제거."""
+    """Normalise for comparison: drop whitespace and punctuation."""
     return re.sub(r"[^\w]", "", text)
 
 
 def coverage(sentence: str, haystack: str) -> float:
-    """원고 문장이 전사에 얼마나 남아 있는지 0~1로.
+    """How much of a script sentence survives in the transcription, 0 to 1.
 
-    ASR은 숫자를 아라비아 숫자로 바꿔 쓰고(십일월→11월, 삼십 퍼센트→30%)
-    띄어쓰기도 다르게 넣는다(영업이익률→영업이익 율). 따라서 '가장 긴 연속
-    일치' 하나로 재면 멀쩡한 문장이 유실로 잡힌다. 일치 구간을 모두 합산한다.
+    The ASR rewrites numbers as digits and spaces words differently, so scoring
+    by the single longest matching run flags healthy sentences as lost. Sum every
+    matching block instead.
     """
     needle = normalize(sentence)
     if not needle:
         return 1.0
     matcher = difflib.SequenceMatcher(None, needle, haystack, autojunk=False)
-    # 1글자 우연 일치는 세지 않는다 — 한국어에서는 흔해서 점수를 부풀린다.
+    # Ignore single-character coincidences; they inflate the score.
     matched = sum(b.size for b in matcher.get_matching_blocks() if b.size >= 2)
     return min(1.0, matched / len(needle))
 
@@ -69,7 +69,7 @@ def read_script(path: Path) -> list[str]:
 
 
 def feed_wav(ring: RingBuffer, wav_path: Path, stop: threading.Event, minutes: float) -> float:
-    """WAV를 실시간 속도로 링 버퍼에 흘려 넣는다. 실제 흘린 초를 돌려준다."""
+    """Feed the WAV into the ring buffer at real-time speed; return seconds fed."""
     deadline = time.monotonic() + minutes * 60
     started = time.monotonic()
     with wave.open(str(wav_path), "rb") as w:
@@ -79,7 +79,7 @@ def feed_wav(ring: RingBuffer, wav_path: Path, stop: threading.Event, minutes: f
         while not stop.is_set() and time.monotonic() < deadline:
             data = w.readframes(CHUNK_BYTES // 2)
             if not data:
-                w.rewind()  # 음원이 짧으면 반복
+                w.rewind()  # loop if the file is shorter than the run
                 continue
             ring.write(data)
             next_at += CHUNK_BYTES / 2 / TARGET_RATE
@@ -90,22 +90,22 @@ def feed_wav(ring: RingBuffer, wav_path: Path, stop: threading.Event, minutes: f
 
 
 def report_script_match(sentences: list[str], recognised: str, threshold: float) -> int:
-    """원고와 원문 전사를 대조해 결과를 찍고, 유실이 있으면 1을 돌려준다."""
+    """Compare script against transcription, print the result, return 1 if lost."""
     hay = normalize(recognised)
-    print(f"\n  원고 대조: {len(sentences)}문장")
+    print(f"\n  script comparison: {len(sentences)} sentences")
     scores = [coverage(s, hay) for s in sentences]
     missing = [
         (i, s, r) for i, (s, r) in enumerate(zip(sentences, scores, strict=True), 1)
         if r < threshold
     ]
     if scores:
-        print(f"  문장 유사도 최저 {min(scores):.2f} / 평균 {sum(scores) / len(scores):.2f}")
+        print(f"  similarity worst {min(scores):.2f} / mean {sum(scores) / len(scores):.2f}")
     if missing:
-        print(f"  ⚠ 유실 의심 {len(missing)}문장 (임계 {threshold}):")
+        print(f"  ⚠ {len(missing)} sentences may be lost (threshold {threshold}):")
         for i, sentence, ratio in missing[:20]:
             print(f"      #{i:3d} ratio={ratio:.2f}  {sentence[:40]}")
         return 1
-    print(f"  ✅ 유실 문장 없음 (전 문장 유사도 ≥ {threshold})")
+    print(f"  ✅ no sentence lost (all above {threshold})")
     return 0
 
 
@@ -113,14 +113,18 @@ def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--wav", type=Path, required=True)
     ap.add_argument("--minutes", type=float, default=5.0)
-    ap.add_argument("--script", type=Path, help="원고 — 문장 유실 대조용")
-    ap.add_argument("--repeat", type=int, default=1, help="음원 안에서 원고가 반복된 횟수")
-    ap.add_argument("--threshold", type=float, default=0.5, help="유실 판정 유사도 임계")
-    ap.add_argument("--out", type=Path, help="전체 전사를 저장할 경로")
+    ap.add_argument("--script", type=Path, help="script to compare the transcription against")
+    ap.add_argument(
+        "--repeat", type=int, default=1, help="how many times the script repeats"
+    )
+    ap.add_argument(
+        "--threshold", type=float, default=0.5, help="similarity below which a sentence is lost"
+    )
+    ap.add_argument("--out", type=Path, help="where to save the full transcription")
     ap.add_argument(
         "--compare-only",
         type=Path,
-        help="저장된 전사(--out 결과)로 원고 대조만 다시 수행한다. API를 쓰지 않는다.",
+        help="re-score a saved transcription without calling the API",
     )
     args = ap.parse_args()
 
@@ -128,16 +132,16 @@ def main() -> int:
 
     if args.compare_only:
         if not args.script:
-            print("--compare-only 에는 --script 가 필요합니다", file=sys.stderr)
+            print("--compare-only requires --script", file=sys.stderr)
             return 2
         text = args.compare_only.read_text(encoding="utf-8")
-        recognised = text.split("# 원문 전사")[-1].split("# 번역 출력")[0]
+        recognised = text.split("# Source transcription")[-1].split("# Translation")[0]
         return report_script_match(
             read_script(args.script) * args.repeat, recognised, args.threshold
         )
     api_key = load_api_key()
     if not api_key:
-        print("GEMINI_API_KEY가 없습니다 (.env 확인)", file=sys.stderr)
+        print("No GEMINI_API_KEY — check .env", file=sys.stderr)
         return 2
 
     ring = RingBuffer(TARGET_RATE * 2 * 30)
@@ -175,7 +179,7 @@ def main() -> int:
     print(f"streaming {args.wav.name} for {args.minutes:.0f} min …\n")
     try:
         feed_wav(ring, args.wav, stop, args.minutes)
-        time.sleep(8)  # 마지막 전사가 흘러나올 시간
+        time.sleep(8)  # let the last transcriptions arrive
     except KeyboardInterrupt:
         print("\ninterrupted")
     finally:
@@ -187,23 +191,23 @@ def main() -> int:
     translated = "".join(target_parts)
 
     print("\n" + "=" * 72)
-    print("Phase 2/3 결과")
+    print("Run summary")
     print("=" * 72)
-    print(f"  실행 시간        : {elapsed_min:.1f} 분")
-    print(f"  재연결 횟수      : {translator.stats.reconnects}")
+    print(f"  duration        : {elapsed_min:.1f} min")
+    print(f"  reconnects      : {translator.stats.reconnects}")
     gaps = translator.stats.gaps_ms
-    print(f"  재연결 공백(ms)  : {[f'{g:.0f}' for g in gaps] if gaps else '-'}")
+    print(f"  reconnect gaps  : {[f'{g:.0f}' for g in gaps] if gaps else '-'} ms")
     if gaps:
-        print(f"  공백 최대        : {max(gaps):.0f} ms")
+        print(f"  worst gap       : {max(gaps):.0f} ms")
     sent_seconds = translator.stats.chunks_sent / 10
-    print(f"  전송 청크        : {translator.stats.chunks_sent} (= {sent_seconds:.0f}s 오디오)")
-    print(f"  링 버퍼 유실     : {ring.dropped_bytes} bytes")
-    print(f"  원문 전사 길이   : {len(recognised)} chars")
-    print(f"  번역 출력 길이   : {len(translated)} chars")
+    print(f"  chunks sent     : {translator.stats.chunks_sent} (= {sent_seconds:.0f}s audio)")
+    print(f"  ring drops      : {ring.dropped_bytes} bytes")
+    print(f"  source chars    : {len(recognised)}")
+    print(f"  translated chars: {len(translated)}")
     est = elapsed_min * COST_PER_MINUTE
-    print(f"  추정 비용        : ${est:.2f}  (분당 ${COST_PER_MINUTE:.4f})")
+    print(f"  estimated cost  : ${est:.2f}  (${COST_PER_MINUTE:.4f}/min)")
     if fatal:
-        print(f"  치명적 오류      : {fatal}")
+        print(f"  fatal errors    : {fatal}")
 
     exit_code = 0
 
@@ -214,9 +218,10 @@ def main() -> int:
 
     if args.out:
         args.out.write_text(
-            f"# 원문 전사\n\n{recognised}\n\n# 번역 출력\n\n{translated}\n", encoding="utf-8"
+            f"# Source transcription\n\n{recognised}\n\n# Translation\n\n{translated}\n",
+            encoding="utf-8",
         )
-        print(f"\n  전사 저장: {args.out}")
+        print(f"\n  transcription saved: {args.out}")
 
     if fatal:
         exit_code = 2

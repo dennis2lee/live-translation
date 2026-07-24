@@ -112,7 +112,7 @@ cd ~/work/live-translation && ./run.sh
 - If you deny it, captions never appear and the indicator stays grey
 - Grant it later under System Settings → Privacy & Security → Microphone
 
-Press `0` to start translating, or use **통역 → 통역 시작** (⌘R).
+Press `0` to start translating, or use **Translate → Start Translating** (⌘R).
 
 ## 8. Verify the install
 
@@ -170,12 +170,12 @@ cd ~/work/live-translation && .venv/bin/python spikes/make_tts_fixture.py --repe
 |---|---|---|
 | `ModuleNotFoundError: No module named 'livecap'` | Package not installed into the venv | `.venv/bin/python -m pip install -e .` |
 | `Your prepayment credits are depleted` | No billing on the key's project | Attach billing, confirm key and billing share a project |
-| `API 키가 필요합니다` in the caption area | Key not found | Check `.env`; placeholder text counts as missing |
+| `API key required` in the caption area | Key not found | Check `.env`; placeholder text counts as missing |
 | Indicator stays grey, no captions | Microphone permission denied | System Settings → Privacy & Security → Microphone |
-| `오디오 입력 장치를 찾을 수 없습니다` | No CoreAudio input device | Plug in an interface; re-open the device menu to rescan |
+| `No audio input device found` | No CoreAudio input device | Plug in an interface; re-open the device menu to rescan |
 | USB interface missing from the menu | Menu was built before you plugged it in | Close and re-open the menu — it rescans each time |
-| Captions look tiny on a 4K display | Font size is in pixels, not relative | 설정 → 글자 크기 → 72 or 96 |
-| New defaults do not take effect | Saved settings win over code defaults | 설정 → 기본값으로 되돌리기, or `defaults delete com.livecap.LiveCap` while the app is closed |
+| Captions look tiny on a 4K display | Font size is in pixels, not relative | Settings → Font Size → 72 or 96 |
+| New defaults do not take effect | Saved settings win over code defaults | Settings → Reset to Defaults, or `defaults delete com.livecap.LiveCap` while the app is closed |
 
 ## Uninstall
 

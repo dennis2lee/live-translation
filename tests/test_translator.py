@@ -1,10 +1,9 @@
-"""LiveTranslator 세션 수명 검증 — PLAN.md §4.4 (Phase 3).
+"""LiveTranslator session lifetime, pinned against a fake session.
 
-실제 API 없이 가짜 세션으로 재연결 동작을 고정한다.
-  - go_away를 받으면 새 세션을 먼저 열고, 준비된 뒤에 구 세션을 닫는다
-  - new_handle을 보관해 다음 연결에 넘긴다
-  - 재연결 중에도 링 버퍼의 오디오가 유실되지 않는다
-  - 연속 실패 시 백오프 후 에러 상태로 떨어진다
+  - on go_away, open the replacement first and close the old session after
+  - keep new_handle and pass it to the next connection
+  - audio in the ring buffer survives a reconnect
+  - repeated failures back off and end in the error state
 """
 
 from __future__ import annotations
@@ -29,7 +28,7 @@ def wait_until(pred, timeout: float = 6.0) -> bool:
     return False
 
 
-# --- 가짜 서버 메시지 ------------------------------------------------------
+# --- fake server messages -------------------------------------------------
 
 
 def msg(*, go_away=None, handle=None, out=None, src=None):
@@ -64,7 +63,7 @@ class FakeSession:
         for item in self._script:
             await asyncio.sleep(0.01)
             yield item
-        # 서버가 아직 살아 있는 상태를 흉내낸다 — 취소될 때까지 대기.
+        # Imitate a server still holding the connection open, until cancelled.
         await asyncio.Event().wait()
 
 
@@ -90,7 +89,7 @@ class FakeConnect:
 
 
 class FakeClient:
-    """scripts[i]는 i번째 연결이 흘려보낼 서버 메시지 목록. None이면 연결 실패."""
+    """scripts[i] is what connection i emits. None makes that connection fail."""
 
     def __init__(self, recorder, scripts: list) -> None:
         self._rec = recorder
@@ -129,7 +128,7 @@ def make_translator(rec, scripts, ring=None, **kwargs) -> LiveTranslator:
     return t
 
 
-# --- 테스트 ---------------------------------------------------------------
+# --- tests ----------------------------------------------------------------
 
 
 def test_transcriptions_are_emitted_to_callbacks(rec):
@@ -160,7 +159,7 @@ def test_reaches_running_state(rec):
 
 
 def test_go_away_opens_the_replacement_before_closing_the_old_session(rec):
-    """구 세션은 새 세션이 준비될 때까지 유지되어야 한다."""
+    """The old session must survive until the replacement is ready."""
     t = make_translator(rec, [[msg(go_away=True)], []])
     t.start()
     try:
@@ -171,7 +170,7 @@ def test_go_away_opens_the_replacement_before_closing_the_old_session(rec):
 
 
 def test_first_reconnect_reports_reconnecting_not_connecting(rec):
-    """첫 재연결도 '재연결 중'이어야 한다 (실측 로그에서 발견한 결함)."""
+    """The first reconnect must also report reconnecting (found in a real log)."""
     states: list[str] = []
     t = make_translator(
         rec, [[msg(go_away=True)], []], on_state=lambda s, _d: states.append(s.value)
@@ -179,7 +178,7 @@ def test_first_reconnect_reports_reconnecting_not_connecting(rec):
     t.start()
     try:
         assert wait_until(lambda: t.stats.reconnects >= 1)
-        assert states[0] == State.CONNECTING.value  # 최초 연결
+        assert states[0] == State.CONNECTING.value  # the initial connection
         assert State.RECONNECTING.value in states
         assert states.count(State.CONNECTING.value) == 1
     finally:
@@ -219,7 +218,7 @@ def test_on_reconnect_callback_fires_so_captions_can_continue_the_line(rec):
 
 
 def test_audio_buffered_before_the_session_opens_is_not_lost(rec):
-    """링 버퍼는 연결 상태와 무관하게 채워지고, 세션이 열리면 쌓인 것부터 밀어 넣는다."""
+    """The buffer fills regardless of connection state and drains once open."""
     ring = RingBuffer(CHUNK_BYTES * 100)
     payload = bytes([7]) * CHUNK_BYTES
     for _ in range(5):
@@ -283,7 +282,7 @@ def test_stop_closes_the_session_and_returns_to_idle(rec):
 
 
 def test_config_matches_the_preview_model_contract(rec):
-    """response_modalities는 반드시 AUDIO. 전사·압축·재개가 모두 켜져 있어야 한다."""
+    """response_modalities must be AUDIO, with transcription, compression and resumption on."""
     t = make_translator(rec, [[]], target_language_code="en", echo_target_language=False)
     t.start()
     try:
@@ -300,7 +299,7 @@ def test_config_matches_the_preview_model_contract(rec):
 
 
 def test_billing_error_fails_fast_instead_of_backing_off(rec, monkeypatch):
-    """크레딧·인증 문제는 재시도해도 낫지 않으므로 즉시 안내한다."""
+    """Credit and auth problems are reported at once rather than retried."""
     monkeypatch.setattr(tr, "BACKOFF_SECONDS", (5.0, 5.0, 5.0, 5.0))
 
     class Depleted(FakeConnect):
@@ -313,7 +312,7 @@ def test_billing_error_fails_fast_instead_of_backing_off(rec, monkeypatch):
     states: list[tuple[str, str]] = []
     t = make_translator(rec, [[]], on_state=lambda s, d: states.append((s.value, d)))
     client = FakeClient(rec, [[]])
-    # aio.live.connect는 생성 시점에 바인딩되므로 그쪽을 직접 교체해야 한다.
+    # aio.live.connect binds at construction, so replace that attribute directly.
     client.aio.live.connect = lambda *, model, config: Depleted(rec, 0, [], fail=True)
     t._client = lambda: client  # type: ignore[method-assign]
     t.start()
@@ -321,7 +320,7 @@ def test_billing_error_fails_fast_instead_of_backing_off(rec, monkeypatch):
         assert wait_until(lambda: any(s == State.ERROR.value for s, _ in states), timeout=4.0)
         detail = next(d for s, d in states if s == State.ERROR.value)
         assert "credits" in detail
-        # 백오프를 5초씩 5회 돌지 않고 한 번에 끝났어야 한다.
+        # It must give up at once, not back off 5 seconds five times.
         assert rec.events.count(("connect_fail", 0)) == 1
     finally:
         t.stop()

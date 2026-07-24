@@ -2,7 +2,7 @@ from livecap.caption_buffer import CaptionBuffer, Policy
 
 
 def inc(**kw) -> CaptionBuffer:
-    # 무음 후 지우기는 기본 끔 — 커밋 동작만 따로 보기 위해서.
+    # Silence clearing off by default, so these tests isolate commit behaviour.
     kw.setdefault("clear_after_seconds", 0.0)
     return CaptionBuffer(policy=Policy.INCREMENTAL, **kw)
 
@@ -12,7 +12,7 @@ def utt(**kw) -> CaptionBuffer:
     return CaptionBuffer(policy=Policy.UTTERANCE, **kw)
 
 
-# --- 공통 ------------------------------------------------------------------
+# --- shared ---------------------------------------------------------------
 
 
 def test_starts_empty_so_the_box_is_hidden():
@@ -47,7 +47,7 @@ def test_display_lines_are_capped_and_keep_the_newest():
     buf = inc(max_lines=2)
     for i, t in enumerate(["a.", "b.", "c."]):
         buf.feed(t, float(i))
-    # 앞부분을 잘라내고 최신 내용을 보여준다.
+    # Drop from the front and show the newest content.
     assert [t for t, _ in buf.display_lines()] == ["b.", "c."]
 
 
@@ -59,7 +59,7 @@ def test_set_max_lines_preserves_recent_lines():
     assert buf.committed_lines == ["c.", "d."]
 
 
-# --- 정책 A (점진) ---------------------------------------------------------
+# --- policy A, incremental ------------------------------------------------
 
 
 def test_policy_a_accumulates_into_pending():
@@ -90,9 +90,9 @@ def test_policy_a_commits_on_question_and_exclamation():
 def test_policy_a_commits_after_idle_timeout():
     buf = inc()
     buf.feed("no terminator here", 0.0)
-    assert buf.tick(0.5) is False  # 아직 유휴 시간 미달
+    assert buf.tick(0.5) is False  # not idle long enough yet
     assert buf.committed_lines == []
-    assert buf.tick(1.3) is True  # 1.2초 경과
+    assert buf.tick(1.3) is True  # past 1.2 s
     assert buf.committed_lines == ["no terminator here"]
     assert buf.pending_text == ""
 
@@ -106,11 +106,11 @@ def test_policy_a_idle_timer_resets_on_each_fragment():
     buf = inc()
     buf.feed("a", 0.0)
     buf.feed("b", 1.0)
-    assert buf.tick(1.5) is False  # 마지막 조각으로부터 0.5초뿐
+    assert buf.tick(1.5) is False  # only 0.5 s since the last fragment
     assert buf.tick(2.3) is True
 
 
-# --- 정책 B (발화 단위) ----------------------------------------------------
+# --- policy B, per utterance ----------------------------------------------
 
 
 def test_policy_b_commits_immediately_with_no_pending_stage():
@@ -123,11 +123,11 @@ def test_policy_b_commits_immediately_with_no_pending_stage():
 def test_policy_b_keeps_previous_line_during_silence():
     buf = utt()
     buf.feed("first utterance", 0.0)
-    assert buf.tick(60.0) is False  # 시간이 흘러도 지우지 않는다
+    assert buf.tick(60.0) is False  # time passing does not clear it
     assert buf.display_lines() == [("first utterance", True)]
 
 
-# --- AUTO 판별 -------------------------------------------------------------
+# --- AUTO detection -------------------------------------------------------
 
 
 def test_auto_resolves_to_utterance_for_long_chunks():
@@ -150,18 +150,18 @@ def test_auto_defaults_to_incremental_before_enough_samples():
     assert buf.effective_policy is Policy.INCREMENTAL
 
 
-# --- 재연결 ---------------------------------------------------------------
+# --- reconnect ------------------------------------------------------------
 
 
 def test_reconnect_continues_the_previous_line_in_policy_a():
     buf = inc()
     buf.feed("the quarterly numbers", 0.0)
-    buf.tick(2.0)  # 확정됨
+    buf.tick(2.0)  # settled
     assert buf.committed_lines == ["the quarterly numbers"]
 
     buf.note_reconnect()
     buf.feed("were better than expected.", 3.0)
-    # 새 줄을 시작하지 않고 이어 붙인다.
+    # Continue the line rather than starting a new one.
     assert buf.committed_lines == ["the quarterly numbers were better than expected."]
 
 
@@ -195,7 +195,7 @@ def test_reconnect_with_empty_buffer_is_safe():
     assert buf.pending_text == "first words"
 
 
-# --- 이어 붙이기 규칙 ------------------------------------------------------
+# --- joining rules --------------------------------------------------------
 
 
 def test_join_respects_explicit_spacing_from_the_api():
@@ -214,7 +214,7 @@ def test_join_does_not_insert_space_before_punctuation():
 
 
 def test_korean_fragments_with_leading_spaces_join_correctly():
-    """실측대로 한국어 조각도 선행 공백을 달고 온다."""
+    """As measured, Korean fragments also arrive with a leading space."""
     buf = inc()
     for i, frag in enumerate([" 질문이", " 있으시면,", " 지금 말씀해 주세요."]):
         buf.feed(frag, float(i))
@@ -222,7 +222,7 @@ def test_korean_fragments_with_leading_spaces_join_correctly():
 
 
 def test_no_space_is_inserted_inside_a_korean_word():
-    """어절 중간에서 잘린 조각에 공백을 넣으면 안 된다."""
+    """A fragment split mid-word must not gain a space."""
     buf = inc()
     buf.feed("늘릴 계획", 0.0)
     buf.feed("입니다.", 0.1)
@@ -257,7 +257,7 @@ def test_whitespace_only_fragment_does_not_create_a_line():
     assert buf.is_empty
 
 
-# --- 무음 후 지우기 --------------------------------------------------------
+# --- clearing on silence --------------------------------------------------
 
 
 def test_clear_after_silence_is_two_seconds_by_default():
@@ -271,7 +271,7 @@ def test_captions_are_cleared_after_the_silence_window():
     buf = CaptionBuffer(policy=Policy.INCREMENTAL, clear_after_seconds=2.0)
     buf.feed("Hello there.", 0.0)
     assert buf.committed_lines == ["Hello there."]
-    assert buf.tick(1.5) is False  # 아직 2초 안 됨
+    assert buf.tick(1.5) is False  # under two seconds
     assert not buf.is_empty
     assert buf.tick(2.0) is True
     assert buf.is_empty
@@ -289,7 +289,7 @@ def test_clear_also_applies_to_policy_b():
 def test_clear_removes_uncommitted_pending_too():
     buf = CaptionBuffer(policy=Policy.INCREMENTAL, clear_after_seconds=2.0)
     buf.feed("no terminator", 0.0)
-    buf.tick(1.3)  # 1.2초 유휴 커밋
+    buf.tick(1.3)  # the 1.2 s idle commit
     assert buf.committed_lines == ["no terminator"]
     buf.tick(2.5)
     assert buf.is_empty
@@ -298,8 +298,8 @@ def test_clear_removes_uncommitted_pending_too():
 def test_silence_timer_resets_when_speech_resumes():
     buf = CaptionBuffer(policy=Policy.INCREMENTAL, clear_after_seconds=2.0)
     buf.feed("First part.", 0.0)
-    buf.feed("Second part.", 1.5)  # 지우기 전에 말이 이어짐
-    assert buf.tick(2.5) is False  # 마지막 조각으로부터 1.0초뿐
+    buf.feed("Second part.", 1.5)  # speech resumes before the clear
+    assert buf.tick(2.5) is False  # only 1.0 s since the last fragment
     assert buf.committed_lines == ["First part.", "Second part."]
     assert buf.tick(3.6) is True
     assert buf.is_empty

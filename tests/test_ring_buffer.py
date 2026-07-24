@@ -72,7 +72,7 @@ def test_empty_write_is_noop():
 
 
 def test_sustained_producer_consumer_cycle():
-    """3200바이트(100ms) 단위 소비를 오래 돌려도 어긋나지 않아야 한다."""
+    """Consuming in 3200-byte (100 ms) units must stay aligned over a long run."""
     ring = RingBuffer(16000 * 2 * 30)
     payload = bytes(range(256)) * 5  # 1280 bytes
     consumed = bytearray()

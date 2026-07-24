@@ -1,11 +1,11 @@
-"""Phase 1 수용 기준 검증 — 실제 장치로 캡처해 바이트 수/언더런/WAV 덤프 확인.
+"""Capture from a real device and check byte count, underruns and audio quality.
 
-    python spikes/s1_capture_check.py [--seconds 60] [--device "이름"] [--out capture.wav]
+    python spikes/s1_capture_check.py [--seconds 60] [--device "name"] [--out capture.wav]
 
-확인 항목 (PLAN.md §9 Phase 1)
-  1. 링 버퍼에서 꺼낸 바이트 수가 16000*2*초의 ±1% 이내
-  2. 콜백 언더런 0회
-  3. 덤프한 WAV를 재생했을 때 클릭·끊김·피치 이상이 없음
+Acceptance
+  1. bytes read from the ring buffer within 1% of 16000 * 2 * seconds
+  2. zero callback underruns
+  3. the dumped WAV plays without clicks, dropouts or wrong pitch
 """
 
 from __future__ import annotations
@@ -31,9 +31,9 @@ from livecap.util import logging as log  # noqa: E402
 def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--seconds", type=float, default=60.0)
-    ap.add_argument("--device", default="", help="장치 이름 (생략 시 시스템 기본)")
+    ap.add_argument("--device", default="", help="device name; omit for the system default")
     ap.add_argument("--out", default="capture.wav")
-    ap.add_argument("--list", action="store_true", help="입력 장치만 나열하고 종료")
+    ap.add_argument("--list", action="store_true", help="list input devices and exit")
     args = ap.parse_args()
 
     log.setup()
@@ -60,7 +60,7 @@ def main() -> int:
                 time.sleep(0.01)
                 continue
             collected += chunk
-        # 스트림을 멈추고 남은 것을 마저 빼낸다.
+        # Stop the stream, then drain whatever is left.
         cap.stop()
         while (chunk := cap.ring.read(CHUNK_BYTES)) is not None:
             collected += chunk
@@ -82,7 +82,7 @@ def main() -> int:
     print(f"  drift           : {drift * 100:.3f} %   {'OK' if drift < 0.01 else 'FAIL (>1%)'}")
     print(f"  underruns       : {cap.underruns}      {'OK' if cap.underruns == 0 else 'FAIL'}")
     print(f"  ring drops      : {cap.ring.dropped_bytes} bytes")
-    print(f"  wav written     : {out_path}  ← 재생해서 클릭/끊김/피치를 귀로 확인하십시오")
+    print(f"  wav written     : {out_path}  ← play it and listen for clicks or dropouts")
 
     return 0 if (drift < 0.01 and cap.underruns == 0) else 1
 

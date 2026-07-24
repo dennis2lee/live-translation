@@ -25,7 +25,7 @@ def test_pcm16_clips_out_of_range_input():
 
 
 def test_60s_of_48k_yields_expected_16k_byte_count():
-    """수용 기준: 60초 캡처 결과가 16000*2*60의 ±1% 이내."""
+    """Acceptance: 60 s of capture lands within 1% of 16000 * 2 * 60 bytes."""
     native = 48_000
     rs = _stream(native)
     block = int(native * 0.02)  # 20ms callback blocks
@@ -49,7 +49,7 @@ def test_44100_source_also_lands_within_1_percent():
 
 
 def test_streaming_resample_has_no_boundary_discontinuity():
-    """청크 경계에서 클릭이 생기지 않아야 한다 (일회성 resample과의 차이)."""
+    """No click at the chunk seams — this is what the one-shot resample gets wrong."""
     native = 48_000
     freq = 440.0
     block = int(native * 0.02)
@@ -61,11 +61,11 @@ def test_streaming_resample_has_no_boundary_discontinuity():
     pieces = [rs.resample_chunk(sine[i * block : (i + 1) * block]) for i in range(n_blocks)]
     out = np.concatenate(pieces)
 
-    # 필터 프라이밍 구간을 건너뛰고 정상 구간만 본다.
+    # Skip the filter priming region and look only at steady state.
     steady = out[200:-200]
-    # 16k에서 440Hz 사인의 샘플 간 최대 변화량은 약 2*pi*440/16000 ≈ 0.173.
-    # 경계 불연속이 있으면 이 값을 크게 넘는다.
+    # At 16k a 440 Hz sine changes by at most 2*pi*440/16000 ~= 0.173 per sample.
+    # A discontinuity at a seam would blow well past that.
     assert np.max(np.abs(np.diff(steady))) < 0.25
-    # 진폭이 유지되는지도 확인 (감쇠·발산 없음).
-    # 리샘플 필터의 링잉으로 1.0을 미세하게 넘을 수 있고, PCM 변환에서 클리핑되므로 무해하다.
+    # Amplitude must hold — neither decaying nor diverging. Filter ringing can
+    # nudge slightly past 1.0, which is harmless since PCM conversion clips.
     assert 0.9 < np.max(np.abs(steady)) < 1.01

@@ -1,13 +1,13 @@
-"""검증용 한국어 음원 생성 — macOS 내장 TTS를 써서 원고가 확정된 WAV를 만든다.
+"""Build test audio from a fixed script using the macOS TTS voices.
 
-원고가 고정되어 있으므로 Phase 3의 "재연결 구간에서 문장 유실 없음" 판정을
-사람 귀 없이 기계적으로 대조할 수 있다.
+Because the script is known, "no sentence lost across a reconnect" can be
+checked mechanically instead of by ear.
 
-    python spikes/make_ko_fixture.py                        # 원고 1회, ko_fixture.wav
+    python spikes/make_tts_fixture.py                       # one pass, ko_fixture.wav
     python spikes/make_ko_fixture.py --repeat 12 --out ko_30min.wav
     python spikes/make_ko_fixture.py --voice Yuna --rate 180
 
-출력은 Live API가 요구하는 16kHz / 모노 / 16-bit PCM WAV다.
+Output is 16 kHz mono 16-bit PCM WAV, as the Live API requires.
 """
 
 from __future__ import annotations
@@ -53,7 +53,7 @@ def synthesize(text: str, voice: str, rate: int, out_wav: Path) -> None:
 
 
 def concat(parts: list[Path], out: Path, gap_seconds: float) -> None:
-    """여러 WAV를 이어 붙이고 문장 사이에 무음을 넣는다."""
+    """Concatenate the parts, inserting silence between sentences."""
     gap = b"\x00\x00" * int(TARGET_RATE * gap_seconds)
     with wave.open(str(out), "wb") as w:
         w.setnchannels(1)
@@ -70,19 +70,19 @@ def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--script", type=Path, default=DEFAULT_SCRIPT)
     ap.add_argument("--out", type=Path, default=FIXTURE_DIR / "ko_fixture.wav")
-    ap.add_argument("--voice", default="Yuna", help="say -v '?' 로 목록 확인")
-    ap.add_argument("--rate", type=int, default=190, help="말하기 속도 (words/min)")
-    ap.add_argument("--gap", type=float, default=0.6, help="문장 사이 무음 (초)")
-    ap.add_argument("--repeat", type=int, default=1, help="원고 반복 횟수")
+    ap.add_argument("--voice", default="Yuna", help="list them with: say -v '?'")
+    ap.add_argument("--rate", type=int, default=190, help="speaking rate, words per minute")
+    ap.add_argument("--gap", type=float, default=0.6, help="silence between sentences, seconds")
+    ap.add_argument("--repeat", type=int, default=1, help="how many times to repeat the script")
     args = ap.parse_args()
 
     if sys.platform != "darwin":
-        print("macOS 전용입니다 (say/afconvert 사용)", file=sys.stderr)
+        print("macOS only — this uses say and afconvert", file=sys.stderr)
         return 1
 
     sentences = read_script(args.script)
     if not sentences:
-        print(f"원고가 비어 있습니다: {args.script}", file=sys.stderr)
+        print(f"script is empty: {args.script}", file=sys.stderr)
         return 1
 
     args.out.parent.mkdir(parents=True, exist_ok=True)

@@ -1,11 +1,10 @@
-"""CaptionView 페인팅 검증 — PLAN.md §6.2 수용 기준.
+"""CaptionView painting, checked by inspecting rendered pixels offscreen.
 
-오프스크린 플랫폼에서 렌더한 픽셀을 직접 검사한다.
+The window splits into two regions:
+  - the caption box, above the bottom margin
+  - the strip just below it, holding the direction hint and status indicator
 
-화면은 두 영역으로 나뉜다.
-  - 캡션 박스: 하단 여백 위쪽
-  - 아래 띠: 박스 바로 아래. 번역 방향 안내와 상태 표시등이 여기 그려진다.
-측정 시 둘을 섞지 않도록 `box_bbox`와 `strip_bbox`를 나눠 쓴다.
+`box_bbox` and `strip_bbox` keep measurements of the two from mixing.
 """
 
 from __future__ import annotations
@@ -32,7 +31,7 @@ def qapp():
 def make_view(settings: Settings, lines=(), size=(1280, 800), *, source="", status=""):
     view = CaptionView(settings)
     view.resize(QSize(*size))
-    view._box_alpha = 1.0  # 페이드 애니메이션을 건너뛴 최종 상태
+    view._box_alpha = 1.0  # skip the fade animation, take its end state
     view._lines = list(lines)
     view._source_text = source
     view._status = status
@@ -54,7 +53,7 @@ def render(settings: Settings, lines, size=(1280, 800), *, source="", status="")
 def content_bbox(
     img: QImage, bg: str, *, top_row: int = 0, max_row: int | None = None
 ) -> tuple[int, int, int, int] | None:
-    """배경색과 다른 픽셀의 경계 상자 (left, top, right, bottom)."""
+    """Bounding box of pixels differing from the background: left, top, right, bottom."""
     bg_rgb = QColor(bg).rgb()
     last = img.height() - 1 if max_row is None else min(max_row, img.height() - 1)
     left, top, right, bottom = img.width(), img.height(), -1, -1
@@ -71,12 +70,12 @@ def _split_row(img: QImage, s: Settings) -> int:
 
 
 def box_bbox(img: QImage, s: Settings):
-    """캡션 박스만. 아래 띠(표시등·방향 안내)는 제외한다."""
+    """The caption box only, excluding the strip below it."""
     return content_bbox(img, s.bg_color, max_row=_split_row(img, s))
 
 
 def strip_bbox(img: QImage, s: Settings):
-    """박스 아래 띠만."""
+    """The strip below the box only."""
     return content_bbox(img, s.bg_color, top_row=_split_row(img, s) + 3)
 
 
@@ -93,11 +92,11 @@ TWO = [("We're going to look at the Q3 numbers before moving on to the roadmap."
 FIXED = Settings(fixed_box=True)
 
 
-# --- 배경과 박스 -----------------------------------------------------------
+# --- background and box ---------------------------------------------------
 
 
 def test_empty_content_paints_no_box_when_box_is_not_fixed(qapp):
-    """고정 박스를 끄면 표시할 텍스트가 없을 때 박스를 숨긴다 (PLAN.md §6.2)."""
+    """With the fixed box off, an empty caption hides the box entirely."""
     s = Settings(fixed_box=False)
     assert box_bbox(render(s, []), s) is None
 
@@ -110,7 +109,7 @@ def test_background_fills_the_whole_window(qapp):
 
 
 def test_one_line_box_is_shorter_than_two_line_box(qapp):
-    """고정 박스를 끄면 박스 높이가 실제 줄 수에 맞춰 자동 조절된다."""
+    """With the fixed box off, height follows the real line count."""
     s = Settings(fixed_box=False)
     one = box_bbox(render(s, ONE), s)
     two = box_bbox(render(s, TWO), s)
@@ -142,7 +141,7 @@ def test_bottom_margin_ratio_holds_across_window_sizes(qapp):
 
 
 def test_max_width_ratio_holds_across_window_sizes(qapp):
-    """폰트는 px 고정이라 박스는 텍스트에 맞춰 줄어든다. 유지되는 것은 '상한' 비율이다."""
+    """The font is fixed in px, so the box shrinks to fit. Only the cap holds."""
     s = Settings(box_max_width_pct=80, max_lines=4)
     saturating = [("word " * 400, True)]
     ratios = []
@@ -180,22 +179,22 @@ def test_long_text_is_clipped_to_max_lines(qapp):
     assert (four[3] - four[1]) > (two[3] - two[1])
 
 
-# --- 상태 문구 -------------------------------------------------------------
+# --- status text ----------------------------------------------------------
 
 
 def test_status_text_is_painted_when_there_are_no_captions(qapp):
     s = Settings(fixed_box=False)
-    assert box_bbox(render(s, [], status="API 키가 필요합니다"), s) is not None
+    assert box_bbox(render(s, [], status="API key required"), s) is not None
 
 
 def test_captions_win_over_status_text(qapp):
     s = Settings()
-    with_status = render(s, ONE, status="오류")
+    with_status = render(s, ONE, status="Error")
     without = render(s, ONE)
     assert box_bbox(with_status, s) == box_bbox(without, s)
 
 
-# --- 원문 표시 -------------------------------------------------------------
+# --- source text ----------------------------------------------------------
 
 
 def test_source_text_is_drawn_above_the_box(qapp):
@@ -213,7 +212,7 @@ def test_source_text_hidden_when_setting_is_off(qapp):
     assert with_src == without
 
 
-# --- 고정 박스 --------------------------------------------------------------
+# --- fixed box ------------------------------------------------------------
 
 
 def test_fixed_box_stays_visible_when_empty(qapp):
@@ -255,7 +254,7 @@ def test_fixed_box_grows_by_one_line_height_per_extra_line(qapp):
 
 
 def test_fixed_box_bottom_anchors_text_so_newest_line_stays_put(qapp):
-    """디센더 유무로 잉크 범위가 달라지므로 마지막 줄은 같은 문구로 맞춰 비교한다."""
+    """Descenders change the ink extent, so compare with an identical last line."""
     last = ("Second line here.", True)
     one_rows = text_rows(render(FIXED, [last]), FIXED.text_color)
     two_rows = text_rows(render(FIXED, [("Good morning everyone.", True), last]), FIXED.text_color)
@@ -265,17 +264,17 @@ def test_fixed_box_bottom_anchors_text_so_newest_line_stays_put(qapp):
 
 
 def test_fixed_box_shows_status_inside_the_box(qapp):
-    with_status = render(FIXED, [], status="API 키가 필요합니다")
+    with_status = render(FIXED, [], status="API key required")
     without = render(FIXED, [])
     assert box_bbox(without, FIXED) == box_bbox(with_status, FIXED)
     assert with_status != without
 
 
-# --- 상태 표시등 -----------------------------------------------------------
+# --- status indicator -----------------------------------------------------
 
 
 def test_indicator_starts_grey(qapp):
-    """프로그램은 회색 동그라미로 시작한다."""
+    """The app starts with a grey dot."""
     view = make_view(Settings(), [])
     assert view.indicator is Indicator.IDLE
 
@@ -285,7 +284,7 @@ def test_indicator_is_drawn_below_the_box_on_the_right(qapp):
     bbox = strip_bbox(render(s, ONE), s)
     assert bbox is not None
     box_right = (1280 + 1280 * s.box_max_width_pct / 100) / 2
-    assert abs(bbox[2] - box_right) <= 3  # 박스 오른쪽 가장자리에 맞춘다
+    assert abs(bbox[2] - box_right) <= 3  # aligned to the box right edge
 
 
 def test_indicator_colour_tracks_state(qapp):
@@ -319,7 +318,7 @@ def test_busy_state_pulses_and_others_do_not(qapp):
 
 
 def test_indicator_position_is_stable_while_captions_change(qapp):
-    s = Settings(fixed_box=False)  # 박스가 내용에 따라 줄어드는 모드
+    s = Settings(fixed_box=False)  # the box hugs its content in this mode
     short = strip_bbox(render(s, [("Hi.", True)]), s)
     long_ = strip_bbox(render(s, TWO), s)
     assert short is not None and short == long_
@@ -332,7 +331,7 @@ def test_indicator_stays_on_screen_with_a_tiny_bottom_margin(qapp):
     assert bbox[3] <= 799
 
 
-# --- 번역 방향 안내 --------------------------------------------------------
+# --- direction hint -------------------------------------------------------
 
 
 def test_hint_is_drawn_in_the_strip_left_of_the_indicator(qapp):
@@ -342,8 +341,8 @@ def test_hint_is_drawn_in_the_strip_left_of_the_indicator(qapp):
     view.show_hint("KO → EN")
     with_hint = strip_bbox(render_view(view), s)
     assert without is not None and with_hint is not None
-    assert with_hint[0] < without[0]  # 표시등 왼쪽으로 뻗는다
-    assert with_hint[2] == without[2]  # 표시등 위치는 그대로
+    assert with_hint[0] < without[0]  # extends left of the indicator
+    assert with_hint[2] == without[2]  # the indicator has not moved
 
 
 def test_hint_does_not_overlap_the_indicator(qapp):
@@ -358,7 +357,7 @@ def test_hint_does_not_overlap_the_indicator(qapp):
     assert hint is not None
     gap_col = int(dot_left - 4)
     column = [img.pixel(gap_col, y) for y in range(_split_row(img, s) + 3, 800)]
-    assert all(px == QColor(s.bg_color).rgb() for px in column)  # 사이가 비어 있다
+    assert all(px == QColor(s.bg_color).rgb() for px in column)  # the gap is empty
 
 
 def test_hint_is_drawn_even_with_no_captions(qapp):
@@ -397,4 +396,4 @@ def test_hint_alpha_property_drives_repaint(qapp):
     view.hintAlpha = 0.0
     faded = strip_bbox(render_view(view), s)
     assert opaque is not None and faded is not None
-    assert faded[0] > opaque[0]  # 안내가 사라지면 표시등만 남는다
+    assert faded[0] > opaque[0]  # once the hint fades only the dot remains

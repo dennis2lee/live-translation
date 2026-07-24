@@ -129,7 +129,7 @@ def test_empty_transcript_is_deleted_on_close(writer):
 
 
 def test_append_without_open_is_a_noop(writer):
-    writer.append_line("nothing", 1.0)  # 예외가 나면 안 된다
+    writer.append_line("nothing", 1.0)  # must not raise
     assert writer.lines_written == 0
 
 
@@ -150,7 +150,7 @@ def test_unwritable_directory_does_not_raise(tmp_path):
     w = TranscriptWriter(blocker / "sub")
     assert w.open(STARTED) is None
     assert w.is_open is False
-    w.append_line("ignored", 1.0)  # 조용히 무시
+    w.append_line("ignored", 1.0)  # silently ignored
     assert w.close() is None
 
 

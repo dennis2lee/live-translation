@@ -1,4 +1,4 @@
-"""API 키 조회 경로 검증 — 환경변수 → .env → 키체인."""
+"""API key lookup: environment, then .env, then the Keychain."""
 
 from __future__ import annotations
 
@@ -15,7 +15,7 @@ from livecap import config  # noqa: E402
 def clean_env(monkeypatch, tmp_path):
     for var in (*config.API_KEY_VARS, "LIVECAP_ENV_FILE"):
         monkeypatch.delenv(var, raising=False)
-    # 실제 키체인을 건드리지 않는다.
+    # Never touch the real Keychain.
     monkeypatch.setattr(config, "load_api_key", config.load_api_key)
     yield
 
@@ -28,7 +28,7 @@ def write_env(tmp_path, monkeypatch, body: str):
 
 
 def no_keychain(monkeypatch):
-    """키체인 조회가 결과에 섞이지 않도록 막는다."""
+    """Stop the Keychain from contributing to the result."""
     import sys
     import types
 
@@ -39,7 +39,7 @@ def no_keychain(monkeypatch):
     monkeypatch.setitem(sys.modules, "keyring", fake)
 
 
-# --- 파서 -----------------------------------------------------------------
+# --- parser ---------------------------------------------------------------
 
 
 def test_parses_simple_assignment(tmp_path, monkeypatch):
@@ -70,7 +70,7 @@ def test_accepts_export_prefix(tmp_path, monkeypatch):
 
 
 def test_strips_trailing_inline_comment(tmp_path, monkeypatch):
-    path = write_env(tmp_path, monkeypatch, "GEMINI_API_KEY=abc # 발급받은 키\n")
+    path = write_env(tmp_path, monkeypatch, "GEMINI_API_KEY=abc # the issued key\n")
     assert config.read_dotenv(path)["GEMINI_API_KEY"] == "abc"
 
 
@@ -84,7 +84,7 @@ def test_value_containing_equals_is_preserved(tmp_path, monkeypatch):
     assert config.read_dotenv(path)["GEMINI_API_KEY"] == "abc=def=="
 
 
-# --- 우선순위 --------------------------------------------------------------
+# --- precedence -----------------------------------------------------------
 
 
 def test_env_var_wins_over_dotenv(tmp_path, monkeypatch):
@@ -135,7 +135,7 @@ def test_whitespace_around_the_key_is_stripped(tmp_path, monkeypatch):
     assert config.load_api_key() == "AIzaTEST"
 
 
-# --- environ 주입 ----------------------------------------------------------
+# --- environ injection ----------------------------------------------------
 
 
 def test_apply_dotenv_fills_environ_without_overwriting(tmp_path, monkeypatch):
@@ -143,13 +143,13 @@ def test_apply_dotenv_fills_environ_without_overwriting(tmp_path, monkeypatch):
     monkeypatch.setenv("GEMINI_API_KEY", "already-set")
     applied = config.apply_dotenv_to_environ()
     assert "LIVECAP_DEBUG" in applied
-    assert "GEMINI_API_KEY" not in applied  # 기존 환경변수를 덮어쓰지 않는다
+    assert "GEMINI_API_KEY" not in applied  # existing variables are not overwritten
     assert os.environ["GEMINI_API_KEY"] == "already-set"
     assert os.environ["LIVECAP_DEBUG"] == "1"
 
 
 def test_api_key_is_never_written_to_qsettings():
-    """Settings 스키마에 키가 들어갈 자리가 없어야 한다."""
+    """The Settings schema must have nowhere to put a key."""
     from dataclasses import fields
 
     names = {f.name for f in fields(config.Settings)}

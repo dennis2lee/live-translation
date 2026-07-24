@@ -52,7 +52,7 @@ deliberately **no "connecting…" text** — it would cover the captions.
 | Red, steady | Error |
 
 - Errors also print a short message in the caption area, because you cannot act on a red dot alone
-- Examples: `API 키가 필요합니다`, `오디오 입력 장치를 찾을 수 없습니다`
+- Examples: `API key required — enter it in Preferences`, `No audio input device found`
 
 ## Translation direction
 
@@ -77,7 +77,7 @@ Switching while translating restarts only the translator session:
 - Fixed size and position by default, sized for **2 lines**, and it stays on screen even when empty
 - Text is bottom-aligned, so the newest line never moves as lines accumulate
 - Default width is **90%** of the window (5% margin each side), adjustable from 60–100%
-- Turn off **설정 → 캡션 박스 항상 표시** to make the box hug its content and disappear when empty
+- Turn off **Settings → Always Show Caption Box** to make the box hug its content and disappear when empty
 
 | Setting | Default | Range |
 |---|---|---|
@@ -102,7 +102,7 @@ before it settles.
 
 ## Audio input
 
-Pick a device under **설정 → 오디오 입력 장치**.
+Pick a device under **Settings → Audio Input**.
 
 - The list is rescanned every time you open the menu, so a USB interface can be unplugged and reconnected
 - Devices are stored **by name**, not index — indexes change across reconnects
@@ -118,11 +118,11 @@ Each session writes a Markdown file named after its start time —
 `2026-07-24_143052.md`, in `~/Documents/LiveCap` by default.
 
 ```markdown
-# LiveCap 번역 기록
+# LiveCap transcript
 
-- **시작** 2026-07-24 14:30:52
-- **대상 언어** en
-- **모델** gemini-3.5-live-translate-preview
+- **Started** 2026-07-24 14:30:52
+- **Target language** en
+- **Model** gemini-3.5-live-translate-preview
 
 ---
 
@@ -130,13 +130,13 @@ Each session writes a Markdown file named after its start time —
 
 `00:07` Revenue is up 14% year over year.
 
-> _재연결 — 10:02 지점, 공백 842ms_
+> _reconnected at 10:02, gap 842 ms_
 ```
 
 - Every line is flushed immediately, so a crash cannot lose what was already written
 - Reconnects and direction switches are marked inline
 - A session that produced no captions deletes its own file on exit
-- Toggle with **통역 → 번역 기록 저장**; open the folder with **통역 → 기록 폴더 열기**
+- Toggle with **Translate → Save Transcript**; open the folder with **Translate → Open Transcript Folder**
 
 ## Cost
 

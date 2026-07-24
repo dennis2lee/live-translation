@@ -247,7 +247,7 @@ def test_switching_direction_shows_the_hint(window):
 
 def test_pressing_the_same_direction_still_shows_the_hint(window):
     window._view.hide_hint()
-    window.set_direction(mw.Direction.KO_TO_EN)  # 이미 한→영
+    window.set_direction(mw.Direction.KO_TO_EN)  # already KO→EN
     assert window._view._hint_text == "KO → EN"
 
 
