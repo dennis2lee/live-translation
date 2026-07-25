@@ -27,6 +27,7 @@ from PyQt6.QtGui import (
 )
 from PyQt6.QtWidgets import QWidget
 
+from .. import platform_support
 from ..config import Settings
 
 PAD_H = 32.0
@@ -73,14 +74,8 @@ DOT_COLOR = {
     Indicator.ERROR: COLOR_ERROR,
 }
 STATUS_COLOR = QColor("#6E6E6E")
-# Korean output needs an explicit Hangul family. Without it Qt falls back per
-# glyph and the weight and spacing drift away from the Latin text.
-FONT_FAMILIES = [
-    "SF Pro Display",
-    "Apple SD Gothic Neo",
-    "Helvetica Neue",
-    "Helvetica",
-]
+# The stack differs per platform; see platform_support.caption_font_families.
+FONT_FAMILIES = platform_support.caption_font_families()
 _CENTER = int(Qt.AlignmentFlag.AlignHCenter | Qt.AlignmentFlag.AlignVCenter)
 
 

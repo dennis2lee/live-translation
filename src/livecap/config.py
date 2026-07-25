@@ -17,7 +17,7 @@ from pathlib import Path
 
 from PyQt6.QtCore import QSettings
 
-from . import transcript
+from . import platform_support, transcript
 from .caption_buffer import Policy
 from .util import logging as log
 
@@ -222,7 +222,8 @@ API_KEY_VARS = ("GEMINI_API_KEY", "GOOGLE_API_KEY")
 _PLACEHOLDER_MARKERS = ("your", "xxx", "<", "here")
 
 
-APP_SUPPORT_DIR = Path("~/Library/Application Support/LiveCap").expanduser()
+# Kept as a module attribute so callers and tests can refer to it directly.
+APP_SUPPORT_DIR = platform_support.app_support_dir()
 
 
 def dotenv_candidates() -> list[Path]:
@@ -239,7 +240,10 @@ def dotenv_candidates() -> list[Path]:
     paths = [Path.cwd() / ".env"]
     if getattr(sys, "frozen", False):
         # .../LiveCap.app/Contents/MacOS/LiveCap -> the folder holding the .app
-        paths += [APP_SUPPORT_DIR / ".env", Path(sys.executable).resolve().parents[3] / ".env"]
+        paths += [
+            platform_support.app_support_dir() / ".env",
+            Path(sys.executable).resolve().parents[3] / ".env",
+        ]
     else:
         # src/livecap/config.py -> repository root
         paths.append(Path(__file__).resolve().parents[2] / ".env")

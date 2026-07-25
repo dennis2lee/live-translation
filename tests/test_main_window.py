@@ -203,6 +203,18 @@ def test_tick_clears_the_view_after_silence(window, monkeypatch):
     assert window._buffer.is_empty
 
 
+def test_opening_the_transcript_folder_uses_the_platform_command(window, monkeypatch, tmp_path):
+    """macOS uses `open`; Windows and Linux need their own command."""
+    calls: list[list[str]] = []
+    monkeypatch.setattr(mw.subprocess, "run", lambda cmd, **kw: calls.append(cmd))
+    monkeypatch.setattr(mw.platform_support, "reveal_command", lambda p: ["fake-open", str(p)])
+
+    window._update(transcript_dir=str(tmp_path))
+    window._open_transcript_dir()
+
+    assert calls == [["fake-open", str(tmp_path)]]
+
+
 def test_default_box_width_leaves_five_percent_margins(window):
     assert window._settings.box_max_width_pct == 90
 

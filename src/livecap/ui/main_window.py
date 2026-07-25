@@ -15,7 +15,7 @@ from PyQt6.QtCore import QObject, Qt, QTimer, pyqtSignal
 from PyQt6.QtGui import QAction, QActionGroup, QColor, QCursor, QKeySequence
 from PyQt6.QtWidgets import QColorDialog, QMainWindow, QMessageBox
 
-from .. import config
+from .. import config, platform_support
 from ..audio import AudioCapture, list_input_devices
 from ..caption_buffer import CaptionBuffer
 from ..config import (
@@ -385,7 +385,7 @@ class CaptionWindow(QMainWindow):
         path = resolve_dir(self._settings.transcript_dir)
         try:
             path.mkdir(parents=True, exist_ok=True)
-            subprocess.run(["open", str(path)], check=False)
+            subprocess.run(platform_support.reveal_command(path), check=False)
         except OSError as exc:
             _log.error("could not open transcript directory: %s", exc)
             self._view.set_status(f"Cannot open transcript folder: {path}")
