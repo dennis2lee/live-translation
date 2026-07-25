@@ -18,6 +18,3 @@ CLAUDE.md
 secrets.*
 captures/
 *.wav
-
-# Go build output
-go_dist/bin/
