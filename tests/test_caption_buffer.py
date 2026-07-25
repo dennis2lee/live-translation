@@ -335,3 +335,29 @@ def test_clear_setting_can_be_changed_at_runtime():
     buf.clear_after_seconds = 2.0
     assert buf.tick(11.0) is True
     assert buf.is_empty
+
+
+# --- switching policy at runtime ------------------------------------------
+
+
+def test_policy_can_be_changed_at_runtime():
+    buf = CaptionBuffer(policy=Policy.INCREMENTAL, clear_after_seconds=0.0)
+    buf.feed("no terminator", 0.0)
+    assert buf.committed_lines == []  # incremental waits for punctuation or idle
+    buf.set_policy(Policy.UTTERANCE)
+    buf.feed(" and more", 1.0)
+    assert buf.committed_lines == ["no terminator and more"]
+
+
+def test_switching_to_auto_restarts_detection():
+    buf = CaptionBuffer(policy=Policy.UTTERANCE, clear_after_seconds=0.0)
+    assert buf.effective_policy is Policy.UTTERANCE
+    buf.set_policy(Policy.AUTO)
+    assert buf.effective_policy is Policy.INCREMENTAL  # until enough samples
+
+
+def test_setting_the_same_policy_is_a_noop():
+    buf = CaptionBuffer(policy=Policy.INCREMENTAL, clear_after_seconds=0.0)
+    buf.feed("Kept.", 0.0)
+    buf.set_policy(Policy.INCREMENTAL)
+    assert buf.committed_lines == ["Kept."]

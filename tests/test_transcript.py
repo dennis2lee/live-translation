@@ -143,6 +143,26 @@ def test_open_twice_returns_the_same_path(writer):
     assert first == second
 
 
+def test_close_survives_a_failing_footer_write(writer):
+    """A write error during close() must not crash the app on the way out."""
+    writer.open(STARTED)
+    writer.append_line("recorded", 1.0)
+
+    class _Broken:
+        def write(self, _text):
+            raise OSError("disk full")
+
+        def flush(self):
+            pass
+
+        def close(self):
+            pass
+
+    writer._file = _Broken()
+    assert writer.close(elapsed_seconds=5.0) is not None  # must not raise
+    assert writer.is_open is False
+
+
 def test_unwritable_directory_does_not_raise(tmp_path):
     """A recording failure must never interrupt translation."""
     blocker = tmp_path / "blocked"

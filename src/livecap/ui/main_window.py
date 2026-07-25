@@ -36,6 +36,7 @@ _log = log.get(__name__)
 
 TICK_MS = 100
 CURSOR_HIDE_MS = 3000
+NOTICE_SECONDS = 6.0
 FONT_SIZE_CHOICES = (24, 32, 44, 56, 72, 96)
 LINE_COUNT_CHOICES = (1, 2, 3, 4)
 
@@ -74,8 +75,11 @@ class CaptionWindow(QMainWindow):
         self._translator: LiveTranslator | None = None
         self._state = State.IDLE
         self._error_detail = ""
+        self._notice = ""
+        self._notice_until = 0.0
         self._writer: TranscriptWriter | None = None
         self._started_at = 0.0
+        self._shutting_down = False
 
         self._buffer = CaptionBuffer(
             max_lines=settings.max_lines,
@@ -296,16 +300,16 @@ class CaptionWindow(QMainWindow):
         """Store devices by name, not index — indexes change on USB reconnect."""
         if name == self._settings.audio_device_name:
             return
+        old = self._settings
         self._update(audio_device_name=name)
-        if self._state is not State.IDLE:
-            _log.info("audio device changed while running — restarting capture")
-            self.stop_translation()
-            self.start_translation()
+        self._apply_session_changes(old)
 
     def _sync_actions(self) -> None:
-        running = self._state is not State.IDLE
+        # Keyed off the session objects, not the state: a start that failed
+        # leaves ERROR behind with nothing running, and Start must stay usable.
+        running = self._translator is not None or self._capture is not None
         self._act_start.setEnabled(not running)
-        self._act_stop.setEnabled(running)
+        self._act_stop.setEnabled(running or self._state is State.ERROR)
         detail = f" ({self._error_detail})" if self._error_detail else ""
         self._act_status.setText(f"Status: {STATUS_TEXT.get(self._state, 'Idle')}{detail}")
         for a in self._font_group.actions():
@@ -326,6 +330,7 @@ class CaptionWindow(QMainWindow):
     def _apply_buffer_settings(self) -> None:
         self._buffer.set_max_lines(self._settings.max_lines)
         self._buffer.clear_after_seconds = self._settings.clear_after_seconds
+        self._buffer.set_policy(self._settings.policy)
 
     def _update(self, **changes: object) -> None:
         """Apply and persist a settings change without dropping the session."""
@@ -338,6 +343,8 @@ class CaptionWindow(QMainWindow):
 
     def _pick_color(self, title: str, field: str, alpha: bool) -> None:
         current = QColor(getattr(self._settings, field))
+        if alpha:
+            current.setAlphaF(self._settings.box_opacity)
         opts = (
             QColorDialog.ColorDialogOption.ShowAlphaChannel
             if alpha
@@ -359,6 +366,11 @@ class CaptionWindow(QMainWindow):
             self.showMaximized()
 
     def _reset_settings(self) -> None:
+        old = self._settings
+        # Hand any settled-but-undrained lines to the transcript before the
+        # buffer is thrown away.
+        self._buffer.flush()
+        self._record_new_lines()
         self._settings = config.reset()
         self._buffer = CaptionBuffer(
             max_lines=self._settings.max_lines,
@@ -370,16 +382,51 @@ class CaptionWindow(QMainWindow):
         self._sync_actions()
         if self.isFullScreen():
             self.showMaximized()
+        self._apply_session_changes(old)
 
     def _open_settings(self) -> None:
         dlg = SettingsDialog(self._settings, self)
         if dlg.exec():
-            self._settings = dlg.result_settings()
-            config.save(self._settings)
-            self._buffer.set_max_lines(self._settings.max_lines)
-            self._view.apply_settings(self._settings)
-            self._push_lines()
-            self._sync_actions()
+            self._apply_new_settings(dlg.result_settings())
+
+    def _apply_new_settings(self, new: Settings) -> None:
+        """Apply a full settings replacement, restarting what a live session needs."""
+        old = self._settings
+        self._settings = new
+        config.save(new)
+        self._apply_buffer_settings()
+        self._view.apply_settings(new)
+        self._push_lines()
+        self._sync_actions()
+        self._apply_session_changes(old)
+
+    def _apply_session_changes(self, old: Settings) -> None:
+        """Restart the affected part of a running session after a settings change.
+
+        The audio device is fixed when the stream opens and the target language
+        when the session connects, so those changes cannot apply silently.
+        """
+        if self._state is State.IDLE:
+            return
+        new = self._settings
+        if old.audio_device_name != new.audio_device_name:
+            _log.info("audio device changed while running — restarting capture")
+            self.stop_translation()
+            self.start_translation()
+            return
+        if (
+            old.target_language_code != new.target_language_code
+            or old.silence_gate != new.silence_gate
+            or old.echo_target_language != new.echo_target_language
+        ):
+            if old.target_language_code != new.target_language_code:
+                if self._writer is not None:
+                    self._writer.note_direction(
+                        direction_label(new.target_language_code),
+                        time.monotonic() - self._started_at,
+                    )
+                self._announce_direction()
+            self._restart_translator()
 
     def _open_transcript_dir(self) -> None:
         path = resolve_dir(self._settings.transcript_dir)
@@ -403,9 +450,16 @@ class CaptionWindow(QMainWindow):
 
     # --- translation control ----------------------------------------------
 
+    def _fail_to_start(self, detail: str) -> None:
+        """Report a start-up failure through the error state and the red dot."""
+        self._state = State.ERROR
+        self._error_detail = detail
+        self._sync_actions()
+        self._refresh_overlay()
+
     def toggle_translation(self) -> None:
-        """The 0 key: start when idle, stop otherwise."""
-        if self._state is State.IDLE:
+        """The 0 key: start when nothing is running, stop otherwise."""
+        if self._translator is None and self._capture is None:
             self.start_translation()
         else:
             self.stop_translation()
@@ -422,15 +476,12 @@ class CaptionWindow(QMainWindow):
             self._announce_direction()  # still show it when re-selecting the same direction
             return
 
+        old = self._settings
         self._update(target_language_code=target)
-        self._announce_direction()
-
-        if self._state is not State.IDLE:
-            if self._writer is not None:
-                self._writer.note_direction(
-                    direction_label(target), time.monotonic() - self._started_at
-                )
-            self._restart_translator()
+        if self._state is State.IDLE:
+            self._announce_direction()
+        else:
+            self._apply_session_changes(old)  # announces, marks the transcript, restarts
 
     def _announce_direction(self) -> None:
         if self._settings.show_direction_hint:
@@ -470,26 +521,22 @@ class CaptionWindow(QMainWindow):
             return
         api_key = config.load_api_key()
         if not api_key:
-            self._state = State.ERROR
-            self._error_detail = ""
-            self._view.set_status("API key required — enter it in Preferences")
-            self._sync_actions()
+            self._fail_to_start("API key required — enter it in Preferences")
             return
 
         self._capture = AudioCapture(device_name=self._settings.audio_device_name)
         try:
             dev = self._capture.start()
-        except RuntimeError as exc:
+        except (RuntimeError, OSError, ValueError) as exc:
+            # PortAudio raises its own error types when a device disappears
+            # between enumeration and opening the stream.
             self._capture = None
-            self._state = State.ERROR
-            self._error_detail = ""
-            self._view.set_status(str(exc))
-            self._sync_actions()
+            self._fail_to_start(str(exc))
             return
 
         if self._settings.audio_device_name and dev.name != self._settings.audio_device_name:
             _log.warning("requested device unavailable — using %r", dev.name)
-            self._view.set_status(
+            self._show_notice(
                 f"{self._settings.audio_device_name} unavailable — using {dev.name}"
             )
 
@@ -505,7 +552,7 @@ class CaptionWindow(QMainWindow):
             if writer.open(datetime.now()) is not None:
                 self._writer = writer
             else:
-                self._view.set_status("Cannot write the transcript — check folder permissions")
+                self._show_notice("Cannot write the transcript — check folder permissions")
 
         self._translator.start()
         self._state = State.CONNECTING
@@ -516,21 +563,42 @@ class CaptionWindow(QMainWindow):
         self._announce_direction()  # report the current direction on start
 
     def stop_translation(self) -> None:
+        """Close the session and finish the transcript.
+
+        Every step is guarded: a failure to stop the translator must still let
+        the audio device close and the transcript be finished, or quitting mid
+        session would leave a half-written file and an open input stream.
+        """
         reconnects = self._translator.stats.reconnects if self._translator is not None else 0
-        if self._translator is not None:
-            self._translator.stop()
-            self._translator = None
-        if self._capture is not None:
-            self._capture.stop()
-            self._capture = None
+
+        translator, self._translator = self._translator, None
+        capture, self._capture = self._capture, None
+        writer, self._writer = self._writer, None
+
+        if translator is not None:
+            try:
+                translator.stop()
+            except Exception:  # noqa: BLE001 — never block the rest of the shutdown
+                _log.exception("error stopping the translator")
+        if capture is not None:
+            try:
+                capture.stop()
+            except Exception:  # noqa: BLE001
+                _log.exception("error stopping audio capture")
+
         # Make sure the final unsettled sentence reaches the transcript.
-        self._buffer.flush()
-        self._record_new_lines()
-        if self._writer is not None:
-            self._writer.close(
-                elapsed_seconds=time.monotonic() - self._started_at, reconnects=reconnects
-            )
-            self._writer = None
+        if writer is not None:
+            try:
+                self._buffer.flush()
+                elapsed = time.monotonic() - self._started_at
+                for line in self._buffer.drain_new_commits():
+                    writer.append_line(line, elapsed)
+                writer.close(elapsed_seconds=elapsed, reconnects=reconnects)
+            except Exception:  # noqa: BLE001
+                _log.exception("error finishing the transcript")
+        else:
+            self._buffer.flush()
+
         self._state = State.IDLE
         self._error_detail = ""
         self._show_cursor()
@@ -587,6 +655,16 @@ class CaptionWindow(QMainWindow):
         self._view.set_lines(self._buffer.display_lines())
         self._refresh_overlay()
 
+    def _show_notice(self, text: str) -> None:
+        """Show a warning that is not an error state, for a few seconds.
+
+        Without this any message set at start-up is wiped by the next overlay
+        refresh, so the user never sees it.
+        """
+        self._notice = text
+        self._notice_until = time.monotonic() + NOTICE_SECONDS
+        self._refresh_overlay()
+
     def _refresh_overlay(self) -> None:
         """Update the indicator. Never opens a modal dialog.
 
@@ -594,10 +672,12 @@ class CaptionWindow(QMainWindow):
         print their cause, because a red dot is not actionable on its own.
         """
         self._view.set_indicator(INDICATOR_FOR_STATE.get(self._state, Indicator.IDLE))
+        if self._notice and time.monotonic() >= self._notice_until:
+            self._notice = ""
         if self._state is State.ERROR:
             self._view.set_status(self._error_detail or "Connection failed")
         else:
-            self._view.set_status("")
+            self._view.set_status(self._notice)
 
     # --- cursor hiding ----------------------------------------------------
 
@@ -622,7 +702,27 @@ class CaptionWindow(QMainWindow):
 
     # --- shutdown ---------------------------------------------------------
 
+    def shutdown(self) -> None:
+        """Quit safely even with a session open. Safe to call more than once.
+
+        Reached from every exit route — the window closing, Quit, Ctrl-C and
+        SIGTERM — so a live session is always closed, the audio device released
+        and the transcript finished with its footer. The direction in force does
+        not change any of this; both presets stop through the same path.
+        """
+        if self._shutting_down:
+            return
+        self._shutting_down = True
+        try:
+            self.stop_translation()
+        except Exception:  # noqa: BLE001 — quitting must not fail
+            _log.exception("error while stopping translation during shutdown")
+        try:
+            config.save(self._settings)
+        except Exception:  # noqa: BLE001
+            _log.exception("could not save settings during shutdown")
+        _log.info("shutdown complete")
+
     def closeEvent(self, event) -> None:  # noqa: N802 (Qt naming)
-        self.stop_translation()
-        config.save(self._settings)
+        self.shutdown()
         super().closeEvent(event)

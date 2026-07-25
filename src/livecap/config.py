@@ -69,6 +69,8 @@ def direction_label(target_language_code: str) -> str:
     if direction is not None:
         return DIRECTION_LABEL[direction]
     return f"→ {(target_language_code or '?').strip().upper()}"
+
+
 KEYRING_SERVICE = "LiveCap"
 KEYRING_USER = "gemini-api-key"
 
@@ -276,9 +278,15 @@ def read_dotenv(path: Path | None = None) -> dict[str, str]:
         key = key.strip()
         if not key:
             continue
-        value = value.strip().split(" #", 1)[0].strip()
-        if len(value) >= 2 and value[0] == value[-1] and value[0] in "\"'":
-            value = value[1:-1]
+        value = value.strip()
+        if value[:1] in ('"', "'"):
+            # A quoted value may contain ` #` — take everything up to the
+            # closing quote and only then discard the rest of the line.
+            quote = value[0]
+            closing = value.find(quote, 1)
+            value = value[1:closing] if closing != -1 else value[1:]
+        else:
+            value = value.split(" #", 1)[0].strip()
         values[key] = value
     return values
 
@@ -298,6 +306,10 @@ def apply_dotenv_to_environ() -> list[str]:
 
 
 def _is_placeholder(value: str) -> bool:
+    # Real Google API keys start with "AIza"; a random key body could contain
+    # a marker like "here" by chance, so never reject one of those.
+    if value.startswith("AIza"):
+        return False
     low = value.lower()
     return any(marker in low for marker in _PLACEHOLDER_MARKERS)
 

@@ -9,11 +9,14 @@ import os
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
+from dataclasses import replace  # noqa: E402
+
 import pytest  # noqa: E402
 from PyQt6.QtWidgets import QApplication  # noqa: E402
 
 from livecap import config  # noqa: E402
 from livecap.audio import InputDevice  # noqa: E402
+from livecap.caption_buffer import Policy  # noqa: E402
 from livecap.config import Settings  # noqa: E402
 from livecap.translator import State  # noqa: E402
 from livecap.ui import main_window as mw  # noqa: E402
@@ -57,9 +60,19 @@ def test_start_is_enabled_and_stop_disabled_while_idle(window):
 
 
 def test_start_and_stop_swap_when_running(window):
+    window._translator = _StubTranslator()
     window._on_state_changed(State.RUNNING.value, "")
     assert window._act_start.isEnabled() is False
     assert window._act_stop.isEnabled() is True
+
+
+def test_a_failed_start_leaves_start_usable(window, monkeypatch):
+    """An error with nothing running must not lock the user out of Start."""
+    monkeypatch.setattr(mw.config, "load_api_key", lambda: None)
+    window.start_translation()
+    assert window._state is State.ERROR
+    assert window._act_start.isEnabled() is True
+    assert "API key" in window._view._status
 
 
 def test_status_item_is_display_only(window):
@@ -289,9 +302,8 @@ def test_toggle_starts_when_idle_and_stops_when_running(window, monkeypatch):
     monkeypatch.setattr(mw.CaptionWindow, "start_translation", lambda self: calls.append("start"))
     monkeypatch.setattr(mw.CaptionWindow, "stop_translation", lambda self: calls.append("stop"))
 
-    window._state = State.IDLE
     window.toggle_translation()
-    window._state = State.RUNNING
+    window._translator = _StubTranslator()  # a session is now live
     window.toggle_translation()
     assert calls == ["start", "stop"]
 
@@ -389,3 +401,218 @@ def test_reconnect_signal_continues_the_previous_line(window):
     assert window._buffer.committed_lines == [
         "the quarterly numbers. were better than expected."
     ]
+
+
+# --- preferences applied to a live session --------------------------------
+
+
+def _running_window(window, monkeypatch, tmp_path):
+    """Start a session and return (made_targets, stopped, restarted_capture)."""
+    made: list[dict] = []
+    events: list[str] = []
+
+    class _Capture(_StubCapture):
+        def start(self):
+            events.append("capture-start")
+            return InputDevice(0, "Stub Mic", 1, 48000.0)
+
+        def stop(self):
+            events.append("capture-stop")
+
+    class _Tr(_StubTranslator):
+        def __init__(self, ring, key, **kw):
+            super().__init__()
+            made.append(kw)
+
+        def stop(self):
+            events.append("translator-stop")
+
+    monkeypatch.setattr(mw.config, "load_api_key", lambda: "test-key")
+    monkeypatch.setattr(mw, "AudioCapture", lambda *a, **k: _Capture())
+    monkeypatch.setattr(mw, "LiveTranslator", _Tr)
+    window._update(transcript_dir=str(tmp_path))
+    window.start_translation()
+    return made, events
+
+
+def test_changing_the_target_language_in_preferences_reconnects(window, monkeypatch, tmp_path):
+    """The target is fixed at connect time, so it cannot apply silently."""
+    made, events = _running_window(window, monkeypatch, tmp_path)
+    assert made[0]["target_language_code"] == "en"
+
+    window._apply_new_settings(replace(window._settings, target_language_code="ko"))
+
+    assert [m["target_language_code"] for m in made] == ["en", "ko"]
+    assert events.count("translator-stop") == 1
+    assert "capture-stop" not in events  # audio keeps running, nothing is lost
+
+
+def test_changing_the_silence_gate_in_preferences_reconnects(window, monkeypatch, tmp_path):
+    made, _events = _running_window(window, monkeypatch, tmp_path)
+    window._apply_new_settings(replace(window._settings, silence_gate=True))
+    assert [m["silence_gate"] for m in made] == [False, True]
+
+
+def test_changing_the_audio_device_in_preferences_restarts_capture(
+    window, monkeypatch, tmp_path
+):
+    _made, events = _running_window(window, monkeypatch, tmp_path)
+    window._apply_new_settings(replace(window._settings, audio_device_name="Other Mic"))
+    assert events.count("capture-stop") == 1
+    assert events.count("capture-start") == 2
+
+
+def test_a_cosmetic_preference_change_does_not_touch_the_session(
+    window, monkeypatch, tmp_path
+):
+    made, events = _running_window(window, monkeypatch, tmp_path)
+    window._apply_new_settings(replace(window._settings, font_size=72))
+    assert len(made) == 1
+    assert "translator-stop" not in events
+
+
+def test_preferences_apply_the_clear_delay_and_policy_immediately(window):
+    """These live in the buffer, which used to keep the old values until restart."""
+    window._apply_new_settings(
+        replace(window._settings, clear_after_seconds=9.0, caption_policy="utterance")
+    )
+    assert window._buffer.clear_after_seconds == 9.0
+    assert window._buffer.effective_policy is Policy.UTTERANCE
+
+
+def test_resetting_settings_keeps_undrained_lines_in_the_transcript(
+    window, monkeypatch, tmp_path
+):
+    """Reset replaces the buffer; anything unwritten must be flushed first."""
+    _running_window(window, monkeypatch, tmp_path)
+    path = window._writer.path
+    window._on_target_text("Said before the reset")
+    monkeypatch.setattr(mw.config, "reset", lambda: Settings())
+    window._reset_settings()
+    assert "Said before the reset" in path.read_text(encoding="utf-8")
+
+
+# --- start-up warnings ----------------------------------------------------
+
+
+def test_a_device_fallback_warning_survives_the_next_overlay_refresh(
+    window, monkeypatch, tmp_path
+):
+    """The message used to be wiped before the user could read it."""
+    monkeypatch.setattr(mw.config, "load_api_key", lambda: "test-key")
+    monkeypatch.setattr(mw, "AudioCapture", lambda *a, **k: _StubCapture())
+    monkeypatch.setattr(mw, "LiveTranslator", _StubTranslator)
+    window._update(transcript_dir=str(tmp_path), audio_device_name="Missing Interface")
+
+    window.start_translation()
+    window._on_state_changed(State.RUNNING.value, "")  # refreshes the overlay
+
+    assert "Missing Interface" in window._view._status
+    assert "Stub Mic" in window._view._status
+
+
+def test_a_notice_expires_on_its_own(window, monkeypatch):
+    window._show_notice("temporary")
+    assert window._view._status == "temporary"
+    window._notice_until = 0.0  # pretend the hold elapsed
+    window._refresh_overlay()
+    assert window._view._status == ""
+
+
+def test_an_error_detail_outranks_a_notice(window):
+    window._show_notice("just a warning")
+    window._on_state_changed(State.ERROR.value, "Billing credits exhausted")
+    assert window._view._status == "Billing credits exhausted"
+
+
+# --- quitting with a session open -----------------------------------------
+
+
+def _run_session(window, monkeypatch, tmp_path, direction):
+    """Start a session in the given direction, backed by stubs."""
+    stopped: list[str] = []
+
+    class _Capture(_StubCapture):
+        def stop(self):
+            stopped.append("capture")
+
+    class _Tr(_StubTranslator):
+        def stop(self):
+            stopped.append("translator")
+
+    monkeypatch.setattr(mw.config, "load_api_key", lambda: "test-key")
+    monkeypatch.setattr(mw, "AudioCapture", lambda *a, **k: _Capture())
+    monkeypatch.setattr(mw, "LiveTranslator", lambda *a, **k: _Tr())
+    window._update(transcript_dir=str(tmp_path))
+    window.set_direction(direction)
+    window.start_translation()
+    return stopped
+
+
+@pytest.mark.parametrize("direction", [mw.Direction.KO_TO_EN, mw.Direction.EN_TO_KO])
+def test_quitting_mid_session_closes_everything_in_both_directions(
+    window, monkeypatch, tmp_path, direction
+):
+    """Quitting with a live session must release the device and finish the file."""
+    stopped = _run_session(window, monkeypatch, tmp_path, direction)
+    window._on_target_text("A sentence with no terminator")
+    path = window._writer.path
+
+    window.shutdown()
+
+    assert sorted(stopped) == ["capture", "translator"]
+    assert window._translator is None and window._capture is None
+    assert window._state is State.IDLE
+    # The unterminated sentence is settled on the way out, and the footer written.
+    text = path.read_text(encoding="utf-8")
+    assert "A sentence with no terminator" in text
+    assert "**Ended**" in text and "**Lines** 1" in text
+
+
+def test_shutdown_is_idempotent(window, monkeypatch, tmp_path):
+    """closeEvent and aboutToQuit can both fire; the second must do nothing."""
+    stopped = _run_session(window, monkeypatch, tmp_path, mw.Direction.KO_TO_EN)
+    window._on_target_text("Recorded once.")
+    path = window._writer.path
+
+    window.shutdown()
+    window.shutdown()
+
+    assert sorted(stopped) == ["capture", "translator"]  # not stopped twice
+    assert path.read_text(encoding="utf-8").count("**Ended**") == 1
+
+
+def test_shutdown_finishes_the_transcript_even_if_the_translator_hangs(
+    window, monkeypatch, tmp_path
+):
+    """A translator that throws on stop must not strand the device or the file."""
+    monkeypatch.setattr(mw.config, "load_api_key", lambda: "test-key")
+    closed: list[str] = []
+
+    class _Capture(_StubCapture):
+        def stop(self):
+            closed.append("capture")
+
+    class _Broken(_StubTranslator):
+        def stop(self):
+            raise RuntimeError("thread will not join")
+
+    monkeypatch.setattr(mw, "AudioCapture", lambda *a, **k: _Capture())
+    monkeypatch.setattr(mw, "LiveTranslator", lambda *a, **k: _Broken())
+    window._update(transcript_dir=str(tmp_path))
+    window.start_translation()
+    window._on_target_text("Survives the broken translator.")
+    path = window._writer.path
+
+    window.shutdown()  # must not raise
+
+    assert closed == ["capture"]
+    text = path.read_text(encoding="utf-8")
+    assert "Survives the broken translator." in text
+    assert "**Ended**" in text
+
+
+def test_close_event_shuts_down(window, monkeypatch, tmp_path):
+    stopped = _run_session(window, monkeypatch, tmp_path, mw.Direction.EN_TO_KO)
+    window.close()
+    assert sorted(stopped) == ["capture", "translator"]

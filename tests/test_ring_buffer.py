@@ -85,3 +85,27 @@ def test_sustained_producer_consumer_cycle():
     assert ring.dropped_bytes == 0
     assert bytes(consumed) == bytes(produced[: len(consumed)])
     assert len(produced) - len(consumed) < 3200
+
+
+def test_a_producer_lapping_the_consumer_does_not_blow_the_stack():
+    """The lapped-mid-copy retry used to recurse, which could hit RecursionError."""
+    import threading
+
+    ring = RingBuffer(8192)
+    chunk = bytes(2048)
+    stop = threading.Event()
+
+    def produce() -> None:
+        while not stop.is_set():
+            ring.write(chunk)
+
+    writer = threading.Thread(target=produce, daemon=True)
+    writer.start()
+    try:
+        for _ in range(500):
+            out = ring.read(2048)
+            assert out is None or len(out) == 2048  # never raises RecursionError
+    finally:
+        stop.set()
+        writer.join(timeout=2.0)
+    assert ring.dropped_bytes > 0  # the consumer really was lapped

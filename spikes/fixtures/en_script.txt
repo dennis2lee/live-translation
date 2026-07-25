@@ -1,5 +1,6 @@
-# 영어→한국어 방향 검증용 원고. ko_script.txt와 같은 회의 내용이라 두 방향의
-# 결과를 나란히 비교할 수 있다. 한 줄이 한 문장이며 줄 번호가 대조 단위다.
+# Script for verifying the English to Korean direction. Same meeting content
+# as ko_script.txt, so the two directions can be compared side by side. One
+# sentence per line; the line number is the unit of comparison.
 # make_tts_fixture.py --script spikes/fixtures/en_script.txt --voice Samantha
 
 Good morning everyone. Let's begin the quarterly results meeting.

@@ -4,8 +4,8 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "livecap"
-version = "0.1.0"
-description = "한국어 발화를 영어로 실시간 통역해 캡션으로 띄우는 macOS 앱"
+version = "0.2.0"
+description = "Real-time speech translation captions for macOS"
 requires-python = ">=3.12"
 dependencies = [
     "PyQt6>=6.7",

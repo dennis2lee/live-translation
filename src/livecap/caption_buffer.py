@@ -101,6 +101,14 @@ class CaptionBuffer:
         self.max_lines = n
         self._committed = deque(self._committed, maxlen=n)
 
+    def set_policy(self, policy: Policy) -> None:
+        """Switch the commit policy; AUTO starts detection over."""
+        if policy is self.policy:
+            return
+        self.policy = policy
+        self._resolved = None if policy is Policy.AUTO else policy
+        self._samples.clear()
+
     def feed(self, text: str, now: float) -> bool:
         """Take one transcription fragment. True when the display should change."""
         if not text:

@@ -74,6 +74,22 @@ def test_strips_trailing_inline_comment(tmp_path, monkeypatch):
     assert config.read_dotenv(path)["GEMINI_API_KEY"] == "abc"
 
 
+def test_quoted_value_keeps_a_hash_inside_the_quotes(tmp_path, monkeypatch):
+    """` #` ends a comment only outside quotes, or a key containing it is truncated."""
+    path = write_env(tmp_path, monkeypatch, 'GEMINI_API_KEY="AIza-with #-inside"\n')
+    assert config.read_dotenv(path)["GEMINI_API_KEY"] == "AIza-with #-inside"
+
+
+def test_quoted_value_still_drops_a_comment_after_the_closing_quote(tmp_path, monkeypatch):
+    path = write_env(tmp_path, monkeypatch, 'GEMINI_API_KEY="AIzaABC"  # issued 2026-07\n')
+    assert config.read_dotenv(path)["GEMINI_API_KEY"] == "AIzaABC"
+
+
+def test_unterminated_quote_still_yields_the_value(tmp_path, monkeypatch):
+    path = write_env(tmp_path, monkeypatch, 'GEMINI_API_KEY="AIzaABC\n')
+    assert config.read_dotenv(path)["GEMINI_API_KEY"] == "AIzaABC"
+
+
 def test_missing_file_is_not_an_error(tmp_path, monkeypatch):
     monkeypatch.setenv("LIVECAP_ENV_FILE", str(tmp_path / "nope.env"))
     assert config.read_dotenv() == {}
@@ -156,6 +172,13 @@ def test_unedited_placeholder_is_treated_as_missing(tmp_path, monkeypatch):
     write_env(tmp_path, monkeypatch, "GEMINI_API_KEY=your-key-here\n")
     no_keychain(monkeypatch)
     assert config.load_api_key() is None
+
+
+def test_a_real_key_containing_a_placeholder_word_is_still_accepted(tmp_path, monkeypatch):
+    """Key bodies are random; one may contain "here" or "xxx" by chance."""
+    write_env(tmp_path, monkeypatch, "GEMINI_API_KEY=AIzaSyDxxxHEREabc123\n")
+    no_keychain(monkeypatch)
+    assert config.load_api_key() == "AIzaSyDxxxHEREabc123"
 
 
 def test_empty_value_is_treated_as_missing(tmp_path, monkeypatch):

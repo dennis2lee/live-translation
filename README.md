@@ -8,7 +8,7 @@ input device, typically a USB interface fed from a mixer.
 
 - **Engine** — Google Gemini Live API, `gemini-3.5-live-translate-preview`
 - **UI** — PyQt6, native macOS menu bar, no Electron
-- **Latency** — ~3.1 s to first caption, fragments arriving about once per second
+- **Latency** — 3.1 s to the first caption Korean → English, 3.8 s English → Korean, then about one fragment per second
 - **Endurance** — verified for 30 minutes unbroken across 3 automatic reconnects
 
 See [INSTALL.md](INSTALL.md) to set it up on a new machine.
@@ -71,6 +71,24 @@ Switching while translating restarts only the translator session:
 - Audio capture and the ring buffer keep running, so nothing is lost in the gap
 - The transcript file stays open and records the switch point
 - The direction appears briefly at the bottom-right as `KO → EN`, then fades
+
+Preferences behave the same way. Colours, sizes and the clear delay apply as
+soon as you click OK; the target language and the silence gate reopen the
+translator session, and changing the audio device restarts capture. Nothing
+waits for a relaunch.
+
+## Quitting mid-session
+
+Closing the window, ⌘Q, Ctrl-C and `SIGTERM` all run the same shutdown, so a
+live session is never left half-closed. It works the same in both directions.
+
+- The Live API session closes and the audio device is released
+- The last unfinished sentence is settled and written to the transcript
+- The transcript gets its footer — end time, duration, line count, reconnects
+- Settings are saved
+
+A failure in any one step does not stop the others: if the translator refuses
+to shut down, the microphone is still released and the transcript still closes.
 
 ## Caption box
 
@@ -162,15 +180,17 @@ Three threads. Crossing between them is only ever done in the ways listed here.
 
 ```
 src/livecap/
-├── app.py               entry point
-├── config.py            Settings, QSettings persistence, .env and Keychain lookup
-├── audio.py             AudioCapture, RingBuffer (48k → 16k, int16 LE)
-├── translator.py        LiveTranslator — sessions, resumption, pre-emptive reconnect
-├── transcript.py        Markdown transcript writer
-├── caption_buffer.py    transcription fragments → display lines (no Qt, no network)
+├── app.py                 entry point, --selftest
+├── config.py              Settings, QSettings persistence, .env and Keychain lookup
+├── audio.py               AudioCapture, RingBuffer (48k → 16k, int16 LE)
+├── translator.py          LiveTranslator — sessions, resumption, pre-emptive reconnect
+├── transcript.py          Markdown transcript writer
+├── caption_buffer.py      transcription fragments → display lines (no Qt, no network)
+├── platform_support.py    the only module that branches on the operating system
+├── util/logging.py        stderr logging setup
 └── ui/
-    ├── main_window.py   CaptionWindow and the system menu bar
-    ├── caption_view.py  background, caption box, status indicator
+    ├── main_window.py     CaptionWindow and the system menu bar
+    ├── caption_view.py    background, caption box, status indicator
     └── settings_dialog.py
 ```
 
@@ -196,10 +216,12 @@ cd ~/work/live-translation && .venv/bin/python -m pytest -q
 cd ~/work/live-translation && .venv/bin/python -m ruff check .
 ```
 
-- 181 tests, none requiring an API key or network
+- The whole suite runs offline — no test needs an API key or network access
 - UI tests render offscreen and inspect pixels directly
 - `caption_buffer.py` has no Qt or network dependency and is covered by unit tests
 - Reconnect logic is tested against a fake Live session
+- Quitting mid-session is tested in both directions: the device is released and the transcript finished
+- The Windows and Linux branches of `platform_support.py` are pinned by faking `sys.platform`
 
 Measurement scripts live in `spikes/`, and their findings are recorded in
 [spikes/RESULTS.md](spikes/RESULTS.md).

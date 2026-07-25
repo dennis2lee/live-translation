@@ -87,30 +87,33 @@ class RingBuffer:
         if n <= 0 or n > self._cap:
             raise ValueError("n must be in 1..capacity")
 
-        # If we were lapped, drop the oldest data and catch up.
-        lag = self._write_pos - self._read_pos
-        if lag > self._cap:
-            skipped = lag - self._cap
-            self._read_pos += skipped
-            self._dropped += skipped
-            _log.warning("ring buffer overflow — dropped %d bytes", skipped)
+        # A loop, not recursion: a producer faster than the consumer could
+        # otherwise nest deep enough to raise RecursionError.
+        while True:
+            # If we were lapped, drop the oldest data and catch up.
+            lag = self._write_pos - self._read_pos
+            if lag > self._cap:
+                skipped = lag - self._cap
+                self._read_pos += skipped
+                self._dropped += skipped
+                _log.warning("ring buffer overflow — dropped %d bytes", skipped)
 
-        if self._write_pos - self._read_pos < n:
-            return None
+            if self._write_pos - self._read_pos < n:
+                return None
 
-        start = self._read_pos % self._cap
-        end = start + n
-        if end <= self._cap:
-            out = bytes(self._buf[start:end])
-        else:
-            out = bytes(self._buf[start:]) + bytes(self._buf[: end - self._cap])
+            start = self._read_pos % self._cap
+            end = start + n
+            if end <= self._cap:
+                out = bytes(self._buf[start:end])
+            else:
+                out = bytes(self._buf[start:]) + bytes(self._buf[: end - self._cap])
 
-        # If the producer lapped us mid-copy, that data is corrupt — retry.
-        if self._write_pos - self._read_pos > self._cap:
-            return self.read(n)
+            # If the producer lapped us mid-copy, that data is corrupt — retry.
+            if self._write_pos - self._read_pos > self._cap:
+                continue
 
-        self._read_pos += n
-        return out
+            self._read_pos += n
+            return out
 
     def clear(self) -> None:
         """Consumer only. Discard everything buffered."""

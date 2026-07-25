@@ -131,11 +131,13 @@ class TranscriptWriter:
             f"- **Lines** {self._lines_written}\n"
             f"- **Reconnects** {reconnects}\n"
         )
-        try:
-            self._file.close()
-        except OSError as exc:
-            _log.warning("error closing transcript: %s", exc)
-        self._file = None
+        # A failed footer write already closed and cleared the file.
+        if self._file is not None:
+            try:
+                self._file.close()
+            except OSError as exc:
+                _log.warning("error closing transcript: %s", exc)
+            self._file = None
         path = self.path
         if path is not None and self._lines_written == 0:
             # A transcript that captured nothing is not worth keeping.

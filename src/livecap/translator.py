@@ -38,6 +38,12 @@ RESPONSE_MODALITIES = ["AUDIO"]  # Audio-only model. Setting TEXT fails the sess
 BACKOFF_SECONDS = (1.0, 2.0, 4.0, 8.0)
 MAX_CONSECUTIVE_FAILURES = 5
 
+# A session that dies sooner than this counts as a failure even though the
+# connection itself succeeded. Without it, a server that accepts and then drops
+# every connection would be reconnected to in a tight loop. Real sessions last
+# about nine minutes, so this is far below anything legitimate.
+MIN_SESSION_SECONDS = 5.0
+
 # Failures that retrying cannot fix. Report immediately instead of backing off.
 # (marker, message shown to the user)
 FATAL_ERRORS: tuple[tuple[str, str], ...] = (
@@ -153,7 +159,6 @@ class LiveTranslator:
         self._active: _SessionHolder | None = None
         self._handle: str | None = None
         self._last_error: BaseException | None = None
-        self._reconnect_requested = asyncio.Event()
         self._state = State.IDLE
         self.stats = Stats()
 
@@ -167,6 +172,10 @@ class LiveTranslator:
         if self._thread is not None:
             raise RuntimeError("translator already started")
         self._stop.clear()
+        # A resumption handle only refers to a session of this run. Reusing one
+        # across a stop/start would ask the server to resume a dead session.
+        self._handle = None
+        self._last_error = None
         self.stats = Stats(started_at=time.monotonic())
         ready = threading.Event()
         self._thread = threading.Thread(target=self._thread_main, args=(ready,), daemon=True)
@@ -179,7 +188,9 @@ class LiveTranslator:
         if loop is not None and not loop.is_closed():
             # The supervisor waits on asyncio events, which a threading.Event
             # cannot wake. Cancel the task instead, so its cleanup actually runs.
-            loop.call_soon_threadsafe(self._cancel_supervisor)
+            # RuntimeError means the loop closed between the check and the call.
+            with contextlib.suppress(RuntimeError):
+                loop.call_soon_threadsafe(self._cancel_supervisor)
         if thread is not None:
             thread.join(timeout=timeout)
             if thread.is_alive():
@@ -277,10 +288,10 @@ class LiveTranslator:
                     await self._sleep(delay)
                     continue
 
-                failures = 0
+                opened_at = time.monotonic()
                 previous = self._active
                 self._active = holder  # atomically swap the send target
-                gap_ms = (time.monotonic() - gap_started) * 1000.0
+                gap_ms = (opened_at - gap_started) * 1000.0
 
                 if previous is not None:
                     self.stats.reconnects += 1
@@ -297,6 +308,28 @@ class LiveTranslator:
                 await holder.wait_for_replacement_trigger()
                 if self._stop.is_set():
                     break
+
+                # A session that opened and died immediately is a failure too,
+                # or a server dropping every connection becomes a hot loop.
+                lifetime = time.monotonic() - opened_at
+                if lifetime < MIN_SESSION_SECONDS and not holder.go_away.is_set():
+                    reason = fatal_reason(holder.error)
+                    if reason is not None:
+                        _log.error("fatal: %s", holder.error)
+                        self._set_state(State.ERROR, reason)
+                        break
+                    failures += 1
+                    if failures >= MAX_CONSECUTIVE_FAILURES:
+                        self._set_state(State.ERROR, "Session keeps dropping")
+                        break
+                    delay = BACKOFF_SECONDS[min(failures - 1, len(BACKOFF_SECONDS) - 1)]
+                    _log.warning(
+                        "session lasted %.1fs (%d/%d) — retry in %.0fs",
+                        lifetime, failures, MAX_CONSECUTIVE_FAILURES, delay,
+                    )
+                    await self._sleep(delay)
+                else:
+                    failures = 0
         finally:
             sender.cancel()
             if self._active is not None:

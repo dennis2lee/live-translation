@@ -281,6 +281,79 @@ def test_stop_closes_the_session_and_returns_to_idle(rec):
     assert wait_until(lambda: ("close", 0) in rec.events)
 
 
+def test_restarting_does_not_resume_a_session_from_the_previous_run(rec):
+    """A handle belongs to one run. Reusing it would resume a dead session."""
+    t = make_translator(rec, [[msg(handle="HANDLE-1")], []])
+    t.start()
+    try:
+        assert wait_until(lambda: t._handle == "HANDLE-1")
+    finally:
+        t.stop()
+
+    t.start()
+    try:
+        assert wait_until(lambda: len(rec.configs) >= 2)
+        assert rec.configs[1].session_resumption.handle is None
+    finally:
+        t.stop()
+
+
+def test_a_server_dropping_every_session_backs_off_instead_of_hot_looping(rec, monkeypatch):
+    """Connecting succeeds but the session dies at once — that is still a failure."""
+    monkeypatch.setattr(tr, "BACKOFF_SECONDS", (0.05, 0.05, 0.05, 0.05))
+
+    class Instant(FakeSession):
+        async def receive(self):
+            return
+            yield  # pragma: no cover — makes this an async generator
+
+    monkeypatch.setattr(tr, "MIN_SESSION_SECONDS", 5.0)
+    states: list[tuple[str, str]] = []
+    t = make_translator(rec, [[]] * 20, on_state=lambda s, d: states.append((s.value, d)))
+    original = FakeConnect.__aenter__
+
+    async def instant_enter(self):
+        await original(self)
+        session = Instant(self._rec, self._index, [])
+        self._rec.sessions[-1] = session
+        return session
+
+    monkeypatch.setattr(FakeConnect, "__aenter__", instant_enter)
+    t.start()
+    try:
+        assert wait_until(lambda: any(s == State.ERROR.value for s, _ in states), timeout=10.0)
+        detail = next(d for s, d in states if s == State.ERROR.value)
+        assert "dropping" in detail
+        # Bounded, not a hot loop: it gave up after the failure limit.
+        assert rec.connect_count <= tr.MAX_CONSECUTIVE_FAILURES + 1
+    finally:
+        t.stop()
+
+
+def test_a_long_lived_session_that_ends_reconnects_without_backoff(rec, monkeypatch):
+    """A normal session ending is not a failure, so the retry is immediate."""
+    monkeypatch.setattr(tr, "MIN_SESSION_SECONDS", 0.0)
+    t = make_translator(rec, [[msg(go_away=True)], []])
+    t.start()
+    try:
+        assert wait_until(lambda: t.stats.reconnects >= 1)
+    finally:
+        t.stop()
+
+
+def test_stop_is_safe_to_call_twice(rec):
+    t = make_translator(rec, [[]])
+    t.start()
+    assert wait_until(lambda: ("open", 0) in rec.events)
+    t.stop()
+    t.stop()  # must not raise
+    assert t.state is State.IDLE
+
+
+def test_stop_without_start_is_a_noop(rec):
+    make_translator(rec, [[]]).stop()  # must not raise
+
+
 def test_config_matches_the_preview_model_contract(rec):
     """response_modalities must be AUDIO, with transcription, compression and resumption on."""
     t = make_translator(rec, [[]], target_language_code="en", echo_target_language=False)

@@ -98,9 +98,12 @@ The key is looked up in this order:
 | Order | Source |
 |---|---|
 | 1 | `GEMINI_API_KEY` / `GOOGLE_API_KEY` environment variable |
-| 2 | `.env` in the repository root |
-| 3 | macOS Keychain (`LiveCap` / `gemini-api-key`) |
-| 4 | Entered in **Preferences…** (⌘,), then stored in the Keychain |
+| 2 | `.env` in the current working directory |
+| 3 | `.env` in the repository root |
+| 4 | macOS Keychain (`LiveCap` / `gemini-api-key`) |
+| 5 | Entered in **Preferences…** (⌘,), then stored in the Keychain |
+
+Setting `LIVECAP_ENV_FILE` to a path overrides all of the `.env` lookups.
 
 ## 7. Run
 
@@ -109,7 +112,8 @@ cd ~/work/live-translation && ./run.sh
 ```
 
 - macOS will ask for **microphone permission** the first time — allow it
-- If you deny it, captions never appear and the indicator stays grey
+- If you deny it the app still connects, so the dot turns green, but the input
+  is silence and no captions ever appear
 - Grant it later under System Settings → Privacy & Security → Microphone
 
 Press `0` to start translating, or use **Translate → Start Translating** (⌘R).
@@ -120,7 +124,7 @@ Press `0` to start translating, or use **Translate → Start Translating** (⌘R
 cd ~/work/live-translation && .venv/bin/python -m pytest -q
 ```
 
-- 181 tests should pass; none of them need an API key or network access
+- Everything should pass; no test needs an API key or network access
 - Lint with `.venv/bin/python -m ruff check .`
 
 Check that your audio hardware is seen:
@@ -138,7 +142,8 @@ cd ~/work/live-translation && .venv/bin/python spikes/s1_capture_check.py --seco
 - Drift must stay under 1% and underruns must be 0
 - Play the resulting `capture.wav` and listen for clicks, dropouts, or wrong pitch
 
-Confirm the API key reaches the service (costs a fraction of a cent):
+Confirm the API key reaches the service. Listing models is free — it does not
+open a Live session, so nothing is billed:
 
 ```bash
 cd ~/work/live-translation && .venv/bin/python -c "
@@ -146,10 +151,14 @@ import sys; sys.path.insert(0,'src')
 from google import genai
 from livecap.config import load_api_key
 from livecap.translator import MODEL
-names=[m.name for m in genai.Client(api_key=load_api_key()).models.list()]
+client = genai.Client(api_key=load_api_key())
+names = [m.name for m in client.models.list()]
 print('model reachable:', any(MODEL in n for n in names))
 "
 ```
+
+Expect `model reachable: True`. Keep the client in a variable as shown — the
+result is a lazy pager, and inlining the client closes it mid-iteration.
 
 ## 9. Optional — test audio fixtures
 
@@ -188,7 +197,7 @@ dist/LiveCap.app/Contents/MacOS/LiveCap --selftest
 
 ```
   ok    audio backend — 4 input device(s), first 'MacBook Air Microphone'
-  ok    resampler — soxr 1.1.0
+  ok    resampler — soxr 1.1.0, 0 samples from a 20 ms block
   ok    Qt — Qt 6.11.0
   ok    Gemini SDK — google-genai types resolve
   ok    Keychain — backend Keyring
@@ -236,7 +245,8 @@ right-clicking → Open, or via System Settings → Privacy & Security → Open 
 | `ModuleNotFoundError: No module named 'livecap'` | Package not installed into the venv | `.venv/bin/python -m pip install -e .` |
 | `Your prepayment credits are depleted` | No billing on the key's project | Attach billing, confirm key and billing share a project |
 | `API key required` in the caption area | Key not found | Check `.env`; placeholder text counts as missing |
-| Indicator stays grey, no captions | Microphone permission denied | System Settings → Privacy & Security → Microphone |
+| Dot is green but no captions appear | Microphone permission denied — the stream delivers silence | System Settings → Privacy & Security → Microphone |
+| Dot turns red saying "Session keeps dropping" | The service accepted the connection then closed it repeatedly | Check the network, then retry; LiveCap backs off rather than reconnecting in a loop |
 | `No audio input device found` | No CoreAudio input device | Plug in an interface; re-open the device menu to rescan |
 | USB interface missing from the menu | Menu was built before you plugged it in | Close and re-open the menu — it rescans each time |
 | Captions look tiny on a 4K display | Font size is in pixels, not relative | Settings → Font Size → 72 or 96 |

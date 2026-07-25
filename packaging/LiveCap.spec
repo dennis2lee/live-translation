@@ -11,6 +11,10 @@ from PyInstaller.utils.hooks import collect_data_files, collect_submodules
 
 ROOT = Path(SPECPATH).resolve().parent  # noqa: F821  (SPECPATH is injected)
 
+# Read the version from the package so the bundle cannot drift from the source.
+sys.path.insert(0, str(ROOT / "src"))
+from livecap import __version__ as VERSION  # noqa: E402
+
 datas = []
 # sounddevice ships libportaudio.dylib in a sibling data directory, which
 # PyInstaller does not pick up on its own. Without it the bundle starts but
@@ -91,8 +95,8 @@ app = BUNDLE(  # noqa: F821
             "translation in real time.",
         "CFBundleName": "LiveCap",
         "CFBundleDisplayName": "LiveCap",
-        "CFBundleShortVersionString": "0.1.0",
-        "CFBundleVersion": "0.1.0",
+        "CFBundleShortVersionString": VERSION,
+        "CFBundleVersion": VERSION,
         "LSMinimumSystemVersion": "13.0",
         "LSApplicationCategoryType": "public.app-category.productivity",
         "NSHighResolutionCapable": True,

@@ -103,14 +103,19 @@ def main() -> int:
 
     window = CaptionWindow(config.load())
 
+    # Every exit route ends here, so a live session is always closed cleanly:
+    # aboutToQuit covers the macOS Quit item, which bypasses closeEvent.
+    app.aboutToQuit.connect(window.shutdown)
+
     # Give Python a chance to run so Ctrl-C is not swallowed by the Qt event loop.
     signal.signal(signal.SIGINT, lambda *_: app.quit())
+    signal.signal(signal.SIGTERM, lambda *_: app.quit())
     idle = QTimer()
     idle.start(200)
     idle.timeout.connect(lambda: None)
 
     exit_code = app.exec()
-    window.stop_translation()
+    window.shutdown()  # a no-op if aboutToQuit already ran
     return exit_code
 
 
