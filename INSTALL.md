@@ -164,6 +164,71 @@ cd ~/work/live-translation && .venv/bin/python spikes/make_tts_fixture.py --repe
 - Install voices under System Settings → Accessibility → Spoken Content → System Voice → Manage Voices
 - List what you have with `say -v '?'`
 
+## 10. Building a distributable .app
+
+Everything above installs from source. To hand LiveCap to someone who has no
+Python at all, build a bundle:
+
+```bash
+cd ~/work/live-translation && packaging/build_app.sh
+```
+
+- Produces `dist/LiveCap.app`, roughly 110 MB, arm64
+- Regenerates the icon, builds with PyInstaller, then runs the bundle's own self-test
+- The self-test runs from `/tmp`, so it reflects a machine with no repository present
+
+The bundle carries its own Python, Qt, `libportaudio` and the soxr extension.
+The receiving Mac needs nothing installed.
+
+Check any build with:
+
+```bash
+dist/LiveCap.app/Contents/MacOS/LiveCap --selftest
+```
+
+```
+  ok    audio backend — 4 input device(s), first 'MacBook Air Microphone'
+  ok    resampler — soxr 1.1.0
+  ok    Qt — Qt 6.11.0
+  ok    Gemini SDK — google-genai types resolve
+  ok    Keychain — backend Keyring
+  ok    credentials — no API key (set one in Preferences)
+```
+
+`--selftest` never opens a window and never calls the paid API.
+
+### Where a packaged app looks for the key
+
+The repository root does not exist inside a bundle, so the order differs:
+
+| Order | Source |
+|---|---|
+| 1 | `GEMINI_API_KEY` / `GOOGLE_API_KEY` environment variable |
+| 2 | `.env` in the current directory |
+| 3 | `~/Library/Application Support/LiveCap/.env` |
+| 4 | `.env` beside `LiveCap.app` |
+| 5 | macOS Keychain |
+
+For a recipient, **Preferences… (⌘,) → Gemini API key** is the intended route —
+it stores the key in their Keychain.
+
+### Signing and notarisation
+
+An unsigned build runs on the machine that built it. Gatekeeper blocks it
+anywhere else.
+
+```bash
+export LIVECAP_SIGN_IDENTITY="Developer ID Application: Your Name (TEAMID)"
+packaging/build_app.sh --sign
+```
+
+- Requires a paid Apple Developer account and a Developer ID Application certificate
+- `packaging/entitlements.plist` already carries what the hardened runtime needs: audio input, plus the JIT and unsigned-memory entitlements CPython requires
+- The script prints the `notarytool` commands to run afterwards
+
+Without an Apple Developer account, the recipient can still open it by
+right-clicking → Open, or via System Settings → Privacy & Security → Open Anyway.
+
 ## Troubleshooting
 
 | Symptom | Cause | Fix |

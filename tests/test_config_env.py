@@ -84,6 +84,41 @@ def test_value_containing_equals_is_preserved(tmp_path, monkeypatch):
     assert config.read_dotenv(path)["GEMINI_API_KEY"] == "abc=def=="
 
 
+# --- where .env is looked for ---------------------------------------------
+
+
+def test_source_checkout_looks_in_the_repository_root(monkeypatch):
+    monkeypatch.setattr(config.sys, "frozen", False, raising=False)
+    paths = config.dotenv_candidates()
+    assert paths[-1] == config.Path(config.__file__).resolve().parents[2] / ".env"
+
+
+def test_a_bundle_falls_back_to_application_support(monkeypatch, tmp_path):
+    """The repository root does not exist inside a .app, so it must not be used."""
+    fake_exe = tmp_path / "LiveCap.app" / "Contents" / "MacOS" / "LiveCap"
+    fake_exe.parent.mkdir(parents=True)
+    fake_exe.touch()
+    monkeypatch.setattr(config.sys, "frozen", True, raising=False)
+    monkeypatch.setattr(config.sys, "executable", str(fake_exe))
+
+    paths = config.dotenv_candidates()
+    assert config.APP_SUPPORT_DIR / ".env" in paths
+    assert tmp_path / ".env" in paths  # beside the .app
+    assert not any("src" in p.parts for p in paths)
+
+
+def test_env_file_override_wins_everywhere(monkeypatch, tmp_path):
+    monkeypatch.setenv("LIVECAP_ENV_FILE", str(tmp_path / "custom.env"))
+    assert config.dotenv_candidates() == [tmp_path / "custom.env"]
+
+
+def test_dotenv_path_returns_the_first_existing_candidate(monkeypatch, tmp_path):
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / ".env").write_text("GEMINI_API_KEY=cwd-wins\n", encoding="utf-8")
+    monkeypatch.setattr(config.sys, "frozen", False, raising=False)
+    assert config.dotenv_path() == tmp_path / ".env"
+
+
 # --- precedence -----------------------------------------------------------
 
 

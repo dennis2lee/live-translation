@@ -10,6 +10,7 @@ whatever is typed into the preferences dialog.
 from __future__ import annotations
 
 import os
+import sys
 from dataclasses import asdict, dataclass, fields
 from enum import StrEnum
 from pathlib import Path
@@ -221,15 +222,37 @@ API_KEY_VARS = ("GEMINI_API_KEY", "GOOGLE_API_KEY")
 _PLACEHOLDER_MARKERS = ("your", "xxx", "<", "here")
 
 
-def dotenv_path() -> Path:
-    """Where `.env` lives. Overridable with LIVECAP_ENV_FILE."""
+APP_SUPPORT_DIR = Path("~/Library/Application Support/LiveCap").expanduser()
+
+
+def dotenv_candidates() -> list[Path]:
+    """Every place `.env` may live, in order of preference.
+
+    A packaged .app cannot use the repository root — that path lands inside the
+    bundle — so it falls back to Application Support and to the folder holding
+    the .app itself.
+    """
     override = os.environ.get("LIVECAP_ENV_FILE")
     if override:
-        return Path(override).expanduser()
-    # src/livecap/config.py -> repository root
-    root = Path(__file__).resolve().parents[2]
-    local = Path.cwd() / ".env"
-    return local if local.is_file() else root / ".env"
+        return [Path(override).expanduser()]
+
+    paths = [Path.cwd() / ".env"]
+    if getattr(sys, "frozen", False):
+        # .../LiveCap.app/Contents/MacOS/LiveCap -> the folder holding the .app
+        paths += [APP_SUPPORT_DIR / ".env", Path(sys.executable).resolve().parents[3] / ".env"]
+    else:
+        # src/livecap/config.py -> repository root
+        paths.append(Path(__file__).resolve().parents[2] / ".env")
+    return paths
+
+
+def dotenv_path() -> Path:
+    """The `.env` that will be read. The first existing candidate wins."""
+    candidates = dotenv_candidates()
+    for path in candidates:
+        if path.is_file():
+            return path
+    return candidates[-1]
 
 
 def read_dotenv(path: Path | None = None) -> dict[str, str]:

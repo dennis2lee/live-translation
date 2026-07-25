@@ -211,6 +211,18 @@ Measurement scripts live in `spikes/`, and their findings are recorded in
 | `s2_headless_run.py` | Long unattended runs, reconnect stats, transcript vs. script |
 | `make_tts_fixture.py` | Build known-script test audio with the macOS TTS voices |
 
+## Distribution
+
+```bash
+cd ~/work/live-translation && packaging/build_app.sh
+```
+
+- Builds `dist/LiveCap.app` (~110 MB, arm64), carrying its own Python, Qt, `libportaudio` and soxr
+- The receiving Mac needs nothing installed
+- `Info.plist` sets `NSMicrophoneUsageDescription`, without which macOS kills the app instead of prompting for the microphone
+- Verify any build with `dist/LiveCap.app/Contents/MacOS/LiveCap --selftest`
+- Add `--sign` to codesign for other machines — see [INSTALL.md](INSTALL.md)
+
 ## License
 
 MIT — see [LICENSE](LICENSE).
