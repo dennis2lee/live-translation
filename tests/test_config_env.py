@@ -1,4 +1,8 @@
-"""API key lookup: environment, then .env, then the Keychain."""
+"""API key lookup: environment variable, encrypted store, then the Keychain.
+
+`.env` is no longer read at run time; it survives only as a one-time
+migration into the encrypted store.
+"""
 
 from __future__ import annotations
 
@@ -8,7 +12,7 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 import pytest  # noqa: E402
 
-from livecap import config  # noqa: E402
+from livecap import config, credentials  # noqa: E402
 
 
 @pytest.fixture(autouse=True)
@@ -136,28 +140,37 @@ def test_dotenv_path_returns_the_first_existing_candidate(monkeypatch, tmp_path)
 
 
 # --- precedence -----------------------------------------------------------
+#
+# `.env` is no longer a source. The order is environment variable, then the
+# encrypted store, then the Keychain.
 
 
-def test_env_var_wins_over_dotenv(tmp_path, monkeypatch):
-    write_env(tmp_path, monkeypatch, "GEMINI_API_KEY=from-dotenv\n")
-    monkeypatch.setenv("GEMINI_API_KEY", "from-environ")
-    assert config.load_api_key() == "from-environ"
+def test_env_var_wins_over_the_encrypted_store(monkeypatch):
+    credentials.put("GEMINI_API_KEY", "AIzaFromStore")
+    monkeypatch.setenv("GEMINI_API_KEY", "AIzaFromEnviron")
+    assert config.load_api_key() == "AIzaFromEnviron"
 
 
-def test_dotenv_is_used_when_no_env_var(tmp_path, monkeypatch):
-    write_env(tmp_path, monkeypatch, "GEMINI_API_KEY=from-dotenv\n")
+def test_the_encrypted_store_is_used_when_no_env_var(monkeypatch):
+    credentials.put("GEMINI_API_KEY", "AIzaFromStore")
     no_keychain(monkeypatch)
-    assert config.load_api_key() == "from-dotenv"
+    assert config.load_api_key() == "AIzaFromStore"
 
 
-def test_google_api_key_is_accepted_as_a_fallback(tmp_path, monkeypatch):
-    write_env(tmp_path, monkeypatch, "GOOGLE_API_KEY=from-google-var\n")
+def test_google_api_key_variable_is_accepted_as_a_fallback(monkeypatch):
+    monkeypatch.setenv("GOOGLE_API_KEY", "AIzaFromGoogleVar")
     no_keychain(monkeypatch)
-    assert config.load_api_key() == "from-google-var"
+    assert config.load_api_key() == "AIzaFromGoogleVar"
 
 
-def test_keychain_is_used_when_dotenv_has_no_key(tmp_path, monkeypatch):
-    write_env(tmp_path, monkeypatch, "LIVECAP_DEBUG=1\n")
+def test_dotenv_is_no_longer_read_at_run_time(tmp_path, monkeypatch):
+    """A leftover .env must not quietly supply a key any more."""
+    write_env(tmp_path, monkeypatch, "GEMINI_API_KEY=AIzaFromDotenv\n")
+    no_keychain(monkeypatch)
+    assert config.load_api_key() is None
+
+
+def test_keychain_is_used_when_the_store_is_empty(monkeypatch):
     import sys
     import types
 
@@ -167,43 +180,103 @@ def test_keychain_is_used_when_dotenv_has_no_key(tmp_path, monkeypatch):
     assert config.load_api_key() == "from-keychain"
 
 
-def test_unedited_placeholder_is_treated_as_missing(tmp_path, monkeypatch):
-    """.env.example copied but never filled in."""
-    write_env(tmp_path, monkeypatch, "GEMINI_API_KEY=your-key-here\n")
+def test_unedited_placeholder_is_treated_as_missing(monkeypatch):
+    """.env.example copied into the store without being filled in."""
+    credentials.put("GEMINI_API_KEY", "your-key-here")
     no_keychain(monkeypatch)
     assert config.load_api_key() is None
 
 
-def test_a_real_key_containing_a_placeholder_word_is_still_accepted(tmp_path, monkeypatch):
+def test_a_real_key_containing_a_placeholder_word_is_still_accepted(monkeypatch):
     """Key bodies are random; one may contain "here" or "xxx" by chance."""
-    write_env(tmp_path, monkeypatch, "GEMINI_API_KEY=AIzaSyDxxxHEREabc123\n")
+    credentials.put("GEMINI_API_KEY", "AIzaSyDxxxHEREabc123")
     no_keychain(monkeypatch)
     assert config.load_api_key() == "AIzaSyDxxxHEREabc123"
 
 
-def test_empty_value_is_treated_as_missing(tmp_path, monkeypatch):
-    write_env(tmp_path, monkeypatch, "GEMINI_API_KEY=\n")
+def test_empty_value_is_treated_as_missing(monkeypatch):
+    credentials.put("GEMINI_API_KEY", "")
     no_keychain(monkeypatch)
     assert config.load_api_key() is None
 
 
-def test_whitespace_around_the_key_is_stripped(tmp_path, monkeypatch):
-    write_env(tmp_path, monkeypatch, "GEMINI_API_KEY=   AIzaTEST   \n")
+def test_whitespace_around_the_key_is_stripped(monkeypatch):
+    credentials.put("GEMINI_API_KEY", "   AIzaTEST   ")
     no_keychain(monkeypatch)
     assert config.load_api_key() == "AIzaTEST"
 
 
-# --- environ injection ----------------------------------------------------
+# --- reporting where the key came from ------------------------------------
 
 
-def test_apply_dotenv_fills_environ_without_overwriting(tmp_path, monkeypatch):
-    write_env(tmp_path, monkeypatch, "GEMINI_API_KEY=from-dotenv\nLIVECAP_DEBUG=1\n")
-    monkeypatch.setenv("GEMINI_API_KEY", "already-set")
-    applied = config.apply_dotenv_to_environ()
-    assert "LIVECAP_DEBUG" in applied
-    assert "GEMINI_API_KEY" not in applied  # existing variables are not overwritten
-    assert os.environ["GEMINI_API_KEY"] == "already-set"
-    assert os.environ["LIVECAP_DEBUG"] == "1"
+def test_api_key_source_names_the_environment(monkeypatch):
+    monkeypatch.setenv("GEMINI_API_KEY", "AIzaFromEnviron")
+    assert "environment variable" in config.api_key_source()
+
+
+def test_api_key_source_names_the_store(monkeypatch):
+    credentials.put("GEMINI_API_KEY", "AIzaFromStore")
+    no_keychain(monkeypatch)
+    assert config.api_key_source() == "encrypted store"
+
+
+def test_api_key_source_is_blank_when_nothing_is_stored(monkeypatch):
+    no_keychain(monkeypatch)
+    assert config.api_key_source() == ""
+
+
+# --- one-time migration off .env ------------------------------------------
+
+
+def test_migration_imports_a_key_from_a_leftover_dotenv(tmp_path, monkeypatch):
+    write_env(tmp_path, monkeypatch, "GEMINI_API_KEY=AIzaLegacyKey\n")
+    no_keychain(monkeypatch)
+    assert config.migrate_dotenv_once() == "GEMINI_API_KEY"
+    assert config.load_api_key() == "AIzaLegacyKey"
+
+
+def test_migration_does_not_overwrite_a_stored_key(tmp_path, monkeypatch):
+    credentials.put("GEMINI_API_KEY", "AIzaAlreadyStored")
+    write_env(tmp_path, monkeypatch, "GEMINI_API_KEY=AIzaLegacyKey\n")
+    no_keychain(monkeypatch)
+    assert config.migrate_dotenv_once() is None
+    assert config.load_api_key() == "AIzaAlreadyStored"
+
+
+def test_migration_ignores_an_unedited_placeholder(tmp_path, monkeypatch):
+    write_env(tmp_path, monkeypatch, "GEMINI_API_KEY=your-key-here\n")
+    no_keychain(monkeypatch)
+    assert config.migrate_dotenv_once() is None
+    assert config.load_api_key() is None
+
+
+def test_migration_is_a_noop_without_a_dotenv(tmp_path, monkeypatch):
+    monkeypatch.setenv("LIVECAP_ENV_FILE", str(tmp_path / "absent.env"))
+    no_keychain(monkeypatch)
+    assert config.migrate_dotenv_once() is None
+
+
+# --- saving ---------------------------------------------------------------
+
+
+def test_saving_writes_the_encrypted_store(monkeypatch):
+    no_keychain(monkeypatch)
+    assert config.save_api_key("AIzaTypedIn") is True
+    assert config.load_api_key() == "AIzaTypedIn"
+
+
+def test_saving_does_not_write_plaintext_to_disk(monkeypatch):
+    no_keychain(monkeypatch)
+    config.save_api_key("AIzaSecretValue")
+    blob = credentials.store_path().read_bytes()
+    assert b"AIzaSecretValue" not in blob
+
+
+def test_clearing_removes_the_stored_key(monkeypatch):
+    no_keychain(monkeypatch)
+    config.save_api_key("AIzaTypedIn")
+    config.clear_api_key()
+    assert config.load_api_key() is None
 
 
 def test_api_key_is_never_written_to_qsettings():

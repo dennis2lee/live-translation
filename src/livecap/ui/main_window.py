@@ -478,7 +478,7 @@ class CaptionWindow(QMainWindow):
             f"Model: {MODEL}<br><br>"
             f"Created by <b>{AUTHOR}</b><br>"
             f'<a href="mailto:{AUTHOR_EMAIL}">{AUTHOR_EMAIL}</a><br><br>'
-            "Released under the MIT License.",
+            f"Copyright © 2026 {AUTHOR}. All rights reserved.",
         )
 
     # --- translation control ----------------------------------------------

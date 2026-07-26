@@ -17,7 +17,7 @@ from pathlib import Path
 
 from PyQt6.QtCore import QSettings
 
-from . import platform_support, transcript
+from . import credentials, platform_support, transcript
 from .caption_buffer import Policy
 from .util import logging as log
 
@@ -130,6 +130,8 @@ class Settings:
 
     # behaviour
     audio_device_name: str = ""  # empty means the system default input
+    # Used to come from LIVECAP_DEBUG in .env; now a preference.
+    debug_logging: bool = False
     show_source_text: bool = False
     fullscreen: bool = False
     silence_gate: bool = False
@@ -165,6 +167,7 @@ class Settings:
             show_direction_hint=bool(self.show_direction_hint),
             transcript_dir=self.transcript_dir or transcript.DEFAULT_DIR,
             audio_device_name=self.audio_device_name,
+            debug_logging=bool(self.debug_logging),
             show_source_text=bool(self.show_source_text),
             fullscreen=bool(self.fullscreen),
             silence_gate=bool(self.silence_gate),
@@ -324,18 +327,25 @@ def read_dotenv(path: Path | None = None) -> dict[str, str]:
     return values
 
 
-def apply_dotenv_to_environ() -> list[str]:
-    """Copy `.env` values into os.environ without overwriting existing variables.
+def migrate_dotenv_once() -> str | None:
+    """Import a key from a leftover `.env` into the encrypted store, once.
 
-    Call once at startup. Returns the names that were set — never the values,
-    which must not reach the log.
+    `.env` is no longer read at run time. This exists only so an install that
+    predates the encrypted store keeps working; it runs when the store holds no
+    key, and never overwrites one. Returns the variable name imported, if any —
+    never the value.
     """
-    applied: list[str] = []
-    for key, value in read_dotenv().items():
-        if key not in os.environ and value:
-            os.environ[key] = value
-            applied.append(key)
-    return applied
+    if credentials.get(API_KEY_VARS[0]):
+        return None
+    dotenv = read_dotenv()
+    for name in API_KEY_VARS:
+        value = dotenv.get(name, "").strip()
+        if value and not _is_placeholder(value):
+            if credentials.put(API_KEY_VARS[0], value):
+                _log.info("imported %s from .env into the encrypted store", name)
+                return name
+            return None
+    return None
 
 
 def _is_placeholder(value: str) -> bool:
@@ -348,21 +358,19 @@ def _is_placeholder(value: str) -> bool:
 
 
 def load_api_key() -> str | None:
-    """Look up the key: environment, then .env, then the Keychain.
+    """Look up the key: environment variable, encrypted store, then Keychain.
 
-    Never stored in source or in the QSettings plist. An unedited placeholder
-    left in `.env` counts as no key at all.
+    `.env` is no longer consulted — the key is entered in Preferences. Never
+    stored in source or in the QSettings plist.
     """
     for env in API_KEY_VARS:
         v = os.environ.get(env)
         if v and v.strip() and not _is_placeholder(v.strip()):
             return v.strip()
 
-    dotenv = read_dotenv()
-    for env in API_KEY_VARS:
-        v = dotenv.get(env, "")
-        if v.strip() and not _is_placeholder(v.strip()):
-            return v.strip()
+    stored = credentials.get(API_KEY_VARS[0])
+    if stored and not _is_placeholder(stored):
+        return stored
 
     try:
         import keyring
@@ -374,22 +382,45 @@ def load_api_key() -> str | None:
         return None
 
 
-def save_api_key(key: str) -> bool:
-    """Store the key in the macOS Keychain."""
+def api_key_source() -> str:
+    """Where the key in force comes from, for the Preferences dialog to show."""
+    for env in API_KEY_VARS:
+        v = (os.environ.get(env) or "").strip()
+        if v and not _is_placeholder(v):
+            return f"{env} environment variable"
+    stored = credentials.get(API_KEY_VARS[0])
+    if stored and not _is_placeholder(stored):
+        return "encrypted store"
     try:
         import keyring
 
-        keyring.set_password(KEYRING_SERVICE, KEYRING_USER, key.strip())
-        return True
-    except Exception as exc:
-        _log.error("could not write key to keychain: %s", exc)
-        return False
+        if keyring.get_password(KEYRING_SERVICE, KEYRING_USER):
+            return "macOS Keychain"
+    except Exception:  # noqa: BLE001 — only used for a label
+        pass
+    return ""
+
+
+def save_api_key(key: str, *, to_keychain: bool = False) -> bool:
+    """Store the key encrypted, and optionally in the Keychain as well."""
+    ok = credentials.put(API_KEY_VARS[0], key.strip())
+    if to_keychain:
+        try:
+            import keyring
+
+            keyring.set_password(KEYRING_SERVICE, KEYRING_USER, key.strip())
+        except Exception as exc:  # noqa: BLE001
+            _log.error("could not write key to keychain: %s", exc)
+            return False
+    return ok
 
 
 def clear_api_key() -> None:
+    """Forget the key everywhere this application put it."""
+    credentials.remove(API_KEY_VARS[0])
     try:
         import keyring
 
         keyring.delete_password(KEYRING_SERVICE, KEYRING_USER)
-    except Exception:
+    except Exception:  # noqa: BLE001 — nothing stored is the normal case
         pass

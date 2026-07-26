@@ -15,13 +15,45 @@ See [INSTALL.md](INSTALL.md) to set it up on a new machine.
 
 ## Quick start
 
-```bash
-cd ~/work/live-translation && cp .env.example .env
-```
-
-- Put your Gemini API key in `.env` (paid tier required — see [INSTALL.md](INSTALL.md))
 - Run `./run.sh`
+- Open **Preferences… (⌘,) → API Key**, paste your Gemini API key, press **Test Key**
+- A paid-tier key is required — see [INSTALL.md](INSTALL.md)
 - Press `0` to start
+
+## Preferences
+
+**⌘,** opens the one place everything is configured. There is no `.env` file
+and no config file to hand-edit.
+
+| Tab | What it holds |
+|---|---|
+| API Key | The Gemini key, **Test Key**, and where the key in force came from |
+| Audio | Input device, and a **live level meter** to check it |
+| Appearance | Background, box and text colours; position, size, lines, margins |
+| Behaviour | Target language, transcript, clear delay, silence gate, verbose logging |
+
+### The API key
+
+Paste it and press **Test Key**. That lists the models the key can reach —
+free, and it never opens a billed session — so a wrong key, a project without
+billing, or a network problem is reported before you rely on it.
+
+The key is encrypted and written to
+`~/Library/Application Support/LiveCap/credentials.enc`, mode 0600.
+
+> The passphrase is part of the application, so anyone holding a copy can
+> decrypt the file. Treat it as keeping the key out of plain sight — out of
+> backups, screen shares and stray `cat` commands — rather than as real
+> secrecy. Tick **Also store in the macOS Keychain** for storage your login
+> password protects. A `GEMINI_API_KEY` environment variable still wins over
+> both.
+
+### The level meter
+
+**Audio → Start Level Test** opens the selected device and shows what it is
+actually delivering, with a plain reading — `-12 dBFS — good`, `-88 dBFS —
+silent, check the input`. It answers "is this device even connected?" without
+starting a translation session or spending anything.
 
 ## Keyboard shortcuts
 
@@ -214,7 +246,8 @@ Three threads. Crossing between them is only ever done in the ways listed here.
 ```
 src/livecap/
 ├── app.py                 entry point, --selftest
-├── config.py              Settings, QSettings persistence, .env and Keychain lookup
+├── config.py              Settings, QSettings persistence, API key lookup
+├── credentials.py         encrypted key store (replaces .env)
 ├── audio.py               AudioCapture, RingBuffer (48k → 16k, int16 LE)
 ├── translator.py          LiveTranslator — sessions, resumption, pre-emptive reconnect
 ├── transcript.py          Markdown transcript writer
@@ -286,4 +319,8 @@ Also shown in the app under **LiveCap → About LiveCap**.
 
 ## License
 
-MIT — see [LICENSE](LICENSE).
+Copyright © 2026 Pyeongwoo Lee. All rights reserved.
+
+Proprietary — this is not open-source software. No permission is granted to
+use, copy, modify, or distribute it without prior written permission from the
+copyright holder. See [LICENSE](LICENSE).

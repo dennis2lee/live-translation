@@ -10,37 +10,18 @@ from pathlib import Path
 
 import pytest
 
-from livecap import config
-
 ROOT = Path(__file__).resolve().parents[1]
 
 
-def test_env_example_exists():
-    assert (ROOT / ".env.example").is_file()
+def test_no_dotenv_example_is_shipped():
+    """The key is entered in Preferences now; an example file would mislead."""
+    assert not (ROOT / ".env.example").exists()
 
 
-def test_env_example_contains_no_real_key():
-    """This file is committed, so a real key here would be published."""
-    parsed = config.read_dotenv(ROOT / ".env.example")
-    for var in config.API_KEY_VARS:
-        value = parsed.get(var, "")
-        assert not value.startswith("AIza"), f"{var} looks like a real key"
-
-
-def test_env_example_placeholder_counts_as_no_key(monkeypatch):
-    """Copying the example without editing it must not look like a configured key."""
-    monkeypatch.setenv("LIVECAP_ENV_FILE", str(ROOT / ".env.example"))
-    for var in config.API_KEY_VARS:
-        monkeypatch.delenv(var, raising=False)
-
-    import sys
-    import types
-
-    fake = types.ModuleType("keyring")
-    fake.get_password = lambda *_a, **_k: None  # type: ignore[attr-defined]
-    monkeypatch.setitem(sys.modules, "keyring", fake)
-
-    assert config.load_api_key() is None
+def test_nothing_still_tells_the_user_to_copy_a_dotenv():
+    for name in ("README.md", "INSTALL.md", "run.sh"):
+        text = (ROOT / name).read_text(encoding="utf-8")
+        assert "cp .env.example" not in text, f"{name} still points at .env.example"
 
 
 def test_real_env_is_not_tracked_by_git():
@@ -94,3 +75,27 @@ def test_bundle_copyright_names_the_author():
 
     spec = (ROOT / "packaging" / "LiveCap.spec").read_text(encoding="utf-8")
     assert __author__ in spec
+
+
+def _claims_mit(text: str) -> bool:
+    """"MIT" as a licence name, not the MIT inside "LIMITED"."""
+    import re
+
+    return re.search(r"\bMIT\b", text) is not None
+
+
+def test_the_licence_is_proprietary_not_mit():
+    """The project is not open source; nothing may claim otherwise."""
+    licence = (ROOT / "LICENSE").read_text(encoding="utf-8")
+    assert "All rights reserved" in licence
+    assert not _claims_mit(licence)
+
+    for name in ("README.md", "pyproject.toml", "packaging/LiveCap.spec"):
+        text = (ROOT / name).read_text(encoding="utf-8")
+        assert not _claims_mit(text), f"{name} still claims MIT"
+
+
+def test_the_app_does_not_claim_an_open_source_licence():
+    source = (ROOT / "src" / "livecap" / "ui" / "main_window.py").read_text(encoding="utf-8")
+    assert not _claims_mit(source)
+    assert "All rights reserved" in source

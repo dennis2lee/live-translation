@@ -1,15 +1,18 @@
-"""Preferences dialog.
+"""Preferences dialog — the single place everything is configured.
 
-The API key goes to the macOS Keychain, never into Settings.
+The API key is written to the encrypted credential store, never into Settings
+and never to a `.env` file.
 """
 
 from __future__ import annotations
 
 from dataclasses import replace
 
-from PyQt6.QtCore import Qt
+from PyQt6.QtCore import QObject, Qt, QThread, QTimer, pyqtSignal
+from PyQt6.QtGui import QColor
 from PyQt6.QtWidgets import (
     QCheckBox,
+    QColorDialog,
     QComboBox,
     QDialog,
     QDialogButtonBox,
@@ -18,24 +21,148 @@ from PyQt6.QtWidgets import (
     QHBoxLayout,
     QLabel,
     QLineEdit,
+    QProgressBar,
     QPushButton,
     QSlider,
     QSpinBox,
+    QTabWidget,
     QVBoxLayout,
     QWidget,
 )
 
 from .. import config
-from ..audio import list_input_devices
+from ..audio import AudioCapture, list_input_devices
 from ..caption_buffer import Policy
-from ..config import Settings
+from ..config import BOX_POSITION_MENU_TEXT, BoxPosition, Settings
 from ..transcript import DEFAULT_DIR, resolve_dir
+from ..util import logging as log
+
+_log = log.get(__name__)
 
 POLICY_LABELS = {
     Policy.AUTO: "Detect automatically",
     Policy.INCREMENTAL: "A — incremental",
     Policy.UTTERANCE: "B — per utterance",
 }
+
+METER_MS = 100
+# Peak in dBFS mapped onto the meter. Below the floor there is nothing to see;
+# above the ceiling the signal is about to clip.
+METER_FLOOR_DB = -60.0
+METER_CEILING_DB = 0.0
+METER_GOOD_DB = -24.0  # comfortably above the noise floor of a live mic
+
+
+def peak_to_percent(peak: float) -> int:
+    """Map a 0-1 peak onto the meter's dBFS scale."""
+    if peak <= 0.0:
+        return 0
+    import math
+
+    db = 20.0 * math.log10(peak)
+    span = METER_CEILING_DB - METER_FLOOR_DB
+    return max(0, min(100, int((db - METER_FLOOR_DB) / span * 100)))
+
+
+def peak_verdict(peak: float) -> str:
+    """Plain-language reading of a level, for the label under the meter."""
+    if peak <= 0.0:
+        return "no signal"
+    import math
+
+    db = 20.0 * math.log10(peak)
+    if db < METER_FLOOR_DB:
+        return f"{db:.0f} dBFS — silent, check the input"
+    if db > -3.0:
+        return f"{db:.0f} dBFS — too loud, turn the source down"
+    if db >= METER_GOOD_DB:
+        return f"{db:.0f} dBFS — good"
+    return f"{db:.0f} dBFS — quiet, turn the source up"
+
+
+class _KeyTest(QObject):
+    """Checks the key off the UI thread. Listing models is free — nothing is billed."""
+
+    done = pyqtSignal(bool, str)
+
+    def __init__(self, api_key: str) -> None:
+        super().__init__()
+        self._api_key = api_key
+
+    def run(self) -> None:
+        try:
+            from google import genai
+
+            from ..translator import MODEL
+
+            # Bind the client to a name: models.list() is a lazy pager, and an
+            # inline client closes itself mid-iteration.
+            client = genai.Client(api_key=self._api_key)
+            names = [m.name for m in client.models.list()]
+        except Exception as exc:  # noqa: BLE001 — every failure is a message
+            self.done.emit(False, f"{type(exc).__name__}: {exc}"[:200])
+            return
+        if any(MODEL in name for name in names):
+            self.done.emit(
+                True,
+                f"Key works — {len(names)} models visible, including the translation model.",
+            )
+        else:
+            self.done.emit(
+                False,
+                f"Key is valid ({len(names)} models) but {MODEL} is not available to it. "
+                "That model needs a paid-tier project.",
+            )
+
+
+class _ColorButton(QPushButton):
+    """A button showing a colour, which opens the picker when clicked."""
+
+    def __init__(self, value: str, title: str, *, alpha: bool = False,
+                 parent: QWidget | None = None) -> None:
+        super().__init__(parent)
+        self._title = title
+        self._alpha = alpha
+        self._color = QColor(value)
+        self._opacity = 1.0
+        self.setFixedWidth(120)
+        self.clicked.connect(self._pick)
+        self._refresh()
+
+    def _refresh(self) -> None:
+        name = self._color.name(QColor.NameFormat.HexRgb).upper()
+        # Keep the label readable whichever colour was chosen.
+        ink = "#000000" if self._color.lightness() > 127 else "#FFFFFF"
+        self.setStyleSheet(
+            f"background-color: {name}; color: {ink}; padding: 6px; border: 1px solid gray;"
+        )
+        self.setText(name)
+
+    def _pick(self) -> None:
+        opts = (
+            QColorDialog.ColorDialogOption.ShowAlphaChannel
+            if self._alpha
+            else QColorDialog.ColorDialogOption(0)
+        )
+        start = QColor(self._color)
+        if self._alpha:
+            start.setAlphaF(self._opacity)
+        chosen = QColorDialog.getColor(start, self, self._title, opts)
+        if not chosen.isValid():
+            return
+        self._color = chosen
+        if self._alpha:
+            self._opacity = chosen.alphaF()
+        self._refresh()
+
+    def value(self) -> str:
+        return self._color.name(QColor.NameFormat.HexRgb).upper()
+
+    def opacity(self) -> float:
+        return self._opacity
+
+    def set_opacity(self, value: float) -> None:
+        self._opacity = value
 
 
 class SettingsDialog(QDialog):
@@ -44,34 +171,137 @@ class SettingsDialog(QDialog):
         self.setWindowTitle("LiveCap Preferences")
         self.setModal(True)
         self._settings = settings
+        self._capture: AudioCapture | None = None
+        self._key_thread: QThread | None = None
 
+        tabs = QTabWidget()
+        tabs.addTab(self._api_tab(), "API Key")
+        tabs.addTab(self._audio_tab(settings), "Audio")
+        tabs.addTab(self._appearance_tab(settings), "Appearance")
+        tabs.addTab(self._behaviour_tab(settings), "Behaviour")
+
+        buttons = QDialogButtonBox(
+            QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel
+        )
+        buttons.accepted.connect(self._accept)
+        buttons.rejected.connect(self.reject)
+
+        root = QVBoxLayout(self)
+        root.addWidget(tabs)
+        root.addWidget(buttons)
+
+    # --- API key ----------------------------------------------------------
+
+    def _api_tab(self) -> QWidget:
         form = QFormLayout()
 
-        # --- API key ---
         self._key_edit = QLineEdit()
         self._key_edit.setEchoMode(QLineEdit.EchoMode.Password)
-        self._key_edit.setMinimumWidth(320)
-        existing = config.load_api_key()
+        self._key_edit.setMinimumWidth(360)
+        source = config.api_key_source()
         self._key_edit.setPlaceholderText(
-            "Stored in the Keychain — type a new key to replace it"
-            if existing
+            f"Stored in the {source} — type a new key to replace it"
+            if source
             else "AIza…"
         )
-        key_row = QHBoxLayout()
-        key_row.addWidget(self._key_edit)
-        clear_btn = QPushButton("Delete")
-        clear_btn.setToolTip("Remove the stored key from the Keychain")
+        form.addRow("Gemini API key", self._key_edit)
+
+        self._show_key = QCheckBox("Show what I type")
+        self._show_key.toggled.connect(
+            lambda on: self._key_edit.setEchoMode(
+                QLineEdit.EchoMode.Normal if on else QLineEdit.EchoMode.Password
+            )
+        )
+        form.addRow("", self._show_key)
+
+        row = QHBoxLayout()
+        self._test_btn = QPushButton("Test Key")
+        self._test_btn.setToolTip(
+            "Lists the models the key can reach. Free — it does not open a session."
+        )
+        self._test_btn.clicked.connect(self._test_key)
+        row.addWidget(self._test_btn)
+
+        clear_btn = QPushButton("Delete Stored Key")
+        clear_btn.setToolTip("Remove the key from the encrypted store and the Keychain")
         clear_btn.clicked.connect(self._clear_key)
-        key_row.addWidget(clear_btn)
-        key_holder = QWidget()
-        key_holder.setLayout(key_row)
-        form.addRow("Gemini API key", key_holder)
+        row.addWidget(clear_btn)
+        row.addStretch(1)
+        holder = QWidget()
+        holder.setLayout(row)
+        form.addRow("", holder)
 
-        hint = QLabel("A GEMINI_API_KEY environment variable takes precedence.")
-        hint.setStyleSheet("color: gray;")
-        form.addRow("", hint)
+        self._key_status = QLabel(
+            f"Currently reading the key from the {source}." if source else "No key stored yet."
+        )
+        self._key_status.setWordWrap(True)
+        form.addRow("", self._key_status)
 
-        # --- audio ---
+        self._also_keychain = QCheckBox("Also store in the macOS Keychain")
+        self._also_keychain.setToolTip(
+            "The Keychain is protected by your login password, so it is the stronger\n"
+            "of the two. The encrypted file is written either way."
+        )
+        form.addRow("", self._also_keychain)
+
+        note = QLabel(
+            "The key is encrypted before it is written to disk. The passphrase is part of "
+            "the application, so treat this as keeping the key out of plain sight rather "
+            "than as real secrecy — the Keychain is stronger. A GEMINI_API_KEY environment "
+            "variable still takes precedence over both."
+        )
+        note.setWordWrap(True)
+        note.setStyleSheet("color: gray;")
+        form.addRow("", note)
+
+        page = QWidget()
+        page.setLayout(form)
+        return page
+
+    def _test_key(self) -> None:
+        typed = self._key_edit.text().strip()
+        api_key = typed or config.load_api_key()
+        if not api_key:
+            self._key_status.setText("No key to test — type one above first.")
+            return
+        if self._key_thread is not None:
+            return  # a test is already running
+
+        self._test_btn.setEnabled(False)
+        self._key_status.setText("Testing…")
+
+        thread = QThread(self)
+        worker = _KeyTest(api_key)
+        worker.moveToThread(thread)
+        thread.started.connect(worker.run)
+        worker.done.connect(self._key_tested)
+        worker.done.connect(thread.quit)
+        thread.finished.connect(worker.deleteLater)
+        thread.finished.connect(self._key_test_finished)
+        self._key_thread = thread
+        self._key_worker = worker  # keep a reference, or it is collected mid-flight
+        thread.start()
+
+    def _key_tested(self, ok: bool, message: str) -> None:
+        self._key_status.setText(("✓ " if ok else "✗ ") + message)
+        self._key_status.setStyleSheet("color: green;" if ok else "color: #C0392B;")
+
+    def _key_test_finished(self) -> None:
+        self._test_btn.setEnabled(True)
+        self._key_thread = None
+
+    def _clear_key(self) -> None:
+        config.clear_api_key()
+        self._key_edit.clear()
+        self._key_edit.setPlaceholderText("AIza…")
+        self._key_status.setText("Stored key deleted.")
+        self._key_status.setStyleSheet("color: gray;")
+
+    # --- audio ------------------------------------------------------------
+
+    def _audio_tab(self, settings: Settings) -> QWidget:
+        form = QFormLayout()
+
         self._device = QComboBox()
         self._device.addItem("System default input", "")
         for dev in list_input_devices():
@@ -80,9 +310,109 @@ class SettingsDialog(QDialog):
             )
         idx = self._device.findData(settings.audio_device_name)
         self._device.setCurrentIndex(idx if idx >= 0 else 0)
+        self._device.currentIndexChanged.connect(self._device_changed)
         form.addRow("Audio input", self._device)
 
-        # --- layout ---
+        self._meter = QProgressBar()
+        self._meter.setRange(0, 100)
+        self._meter.setTextVisible(False)
+        self._meter.setMinimumWidth(300)
+        form.addRow("Input level", self._meter)
+
+        self._meter_label = QLabel("Not running.")
+        form.addRow("", self._meter_label)
+
+        self._meter_btn = QPushButton("Start Level Test")
+        self._meter_btn.setToolTip(
+            "Open the selected device and show its level. Speak, or play the source,\n"
+            "and aim for the green band."
+        )
+        self._meter_btn.clicked.connect(self._toggle_meter)
+        form.addRow("", self._meter_btn)
+
+        hint = QLabel(
+            "Aim for peaks around -12 dBFS. A device with nothing routed into it sits near "
+            "-88 dBFS, while a live microphone in a quiet room reads about -36."
+        )
+        hint.setWordWrap(True)
+        hint.setStyleSheet("color: gray;")
+        form.addRow("", hint)
+
+        self._meter_timer = QTimer(self)
+        self._meter_timer.timeout.connect(self._poll_meter)
+
+        page = QWidget()
+        page.setLayout(form)
+        return page
+
+    def _device_changed(self) -> None:
+        if self._capture is not None:
+            self._stop_meter()
+            self._start_meter()
+
+    def _toggle_meter(self) -> None:
+        if self._capture is None:
+            self._start_meter()
+        else:
+            self._stop_meter()
+
+    def _start_meter(self) -> None:
+        name = self._device.currentData() or ""
+        capture = AudioCapture(device_name=name)
+        try:
+            dev = capture.start()
+        except (RuntimeError, OSError, ValueError) as exc:
+            self._meter_label.setText(f"Could not open the device: {exc}")
+            self._meter_label.setStyleSheet("color: #C0392B;")
+            return
+        self._capture = capture
+        self._meter_btn.setText("Stop Level Test")
+        self._meter_label.setStyleSheet("")
+        self._meter_label.setText(f"Listening to {dev.name}…")
+        self._meter_timer.start(METER_MS)
+
+    def _stop_meter(self) -> None:
+        self._meter_timer.stop()
+        capture, self._capture = self._capture, None
+        if capture is not None:
+            try:
+                capture.stop()
+            except Exception:  # noqa: BLE001 — closing a meter must not raise
+                _log.exception("error stopping the level meter")
+        self._meter.setValue(0)
+        self._meter_btn.setText("Start Level Test")
+        self._meter_label.setText("Not running.")
+        self._meter_label.setStyleSheet("")
+
+    def _poll_meter(self) -> None:
+        if self._capture is None:
+            return
+        peak = self._capture.take_peak()
+        self._meter.setValue(peak_to_percent(peak))
+        self._meter_label.setText(peak_verdict(peak))
+
+    # --- appearance -------------------------------------------------------
+
+    def _appearance_tab(self, settings: Settings) -> QWidget:
+        form = QFormLayout()
+
+        self._bg_color = _ColorButton(settings.bg_color, "Background colour")
+        form.addRow("Background colour", self._bg_color)
+
+        self._box_color = _ColorButton(settings.box_color, "Caption box colour", alpha=True)
+        self._box_color.set_opacity(settings.box_opacity)
+        form.addRow("Caption box colour", self._box_color)
+
+        self._text_color = _ColorButton(settings.text_color, "Text colour")
+        form.addRow("Text colour", self._text_color)
+
+        self._position = QComboBox()
+        for position in BoxPosition:
+            self._position.addItem(BOX_POSITION_MENU_TEXT[position], position.value)
+        pos_idx = self._position.findData(settings.box_position)
+        self._position.setCurrentIndex(pos_idx if pos_idx >= 0 else 0)
+        form.addRow("Caption position", self._position)
+
         self._font_size = self._spin(settings.font_size, 24, 96, " px")
         form.addRow("Font size", self._font_size)
 
@@ -95,34 +425,11 @@ class SettingsDialog(QDialog):
         self._box_width, box_width_row = self._slider(settings.box_max_width_pct, 60, 100, "%")
         form.addRow("Box max width", box_width_row)
 
-        self._clear_after, clear_after_row = self._slider(
-            int(settings.clear_after_seconds * 10), 0, 100, ""
-        )
-        self._clear_after.setToolTip("0 keeps captions on screen indefinitely.")
-        form.addRow("Clear after silence (0.1 s steps)", clear_after_row)
-
         self._bottom_margin, margin_row = self._slider(settings.bottom_margin_pct, 2, 20, "%")
-        form.addRow("Bottom margin", margin_row)
+        form.addRow("Edge margin", margin_row)
 
         self._opacity, opacity_row = self._slider(int(settings.box_opacity * 100), 60, 100, "%")
         form.addRow("Box opacity", opacity_row)
-
-        # --- behaviour ---
-        self._save_transcript = QCheckBox("Save the transcript as a .md file")
-        self._save_transcript.setToolTip("The filename is the session start timestamp.")
-        self._save_transcript.setChecked(settings.save_transcript)
-        form.addRow("", self._save_transcript)
-
-        self._transcript_dir = QLineEdit(settings.transcript_dir)
-        self._transcript_dir.setMinimumWidth(260)
-        browse = QPushButton("Browse…")
-        browse.clicked.connect(self._pick_transcript_dir)
-        dir_row = QHBoxLayout()
-        dir_row.addWidget(self._transcript_dir)
-        dir_row.addWidget(browse)
-        dir_holder = QWidget()
-        dir_holder.setLayout(dir_row)
-        form.addRow("Transcript folder", dir_holder)
 
         self._fixed_box = QCheckBox("Always show the caption box (fixed size)")
         self._fixed_box.setToolTip(
@@ -138,6 +445,49 @@ class SettingsDialog(QDialog):
         self._fullscreen = QCheckBox("Start in full screen")
         self._fullscreen.setChecked(settings.fullscreen)
         form.addRow("", self._fullscreen)
+
+        page = QWidget()
+        page.setLayout(form)
+        return page
+
+    # --- behaviour --------------------------------------------------------
+
+    def _behaviour_tab(self, settings: Settings) -> QWidget:
+        form = QFormLayout()
+
+        self._target_lang = QLineEdit(settings.target_language_code)
+        self._target_lang.setMaximumWidth(80)
+        self._target_lang.setToolTip(
+            "en = Korean→English (key 1), ko = English→Korean (key 2).\n"
+            "The source language is detected by the model, never specified."
+        )
+        form.addRow("Target language", self._target_lang)
+
+        self._direction_hint = QCheckBox("Briefly show the direction below the captions")
+        self._direction_hint.setChecked(settings.show_direction_hint)
+        form.addRow("", self._direction_hint)
+
+        self._clear_after, clear_after_row = self._slider(
+            int(settings.clear_after_seconds * 10), 0, 100, ""
+        )
+        self._clear_after.setToolTip("0 keeps captions on screen indefinitely.")
+        form.addRow("Clear after silence (0.1 s steps)", clear_after_row)
+
+        self._save_transcript = QCheckBox("Save the transcript as a .md file")
+        self._save_transcript.setToolTip("The filename is the session start timestamp.")
+        self._save_transcript.setChecked(settings.save_transcript)
+        form.addRow("", self._save_transcript)
+
+        self._transcript_dir = QLineEdit(settings.transcript_dir)
+        self._transcript_dir.setMinimumWidth(260)
+        browse = QPushButton("Browse…")
+        browse.clicked.connect(self._pick_transcript_dir)
+        dir_row = QHBoxLayout()
+        dir_row.addWidget(self._transcript_dir)
+        dir_row.addWidget(browse)
+        dir_holder = QWidget()
+        dir_holder.setLayout(dir_row)
+        form.addRow("Transcript folder", dir_holder)
 
         self._silence_gate = QCheckBox("Stop sending during silence (saves cost)")
         self._silence_gate.setToolTip(
@@ -155,27 +505,17 @@ class SettingsDialog(QDialog):
         self._policy.setToolTip("Fix this to match the measurements in spikes/RESULTS.md.")
         form.addRow("Caption commit policy", self._policy)
 
-        self._target_lang = QLineEdit(settings.target_language_code)
-        self._target_lang.setMaximumWidth(80)
-        self._target_lang.setToolTip(
-            "en = Korean→English (key 1), ko = English→Korean (key 2).\n"
-            "The source language is detected by the model, never specified."
+        self._debug_logging = QCheckBox("Verbose logging to the terminal")
+        self._debug_logging.setToolTip(
+            "Was LIVECAP_DEBUG in .env. Takes effect on the next launch.\n"
+            "Key values are never logged."
         )
-        form.addRow("Target language", self._target_lang)
+        self._debug_logging.setChecked(settings.debug_logging)
+        form.addRow("", self._debug_logging)
 
-        self._direction_hint = QCheckBox("Briefly show the direction below the captions")
-        self._direction_hint.setChecked(settings.show_direction_hint)
-        form.addRow("", self._direction_hint)
-
-        buttons = QDialogButtonBox(
-            QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel
-        )
-        buttons.accepted.connect(self._accept)
-        buttons.rejected.connect(self.reject)
-
-        root = QVBoxLayout(self)
-        root.addLayout(form)
-        root.addWidget(buttons)
+        page = QWidget()
+        page.setLayout(form)
+        return page
 
     # --- widget helpers ---------------------------------------------------
 
@@ -207,23 +547,34 @@ class SettingsDialog(QDialog):
         if chosen:
             self._transcript_dir.setText(chosen)
 
-    def _clear_key(self) -> None:
-        config.clear_api_key()
-        self._key_edit.clear()
-        self._key_edit.setPlaceholderText("AIza…")
+    # --- lifetime ---------------------------------------------------------
 
     def _accept(self) -> None:
         typed = self._key_edit.text().strip()
         if typed:
-            config.save_api_key(typed)
+            config.save_api_key(typed, to_keychain=self._also_keychain.isChecked())
+        self._stop_meter()
         self.accept()
+
+    def reject(self) -> None:  # noqa: D102 — Qt override
+        self._stop_meter()
+        super().reject()
+
+    def closeEvent(self, event) -> None:  # noqa: N802 (Qt naming)
+        # The meter holds the microphone open; never leave it running.
+        self._stop_meter()
+        super().closeEvent(event)
 
     # --- result -----------------------------------------------------------
 
     def result_settings(self) -> Settings:
         return replace(
             self._settings,
+            bg_color=self._bg_color.value(),
+            box_color=self._box_color.value(),
+            text_color=self._text_color.value(),
             audio_device_name=self._device.currentData() or "",
+            box_position=self._position.currentData(),
             font_size=self._font_size.value(),
             max_lines=self._max_lines.value(),
             corner_radius=self._radius.value(),
@@ -240,4 +591,5 @@ class SettingsDialog(QDialog):
             silence_gate=self._silence_gate.isChecked(),
             caption_policy=self._policy.currentData(),
             target_language_code=self._target_lang.text().strip() or "en",
+            debug_logging=self._debug_logging.isChecked(),
         ).clamped()

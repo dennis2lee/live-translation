@@ -23,6 +23,8 @@ _log = log.get(__name__)
 MACOS = "darwin"
 WINDOWS = "win32"
 
+_CF_STRING_ENCODING_UTF8 = 0x08000100
+
 
 def _plat() -> str:
     return sys.platform
@@ -75,6 +77,61 @@ def reveal_command(path: Path) -> list[str]:
     return ["xdg-open", str(path)]
 
 
+# --- the name macOS shows in the menu bar ---------------------------------
+
+
+def set_app_name(name: str) -> bool:
+    """Make the application menu read `name` rather than the interpreter's.
+
+    Running from source, AppKit takes the application menu title — and the
+    "About …" item with it — from the main bundle, which for `python -m` is
+    the interpreter. A packaged build already carries the right CFBundleName,
+    so this is a no-op there. Best-effort: a failure only costs a menu title.
+    """
+    if not is_macos():
+        return False
+    try:
+        objc = ctypes.cdll.LoadLibrary(ctypes.util.find_library("objc"))
+        cf = ctypes.cdll.LoadLibrary(ctypes.util.find_library("CoreFoundation"))
+
+        objc.objc_getClass.restype = ctypes.c_void_p
+        objc.objc_getClass.argtypes = [ctypes.c_char_p]
+        objc.sel_registerName.restype = ctypes.c_void_p
+        objc.sel_registerName.argtypes = [ctypes.c_char_p]
+        cf.CFStringCreateWithCString.restype = ctypes.c_void_p
+        cf.CFStringCreateWithCString.argtypes = [
+            ctypes.c_void_p, ctypes.c_char_p, ctypes.c_uint32
+        ]
+
+        send = objc.objc_msgSend
+        send.restype = ctypes.c_void_p
+        send.argtypes = [ctypes.c_void_p, ctypes.c_void_p]
+
+        bundle_class = objc.objc_getClass(b"NSBundle")
+        bundle = send(bundle_class, objc.sel_registerName(b"mainBundle"))
+        info = send(bundle, objc.sel_registerName(b"infoDictionary"))
+        if not info:
+            return False
+
+        # infoDictionary is an __NSDictionaryM in practice, so it takes a write.
+        set_object = objc.objc_msgSend
+        set_object.restype = None
+        set_object.argtypes = [
+            ctypes.c_void_p, ctypes.c_void_p, ctypes.c_void_p, ctypes.c_void_p
+        ]
+        value = cf.CFStringCreateWithCString(
+            None, name.encode("utf-8"), _CF_STRING_ENCODING_UTF8
+        )
+        key = cf.CFStringCreateWithCString(
+            None, b"CFBundleName", _CF_STRING_ENCODING_UTF8
+        )
+        set_object(info, objc.sel_registerName(b"setObject:forKey:"), value, key)
+    except Exception as exc:  # noqa: BLE001 — a menu title is not worth raising for
+        _log.debug("could not set the application menu name: %s", exc)
+        return False
+    return True
+
+
 # --- keeping the display awake --------------------------------------------
 
 # kIOPMAssertionTypeNoDisplaySleep. Stops the idle timer that blanks the
@@ -82,7 +139,6 @@ def reveal_command(path: Path) -> list[str]:
 # holds. It does not stop the lid switch or a manual lock.
 _NO_DISPLAY_SLEEP = b"NoDisplaySleepAssertion"
 _ASSERTION_LEVEL_ON = 255
-_CF_STRING_ENCODING_UTF8 = 0x08000100
 
 
 class DisplaySleepBlocker:

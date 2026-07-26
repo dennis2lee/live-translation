@@ -17,9 +17,4 @@ if ! "$PY" -c "import livecap" >/dev/null 2>&1; then
     "$PY" -m pip install -q -e '.[dev]'
 fi
 
-if [[ ! -f .env ]]; then
-    echo "==> No .env found. Copy the example and fill in your key:" >&2
-    echo "        cp .env.example .env" >&2
-fi
-
 exec "$PY" -m livecap.app "$@"

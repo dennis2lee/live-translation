@@ -79,31 +79,30 @@ Your prepayment credits are depleted.
 
 ## 6. Configure the key
 
-```bash
-cp .env.example .env
-```
+Everything is configured in the app. Start it, open **Preferences… (⌘,) → API
+Key**, paste the key, and press **Test Key** to confirm it works before you
+close the dialog.
 
-Edit `.env` and set your key:
+- The key is encrypted and written to `~/Library/Application Support/LiveCap/credentials.enc`, mode 0600
+- **Test Key** lists the models the key can reach — it is free and does not open a session
+- Tick **Also store in the macOS Keychain** if you would rather rely on the Keychain
 
-```
-GEMINI_API_KEY=your-key-here
-```
-
-- `.env` is gitignored and will not be committed
-- Never put a real key in `.env.example` — that file *is* committed
-- Leaving the placeholder text in place is treated as "no key"
+There is no `.env` file. An older install that has one will have its key
+imported into the encrypted store automatically, once, at the next launch;
+after that the file is ignored and can be deleted.
 
 The key is looked up in this order:
 
 | Order | Source |
 |---|---|
 | 1 | `GEMINI_API_KEY` / `GOOGLE_API_KEY` environment variable |
-| 2 | `.env` in the current working directory |
-| 3 | `.env` in the repository root |
-| 4 | macOS Keychain (`LiveCap` / `gemini-api-key`) |
-| 5 | Entered in **Preferences…** (⌘,), then stored in the Keychain |
+| 2 | Encrypted store (written by Preferences) |
+| 3 | macOS Keychain (`LiveCap` / `gemini-api-key`) |
 
-Setting `LIVECAP_ENV_FILE` to a path overrides all of the `.env` lookups.
+> **On the encryption.** The passphrase is part of the application, so anyone
+> holding a copy can decrypt the file. It keeps the key out of plain sight —
+> out of backups, screen shares and stray `cat` commands — but it is not a
+> substitute for the Keychain, which your login password protects.
 
 ## 7. Run
 
@@ -213,13 +212,11 @@ The repository root does not exist inside a bundle, so the order differs:
 | Order | Source |
 |---|---|
 | 1 | `GEMINI_API_KEY` / `GOOGLE_API_KEY` environment variable |
-| 2 | `.env` in the current directory |
-| 3 | `~/Library/Application Support/LiveCap/.env` |
-| 4 | `.env` beside `LiveCap.app` |
-| 5 | macOS Keychain |
+| 2 | `~/Library/Application Support/LiveCap/credentials.enc` |
+| 3 | macOS Keychain |
 
-For a recipient, **Preferences… (⌘,) → Gemini API key** is the intended route —
-it stores the key in their Keychain.
+The bundle needs no extra files beside it. For a recipient,
+**Preferences… (⌘,) → API Key** is the whole setup: paste, **Test Key**, done.
 
 ### Signing and notarisation
 
@@ -244,7 +241,7 @@ right-clicking → Open, or via System Settings → Privacy & Security → Open 
 |---|---|---|
 | `ModuleNotFoundError: No module named 'livecap'` | Package not installed into the venv | `.venv/bin/python -m pip install -e .` |
 | `Your prepayment credits are depleted` | No billing on the key's project | Attach billing, confirm key and billing share a project |
-| `API key required` in the caption area | Key not found | Check `.env`; placeholder text counts as missing |
+| `API key required` in the caption area | Key not found | Preferences → API Key, then **Test Key**; placeholder text counts as missing |
 | Dot is green but no captions appear | Microphone permission denied — the stream delivers silence | System Settings → Privacy & Security → Microphone |
 | Dot turns red saying "Session keeps dropping" | The service accepted the connection then closed it repeatedly | Check the network, then retry; LiveCap backs off rather than reconnecting in a loop |
 | `No audio input device found` | No CoreAudio input device | Plug in an interface; re-open the device menu to rescan |

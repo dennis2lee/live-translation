@@ -2,13 +2,14 @@
 
 from __future__ import annotations
 
+import logging
 import signal
 import sys
 
 from PyQt6.QtCore import QTimer
 from PyQt6.QtWidgets import QApplication
 
-from . import config
+from . import config, platform_support
 from .ui.main_window import CaptionWindow
 from .util import logging as log
 
@@ -85,23 +86,30 @@ def selftest() -> int:
 
 def main() -> int:
     if "--selftest" in sys.argv:
-        config.apply_dotenv_to_environ()
         log.setup()
+        config.migrate_dotenv_once()
         return selftest()
 
-    # Load .env first so values like LIVECAP_DEBUG reach the logging setup.
-    loaded = config.apply_dotenv_to_environ()
-    log.setup()
-    if loaded:
-        # Log the variable names only. Never log a key's value.
-        log.get(__name__).info("loaded from .env: %s", ", ".join(sorted(loaded)))
+    settings = config.load()
+    log.setup(logging.DEBUG if settings.debug_logging else None)
+
+    # `.env` is no longer read at run time; this only rescues a key left in one
+    # by an install that predates the encrypted store.
+    imported = config.migrate_dotenv_once()
+    if imported:
+        # The variable name only. Never a key's value.
+        log.get(__name__).info("imported %s from .env into the encrypted store", imported)
+
+    # Must happen before QApplication builds the menu bar, or the application
+    # menu and its "About …" item are named after the interpreter.
+    platform_support.set_app_name("LiveCap")
 
     app = QApplication(sys.argv)
     app.setApplicationName("LiveCap")
     app.setOrganizationName("LiveCap")
     app.setApplicationDisplayName("LiveCap")
 
-    window = CaptionWindow(config.load())
+    window = CaptionWindow(settings)
 
     # Every exit route ends here, so a live session is always closed cleanly:
     # aboutToQuit covers the macOS Quit item, which bypasses closeEvent.

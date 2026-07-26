@@ -119,6 +119,53 @@ def test_reveal_command_passes_the_path_as_a_string(on):
     assert "~" not in cmd[1]
 
 
+# --- the name macOS shows in the menu bar ---------------------------------
+
+
+def test_setting_the_app_name_is_declined_off_macos(on):
+    for plat in ("win32", "linux"):
+        on(plat)
+        assert ps.set_app_name("LiveCap") is False
+
+
+@pytest.mark.skipif(sys.platform != "darwin", reason="macOS bundle info")
+def test_macos_really_renames_the_bundle():
+    """AppKit takes the application menu title from here."""
+    import ctypes
+    import ctypes.util
+
+    assert ps.set_app_name("LiveCapTest") is True
+
+    objc = ctypes.cdll.LoadLibrary(ctypes.util.find_library("objc"))
+    cf = ctypes.cdll.LoadLibrary(ctypes.util.find_library("CoreFoundation"))
+    objc.objc_getClass.restype = ctypes.c_void_p
+    objc.objc_getClass.argtypes = [ctypes.c_char_p]
+    objc.sel_registerName.restype = ctypes.c_void_p
+    objc.sel_registerName.argtypes = [ctypes.c_char_p]
+    cf.CFStringCreateWithCString.restype = ctypes.c_void_p
+    cf.CFStringCreateWithCString.argtypes = [ctypes.c_void_p, ctypes.c_char_p, ctypes.c_uint32]
+    cf.CFStringGetCString.argtypes = [ctypes.c_void_p, ctypes.c_char_p, ctypes.c_long,
+                                      ctypes.c_uint32]
+    send = ctypes.cast(
+        objc.objc_msgSend,
+        ctypes.CFUNCTYPE(ctypes.c_void_p, ctypes.c_void_p, ctypes.c_void_p),
+    )
+    send_key = ctypes.cast(
+        objc.objc_msgSend,
+        ctypes.CFUNCTYPE(ctypes.c_void_p, ctypes.c_void_p, ctypes.c_void_p, ctypes.c_void_p),
+    )
+    bundle = send(objc.objc_getClass(b"NSBundle"), objc.sel_registerName(b"mainBundle"))
+    info = send(bundle, objc.sel_registerName(b"infoDictionary"))
+    key = cf.CFStringCreateWithCString(None, b"CFBundleName", 0x08000100)
+    value = send_key(info, objc.sel_registerName(b"objectForKey:"), key)
+    buf = ctypes.create_string_buffer(256)
+    cf.CFStringGetCString(value, buf, 256, 0x08000100)
+    try:
+        assert buf.value.decode() == "LiveCapTest"
+    finally:
+        ps.set_app_name("LiveCap")
+
+
 # --- keeping the display awake --------------------------------------------
 
 
