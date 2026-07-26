@@ -194,6 +194,9 @@ class AudioCapture:
         self._lock = threading.Lock()
         self._on_error = on_error
         self.device: InputDevice | None = None
+        # Written by the audio callback, read by the UI. A plain float, so no
+        # lock is needed: a torn read would only mislead one status check.
+        self._peak = 0.0
 
     @property
     def native_rate(self) -> int:
@@ -206,6 +209,16 @@ class AudioCapture:
     @property
     def is_running(self) -> bool:
         return self._stream is not None and self._stream.active
+
+    def take_peak(self) -> float:
+        """Highest sample seen since the last call, 0.0–1.0.
+
+        Lets the UI tell "nobody is speaking" from "this device is delivering
+        nothing at all" — an input routed to silence opens and streams happily,
+        so without this the two look identical.
+        """
+        peak, self._peak = self._peak, 0.0
+        return peak
 
     def start(self) -> InputDevice:
         """Open the stream. Raises RuntimeError if no device can be found."""
@@ -220,6 +233,7 @@ class AudioCapture:
             self._native_rate = int(dev.default_samplerate) or 48_000
             self._channels = min(dev.channels, 2)
             self._underruns = 0
+            self._peak = 0.0
             # The streaming resampler carries filter state across chunk boundaries.
             # Calling the one-shot soxr.resample() per chunk clicks at every seam.
             self._resampler = soxr.ResampleStream(
@@ -276,6 +290,10 @@ class AudioCapture:
         if resampler is None:
             return
         mono = indata.mean(axis=1) if indata.shape[1] > 1 else indata[:, 0]
+        if mono.size:
+            block_peak = float(np.max(np.abs(mono)))
+            if block_peak > self._peak:
+                self._peak = block_peak
         out = resampler.resample_chunk(np.ascontiguousarray(mono, dtype=np.float32))
         if out.size:
             self.ring.write(float_to_pcm16(out))

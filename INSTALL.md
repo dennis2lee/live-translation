@@ -249,6 +249,8 @@ right-clicking → Open, or via System Settings → Privacy & Security → Open 
 | Dot turns red saying "Session keeps dropping" | The service accepted the connection then closed it repeatedly | Check the network, then retry; LiveCap backs off rather than reconnecting in a loop |
 | `No audio input device found` | No CoreAudio input device | Plug in an interface; re-open the device menu to rescan |
 | USB interface missing from the menu | Menu was built before you plugged it in | Close and re-open the menu — it rescans each time |
+| `No audio from <device>` | The device streams, but nothing is routed into its input | Check the physical input, its gain, and that macOS shows the level moving under System Settings → Sound → Input |
+| A USB DAC or headphone amp captures nothing | Its input is the line/mic jack, not what the Mac is playing | Plug a source into the jack; to capture system audio you need a loopback device instead |
 | Captions look tiny on a 4K display | Font size is in pixels, not relative | Settings → Font Size → 72 or 96 |
 | New defaults do not take effect | Saved settings win over code defaults | Settings → Reset to Defaults, or `defaults delete com.livecap.LiveCap` while the app is closed |
 

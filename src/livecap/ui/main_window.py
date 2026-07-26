@@ -37,6 +37,13 @@ _log = log.get(__name__)
 TICK_MS = 100
 CURSOR_HIDE_MS = 3000
 NOTICE_SECONDS = 6.0
+
+# A device routed to silence opens and streams happily, so it looks exactly
+# like nobody talking. Warn once the input has stayed below the noise floor of
+# a live microphone for this long. Measured: a quiet room reads about -36 dBFS
+# on a built-in mic, while an input with nothing routed to it reads -88.
+SILENT_INPUT_SECONDS = 12.0
+SILENT_INPUT_PEAK = 0.002  # about -54 dBFS
 FONT_SIZE_CHOICES = (24, 32, 44, 56, 72, 96)
 LINE_COUNT_CHOICES = (1, 2, 3, 4)
 
@@ -80,6 +87,9 @@ class CaptionWindow(QMainWindow):
         self._writer: TranscriptWriter | None = None
         self._started_at = 0.0
         self._shutting_down = False
+        self._display_lock = platform_support.DisplaySleepBlocker()
+        self._loud_at = 0.0
+        self._warned_silent = False
 
         self._buffer = CaptionBuffer(
             max_lines=settings.max_lines,
@@ -557,6 +567,11 @@ class CaptionWindow(QMainWindow):
         self._translator.start()
         self._state = State.CONNECTING
         self._error_detail = ""
+        # Captions are for watching, not typing, so the idle timer would blank
+        # the screen mid-session — on battery especially.
+        self._display_lock.acquire()
+        self._loud_at = time.monotonic()
+        self._warned_silent = False
         self._sync_actions()
         self._refresh_overlay()
         self._reset_cursor_timer()
@@ -585,6 +600,12 @@ class CaptionWindow(QMainWindow):
                 capture.stop()
             except Exception:  # noqa: BLE001
                 _log.exception("error stopping audio capture")
+
+        # Hand the display back to the system's idle timer.
+        try:
+            self._display_lock.release()
+        except Exception:  # noqa: BLE001
+            _log.exception("error releasing the display sleep assertion")
 
         # Make sure the final unsettled sentence reaches the transcript.
         if writer is not None:
@@ -650,6 +671,28 @@ class CaptionWindow(QMainWindow):
         if self._buffer.tick(time.monotonic()):
             self._push_lines()
         self._record_new_lines()
+        self._check_input_level()
+
+    def _check_input_level(self) -> None:
+        """Warn when the chosen device is delivering nothing at all.
+
+        A misrouted input streams silence rather than failing, so without this
+        a dead device is indistinguishable from a quiet room.
+        """
+        capture = self._capture
+        if capture is None or self._state is State.IDLE:
+            return
+        now = time.monotonic()
+        if capture.take_peak() >= SILENT_INPUT_PEAK:
+            self._loud_at = now
+            self._warned_silent = False
+            return
+        if self._warned_silent or now - self._loud_at < SILENT_INPUT_SECONDS:
+            return
+        self._warned_silent = True
+        name = capture.device.name if capture.device is not None else "the input device"
+        _log.warning("no signal from %r for %.0fs", name, SILENT_INPUT_SECONDS)
+        self._show_notice(f"No audio from {name} — check the input and its level")
 
     def _push_lines(self) -> None:
         self._view.set_lines(self._buffer.display_lines())

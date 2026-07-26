@@ -126,6 +126,21 @@ Pick a device under **Settings → Audio Input**.
 - Devices are stored **by name**, not index — indexes change across reconnects
 - If a stored device is missing, LiveCap falls back to the system default and says so
 - Set your mixer peak near **-12 dBFS**; the app applies no software gain
+- Any sample rate and channel count works — the device is opened at its own rate and downmixed to mono
+
+If the chosen device delivers nothing for 12 seconds, LiveCap says
+`No audio from <device>`. A misrouted input opens and streams silence rather
+than failing, so without that warning a dead device looks exactly like a quiet
+room. Levels for reference: a quiet room on a built-in mic reads about
+**-36 dBFS**, while an input with nothing routed into it reads about **-88**.
+
+## Display sleep
+
+While translating, LiveCap holds a `NoDisplaySleepAssertion`, so the screen
+stays lit on battery as well as on mains — you are watching captions, not
+typing, so the idle timer would otherwise blank them. The assertion is
+released the moment translation stops, and it does not override closing the
+lid or locking the screen yourself.
 
 Internally the device is opened at its native rate (usually 48 kHz) and
 resampled to 16 kHz with `soxr`, never by asking CoreAudio for 16 kHz directly.

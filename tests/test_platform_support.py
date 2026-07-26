@@ -6,6 +6,7 @@ branches cannot rot before anyone builds for them.
 
 from __future__ import annotations
 
+import sys
 from pathlib import Path
 
 import pytest
@@ -116,6 +117,87 @@ def test_reveal_command_passes_the_path_as_a_string(on):
     cmd = ps.reveal_command(Path("~/Documents/LiveCap").expanduser())
     assert all(isinstance(part, str) for part in cmd)
     assert "~" not in cmd[1]
+
+
+# --- keeping the display awake --------------------------------------------
+
+
+def test_blocker_starts_holding_nothing():
+    assert ps.DisplaySleepBlocker().held is False
+
+
+def test_non_macos_declines_rather_than_guessing(on):
+    """Windows and Linux need different APIs; neither is shipped, so neither is faked."""
+    for plat in ("win32", "linux"):
+        on(plat)
+        blocker = ps.DisplaySleepBlocker()
+        assert blocker.acquire() is False
+        assert blocker.held is False
+        blocker.release()  # must not raise
+
+
+def test_release_without_acquire_is_a_noop():
+    ps.DisplaySleepBlocker().release()  # must not raise
+
+
+def test_a_refused_assertion_does_not_raise(on, monkeypatch):
+    """Translating matters more than the screen; a failure is logged, not fatal."""
+    on("darwin")
+
+    def boom():
+        raise OSError("IOKit unavailable")
+
+    monkeypatch.setattr(ps, "_power_libraries", boom)
+    blocker = ps.DisplaySleepBlocker()
+    assert blocker.acquire() is False
+    assert blocker.held is False
+
+
+def test_a_nonzero_status_is_treated_as_failure(on, monkeypatch):
+    on("darwin")
+
+    class _FakeIOKit:
+        def IOPMAssertionCreateWithName(self, *_a):  # noqa: N802 (mirrors the C name)
+            return 1  # kIOReturnError
+
+    class _FakeCF:
+        def CFStringCreateWithCString(self, *_a):  # noqa: N802
+            return 0
+
+    monkeypatch.setattr(ps, "_power_libraries", lambda: (_FakeIOKit(), _FakeCF()))
+    assert ps.DisplaySleepBlocker().acquire() is False
+
+
+@pytest.mark.skipif(sys.platform != "darwin", reason="macOS power assertions")
+def test_macos_really_takes_and_releases_the_assertion():
+    """The real IOKit call, checked against pmset."""
+    import subprocess
+
+    blocker = ps.DisplaySleepBlocker()
+    assert blocker.acquire("LiveCap test assertion") is True
+    assert blocker.held is True
+    try:
+        listed = subprocess.run(
+            ["pmset", "-g", "assertions"], capture_output=True, text=True
+        ).stdout
+        assert "LiveCap test assertion" in listed
+    finally:
+        blocker.release()
+    assert blocker.held is False
+    listed = subprocess.run(
+        ["pmset", "-g", "assertions"], capture_output=True, text=True
+    ).stdout
+    assert "LiveCap test assertion" not in listed
+
+
+@pytest.mark.skipif(sys.platform != "darwin", reason="macOS power assertions")
+def test_acquiring_twice_holds_one_assertion():
+    blocker = ps.DisplaySleepBlocker()
+    assert blocker.acquire() is True
+    first = blocker._assertion_id
+    assert blocker.acquire() is True
+    assert blocker._assertion_id is first  # not a second, leaked assertion
+    blocker.release()
 
 
 # --- wiring ---------------------------------------------------------------

@@ -6,6 +6,7 @@ The window must build and its menus populate without an audio device or API key.
 from __future__ import annotations
 
 import os
+import time
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
@@ -523,6 +524,146 @@ def test_an_error_detail_outranks_a_notice(window):
     window._show_notice("just a warning")
     window._on_state_changed(State.ERROR.value, "Billing credits exhausted")
     assert window._view._status == "Billing credits exhausted"
+
+
+# --- keeping the display awake --------------------------------------------
+
+
+class _FakeBlocker:
+    def __init__(self):
+        self.events: list[str] = []
+        self.held = False
+
+    def acquire(self, reason: str = "") -> bool:
+        self.events.append("acquire")
+        self.held = True
+        return True
+
+    def release(self) -> None:
+        self.events.append("release")
+        self.held = False
+
+
+def test_translating_keeps_the_display_awake(window, monkeypatch, tmp_path):
+    """Captions are watched, not typed at, so the idle timer would blank them."""
+    blocker = _FakeBlocker()
+    window._display_lock = blocker
+    _running_window(window, monkeypatch, tmp_path)
+    assert blocker.held is True
+
+    window.stop_translation()
+    assert blocker.held is False
+    assert blocker.events == ["acquire", "release"]
+
+
+def test_quitting_releases_the_display(window, monkeypatch, tmp_path):
+    blocker = _FakeBlocker()
+    window._display_lock = blocker
+    _running_window(window, monkeypatch, tmp_path)
+    window.shutdown()
+    assert blocker.held is False
+
+
+def test_the_display_is_released_even_if_capture_fails_to_stop(
+    window, monkeypatch, tmp_path
+):
+    """A stuck device must not leave the screen pinned awake forever."""
+    blocker = _FakeBlocker()
+    window._display_lock = blocker
+
+    class _Stuck(_StubCapture):
+        def stop(self):
+            raise RuntimeError("device wedged")
+
+    monkeypatch.setattr(mw.config, "load_api_key", lambda: "test-key")
+    monkeypatch.setattr(mw, "AudioCapture", lambda *a, **k: _Stuck())
+    monkeypatch.setattr(mw, "LiveTranslator", _StubTranslator)
+    window._update(transcript_dir=str(tmp_path))
+    window.start_translation()
+    window.shutdown()
+    assert blocker.held is False
+
+
+def test_idle_does_not_hold_the_display(window):
+    assert window._display_lock.held is False
+
+
+# --- a device that delivers silence ---------------------------------------
+
+
+class _SilentCapture(_StubCapture):
+    """Opens and streams happily, like a misrouted input, but carries no signal."""
+
+    def __init__(self, peak: float = 0.0):
+        super().__init__()
+        self._peak = peak
+        self.device = InputDevice(1, "Sound Blaster X3", 2, 96000.0)
+
+    def take_peak(self) -> float:
+        return self._peak
+
+
+def _run_with_capture(window, monkeypatch, tmp_path, capture):
+    monkeypatch.setattr(mw.config, "load_api_key", lambda: "test-key")
+    monkeypatch.setattr(mw, "AudioCapture", lambda *a, **k: capture)
+    monkeypatch.setattr(mw, "LiveTranslator", _StubTranslator)
+    window._update(transcript_dir=str(tmp_path))
+    window.start_translation()
+
+
+def test_a_device_delivering_no_signal_is_reported(window, monkeypatch, tmp_path):
+    """A misrouted input looks exactly like a quiet room without this."""
+    _run_with_capture(window, monkeypatch, tmp_path, _SilentCapture(peak=0.0))
+    window._loud_at = time.monotonic() - mw.SILENT_INPUT_SECONDS - 1
+    window._check_input_level()
+    assert "No audio from Sound Blaster X3" in window._view._status
+
+
+def test_a_working_device_is_never_reported_as_silent(window, monkeypatch, tmp_path):
+    _run_with_capture(window, monkeypatch, tmp_path, _SilentCapture(peak=0.02))
+    window._loud_at = time.monotonic() - mw.SILENT_INPUT_SECONDS - 1
+    window._check_input_level()
+    assert window._view._status == ""
+
+
+def test_a_brief_pause_is_not_reported_as_silence(window, monkeypatch, tmp_path):
+    """Nobody speaking for a second or two is normal, not a fault."""
+    _run_with_capture(window, monkeypatch, tmp_path, _SilentCapture(peak=0.0))
+    window._loud_at = time.monotonic() - 2.0
+    window._check_input_level()
+    assert window._view._status == ""
+
+
+def test_the_silence_warning_is_not_repeated_every_tick(window, monkeypatch, tmp_path):
+    """The tick runs ten times a second; the warning must be raised once."""
+    capture = _SilentCapture(peak=0.0)
+    _run_with_capture(window, monkeypatch, tmp_path, capture)
+
+    notices: list[str] = []
+    monkeypatch.setattr(
+        mw.CaptionWindow, "_show_notice", lambda _self, text: notices.append(text)
+    )
+    window._loud_at = time.monotonic() - mw.SILENT_INPUT_SECONDS - 1
+    for _ in range(20):
+        window._check_input_level()
+    assert len(notices) == 1
+
+
+def test_signal_returning_rearms_the_warning(window, monkeypatch, tmp_path):
+    capture = _SilentCapture(peak=0.0)
+    _run_with_capture(window, monkeypatch, tmp_path, capture)
+    window._loud_at = time.monotonic() - mw.SILENT_INPUT_SECONDS - 1
+    window._check_input_level()
+    assert window._warned_silent is True
+
+    capture._peak = 0.05  # someone speaks
+    window._check_input_level()
+    assert window._warned_silent is False
+
+
+def test_no_silence_check_while_idle(window):
+    window._check_input_level()  # no capture at all — must not raise
+    assert window._view._status == ""
 
 
 # --- quitting with a session open -----------------------------------------
