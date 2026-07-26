@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "livecap"
-version = "0.3.0"
+version = "0.4.0"
 description = "Real-time speech translation captions for macOS"
 authors = [{ name = "Pyeongwoo Lee", email = "dennis2.lee@gmail.com" }]
 license = "LicenseRef-Proprietary"
