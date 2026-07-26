@@ -102,6 +102,6 @@ app = BUNDLE(  # noqa: F821
         "NSHighResolutionCapable": True,
         # The caption window is the whole UI; there is no document model.
         "LSUIElement": False,
-        "NSHumanReadableCopyright": "Copyright (c) 2026 Dennis Lee. MIT licence.",
+        "NSHumanReadableCopyright": "Copyright (c) 2026 Pyeongwoo Lee. MIT licence.",
     },
 )

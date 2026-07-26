@@ -97,6 +97,21 @@ to shut down, the microphone is still released and the transcript still closes.
 - Default width is **90%** of the window (5% margin each side), adjustable from 60–100%
 - Turn off **Settings → Always Show Caption Box** to make the box hug its content and disappear when empty
 
+### Position
+
+**Settings → Caption Position** moves the box vertically — useful when the
+lower part of the screen is covered by something else.
+
+| Choice | Where the box sits |
+|---|---|
+| Top | Anchored below the top edge |
+| Middle | Centred vertically |
+| Bottom | Anchored above the bottom edge (default) |
+
+The bottom-margin setting becomes the **top** margin when anchored to the top,
+and is ignored when centred. The direction hint and the status dot always stay
+just below the box, wherever it is.
+
 | Setting | Default | Range |
 |---|---|---|
 | Background colour | `#000000` | any |
@@ -106,6 +121,7 @@ to shut down, the microphone is still released and the transcript still closes.
 | Corner radius | 24 px | 0–48 |
 | Box max width | 90% | 60–100% |
 | Bottom margin | 8% | 2–20% |
+| Caption position | Bottom | Top / Middle / Bottom |
 | Font size | 44 px | 24–96 |
 | Max lines | 2 | 1–4 |
 
@@ -261,6 +277,12 @@ cd ~/work/live-translation && packaging/build_app.sh
 - `Info.plist` sets `NSMicrophoneUsageDescription`, without which macOS kills the app instead of prompting for the microphone
 - Verify any build with `dist/LiveCap.app/Contents/MacOS/LiveCap --selftest`
 - Add `--sign` to codesign for other machines — see [INSTALL.md](INSTALL.md)
+
+## Author
+
+Pyeongwoo Lee — <dennis2.lee@gmail.com>
+
+Also shown in the app under **LiveCap → About LiveCap**.
 
 ## License
 

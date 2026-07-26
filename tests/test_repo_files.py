@@ -71,3 +71,26 @@ def test_version_is_consistent_between_package_and_pyproject():
     with (ROOT / "pyproject.toml").open("rb") as fh:
         declared = tomllib.load(fh)["project"]["version"]
     assert declared == __version__
+
+
+def test_author_is_consistent_across_package_license_and_pyproject():
+    """One name in three places; they used to be able to drift apart."""
+    import tomllib
+
+    from livecap import __author__, __email__
+
+    assert __author__ in (ROOT / "LICENSE").read_text(encoding="utf-8")
+    assert __author__ in (ROOT / "README.md").read_text(encoding="utf-8")
+    assert __email__ in (ROOT / "README.md").read_text(encoding="utf-8")
+
+    with (ROOT / "pyproject.toml").open("rb") as fh:
+        authors = tomllib.load(fh)["project"]["authors"]
+    assert authors[0]["name"] == __author__
+    assert authors[0]["email"] == __email__
+
+
+def test_bundle_copyright_names_the_author():
+    from livecap import __author__
+
+    spec = (ROOT / "packaging" / "LiveCap.spec").read_text(encoding="utf-8")
+    assert __author__ in spec

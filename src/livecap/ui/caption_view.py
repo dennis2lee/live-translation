@@ -28,7 +28,7 @@ from PyQt6.QtGui import (
 from PyQt6.QtWidgets import QWidget
 
 from .. import platform_support
-from ..config import Settings
+from ..config import BoxPosition, Settings
 
 PAD_H = 32.0
 PAD_V = 24.0
@@ -322,8 +322,28 @@ class CaptionView(QWidget):
         p.drawText(rect, int(Qt.AlignmentFlag.AlignHCenter | Qt.AlignmentFlag.AlignVCenter),
                    self._status)
 
-    def _box_bottom(self) -> float:
-        return self.height() * (1.0 - self._settings.bottom_margin_pct / 100.0)
+    def _nominal_box_height(self) -> float:
+        """Height of a full box, for callers that place things before wrapping."""
+        fm = QFontMetricsF(self._caption_font())
+        return fm.height() * max(1, self._settings.max_lines) + 2 * PAD_V
+
+    def _box_bottom(self, box_h: float | None = None) -> float:
+        """The bottom edge of the caption box, wherever it is anchored.
+
+        Anchoring to the bottom needs no height, which is why the original
+        bottom-only layout never passed one. Top and middle do, so callers that
+        place the hint and the dot fall back to a nominal full-height box.
+        """
+        s = self._settings
+        margin = self.height() * s.bottom_margin_pct / 100.0
+        position = s.position
+        if position is BoxPosition.BOTTOM:
+            return self.height() - margin
+        if box_h is None:
+            box_h = self._nominal_box_height()
+        if position is BoxPosition.TOP:
+            return margin + box_h
+        return (self.height() + box_h) / 2.0  # middle
 
     def _paint_caption(self, p: QPainter) -> None:
         s = self._settings
@@ -354,7 +374,7 @@ class CaptionView(QWidget):
             box_w = min(max_box_w, text_w + 2 * PAD_H)
             box_h = line_h * len(wrapped) + 2 * PAD_V  # sized to the real line count
 
-        bottom = self._box_bottom()
+        bottom = self._box_bottom(box_h)
         box = QRectF((self.width() - box_w) / 2.0, bottom - box_h, box_w, box_h)
 
         # the box

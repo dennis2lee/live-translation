@@ -769,3 +769,75 @@ def test_close_event_shuts_down(window, monkeypatch, tmp_path):
     stopped = _run_session(window, monkeypatch, tmp_path, mw.Direction.EN_TO_KO)
     window.close()
     assert sorted(stopped) == ["capture", "translator"]
+
+
+# --- caption position -----------------------------------------------------
+
+
+def test_caption_position_menu_exists_with_all_three(window):
+    labels = [a.text() for a in find_menu(window, "Settings").actions() if a.menu()]
+    assert "Caption Position" in labels
+    items = [a.text() for a in window._position_actions.values()]
+    assert items == ["Top", "Middle", "Bottom"]
+
+
+def test_choosing_a_position_updates_the_setting(window):
+    window._position_actions[mw.BoxPosition.TOP].trigger()
+    assert window._settings.box_position == "top"
+    window._position_actions[mw.BoxPosition.CENTER].trigger()
+    assert window._settings.box_position == "center"
+
+
+def test_the_position_menu_reflects_the_current_setting(window):
+    window._update(box_position="top")
+    checked = [p for p, a in window._position_actions.items() if a.isChecked()]
+    assert checked == [mw.BoxPosition.TOP]
+
+
+def test_bottom_is_checked_by_default(window):
+    checked = [p for p, a in window._position_actions.items() if a.isChecked()]
+    assert checked == [mw.BoxPosition.BOTTOM]
+
+
+def test_changing_position_reaches_the_view(window):
+    window._update(box_position="top")
+    assert window._view._settings.box_position == "top"
+
+
+def test_changing_position_does_not_restart_a_session(window, monkeypatch, tmp_path):
+    """It is a cosmetic change; a live session must not be interrupted."""
+    made, events = _running_window(window, monkeypatch, tmp_path)
+    window._update(box_position="top")
+    window._apply_session_changes(replace(window._settings, box_position="bottom"))
+    assert len(made) == 1
+    assert "translator-stop" not in events
+
+
+# --- about ----------------------------------------------------------------
+
+
+def test_about_names_the_author(window, monkeypatch):
+    shown = {}
+    monkeypatch.setattr(
+        mw.QMessageBox, "about", lambda _p, title, text: shown.update(title=title, text=text)
+    )
+    window._show_about()
+    assert "Pyeongwoo Lee" in shown["text"]
+    assert "dennis2.lee@gmail.com" in shown["text"]
+
+
+def test_about_reports_the_package_version_and_model(window, monkeypatch):
+    from livecap import __version__
+
+    shown = {}
+    monkeypatch.setattr(
+        mw.QMessageBox, "about", lambda _p, title, text: shown.update(title=title, text=text)
+    )
+    window._show_about()
+    assert __version__ in shown["text"]
+    assert mw.MODEL in shown["text"]
+
+
+def test_about_action_is_in_the_app_menu(window):
+    labels = [a.text() for a in find_menu(window, "LiveCap").actions()]
+    assert "About LiveCap" in labels

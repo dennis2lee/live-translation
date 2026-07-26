@@ -15,12 +15,16 @@ from PyQt6.QtCore import QObject, Qt, QTimer, pyqtSignal
 from PyQt6.QtGui import QAction, QActionGroup, QColor, QCursor, QKeySequence
 from PyQt6.QtWidgets import QColorDialog, QMainWindow, QMessageBox
 
+from .. import __author__ as AUTHOR
+from .. import __email__ as AUTHOR_EMAIL
 from .. import config, platform_support
 from ..audio import AudioCapture, list_input_devices
 from ..caption_buffer import CaptionBuffer
 from ..config import (
+    BOX_POSITION_MENU_TEXT,
     DIRECTION_MENU_TEXT,
     DIRECTION_TARGET,
+    BoxPosition,
     Direction,
     Settings,
     direction_for_target,
@@ -235,6 +239,19 @@ class CaptionWindow(QMainWindow):
             self._font_group.addAction(a)
             size_menu.addAction(a)
 
+        # The lower part of the screen is often covered by something else, so
+        # the box can be moved rather than only resized.
+        position_menu = cfg.addMenu("Caption Position")
+        self._position_group = QActionGroup(self)
+        self._position_group.setExclusive(True)
+        self._position_actions: dict[BoxPosition, QAction] = {}
+        for position in BoxPosition:
+            act = QAction(BOX_POSITION_MENU_TEXT[position], self, checkable=True)
+            act.triggered.connect(lambda _c, p=position: self._update(box_position=p.value))
+            self._position_group.addAction(act)
+            position_menu.addAction(act)
+            self._position_actions[position] = act
+
         lines_menu = cfg.addMenu("Caption Lines")
         self._lines_group = QActionGroup(self)
         self._lines_group.setExclusive(True)
@@ -326,6 +343,8 @@ class CaptionWindow(QMainWindow):
             a.setChecked(int(a.text()) == self._settings.font_size)
         for a in self._lines_group.actions():
             a.setChecked(int(a.text()) == self._settings.max_lines)
+        for position, act in self._position_actions.items():
+            act.setChecked(position is self._settings.position)
         self._act_save_transcript.setChecked(self._settings.save_transcript)
         self._act_direction_hint.setChecked(self._settings.show_direction_hint)
         current = direction_for_target(self._settings.target_language_code)
@@ -452,10 +471,14 @@ class CaptionWindow(QMainWindow):
 
         QMessageBox.about(
             self,
-            "LiveCap",
+            "About LiveCap",
             f"<b>LiveCap {__version__}</b><br><br>"
-            "Real-time speech translation captions.<br>"
-            "Engine: Google Gemini Live API",
+            "Real-time speech translation captions for macOS.<br>"
+            f"Engine: Google Gemini Live API<br>"
+            f"Model: {MODEL}<br><br>"
+            f"Created by <b>{AUTHOR}</b><br>"
+            f'<a href="mailto:{AUTHOR_EMAIL}">{AUTHOR_EMAIL}</a><br><br>'
+            "Released under the MIT License.",
         )
 
     # --- translation control ----------------------------------------------

@@ -38,6 +38,21 @@ class Direction(StrEnum):
     EN_TO_KO = "en2ko"
 
 
+class BoxPosition(StrEnum):
+    """Where the caption box sits vertically."""
+
+    TOP = "top"
+    CENTER = "center"
+    BOTTOM = "bottom"
+
+
+BOX_POSITION_MENU_TEXT: dict[BoxPosition, str] = {
+    BoxPosition.TOP: "Top",
+    BoxPosition.CENTER: "Middle",
+    BoxPosition.BOTTOM: "Bottom",
+}
+
+
 DIRECTION_TARGET: dict[Direction, str] = {
     Direction.KO_TO_EN: "en",
     Direction.EN_TO_KO: "ko",
@@ -86,7 +101,16 @@ class Settings:
     # layout
     corner_radius: int = 24  # 0 ~ 48
     box_max_width_pct: int = 90  # 60-100, leaving a 5% margin each side
+
+    # Distance from the edge the box is anchored to, as a percentage of the
+    # window height. Named for the original bottom-only layout; it is the top
+    # margin when box_position is "top", and ignored when centred.
     bottom_margin_pct: int = 8  # 2 ~ 20
+
+    # Where the box sits vertically. Top is useful when the lower part of the
+    # screen is covered by something else.
+    box_position: str = BoxPosition.BOTTOM.value
+
     font_size: int = 44  # 24 ~ 96
     max_lines: int = 2  # 1 ~ 4
 
@@ -128,6 +152,11 @@ class Settings:
             corner_radius=int(_clamp(self.corner_radius, 0, 48)),
             box_max_width_pct=int(_clamp(self.box_max_width_pct, 60, 100)),
             bottom_margin_pct=int(_clamp(self.bottom_margin_pct, 2, 20)),
+            box_position=(
+                self.box_position
+                if self.box_position in {p.value for p in BoxPosition}
+                else BoxPosition.BOTTOM.value
+            ),
             font_size=int(_clamp(self.font_size, 24, 96)),
             max_lines=int(_clamp(self.max_lines, 1, 4)),
             fixed_box=bool(self.fixed_box),
@@ -151,6 +180,10 @@ class Settings:
     @property
     def policy(self) -> Policy:
         return Policy(self.caption_policy)
+
+    @property
+    def position(self) -> BoxPosition:
+        return BoxPosition(self.box_position)
 
 
 def _clamp(v: float, lo: float, hi: float) -> float:

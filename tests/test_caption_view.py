@@ -18,7 +18,7 @@ from PyQt6.QtCore import QSize  # noqa: E402
 from PyQt6.QtGui import QColor, QImage, QPainter  # noqa: E402
 from PyQt6.QtWidgets import QApplication  # noqa: E402
 
-from livecap.config import Settings  # noqa: E402
+from livecap.config import BoxPosition, Settings  # noqa: E402
 from livecap.ui.caption_view import CaptionView, Indicator  # noqa: E402
 
 
@@ -397,3 +397,84 @@ def test_hint_alpha_property_drives_repaint(qapp):
     faded = strip_bbox(render_view(view), s)
     assert opaque is not None and faded is not None
     assert faded[0] > opaque[0]  # once the hint fades only the dot remains
+
+
+# --- vertical position ----------------------------------------------------
+
+
+def full_bbox(img: QImage, s: Settings):
+    """Whole-window bounding box — the box can now be anywhere vertically."""
+    return content_bbox(img, s.bg_color)
+
+
+def test_default_position_is_bottom():
+    assert Settings().position is BoxPosition.BOTTOM
+
+
+def test_top_position_puts_the_box_in_the_upper_half(qapp):
+    s = Settings(box_position="top")
+    bbox = full_bbox(render(s, ONE), s)
+    assert bbox is not None
+    assert bbox[3] < 800 / 2, "box should end above the midpoint"
+
+
+def test_bottom_position_puts_the_box_in_the_lower_half(qapp):
+    s = Settings(box_position="bottom")
+    bbox = full_bbox(render(s, ONE), s)
+    assert bbox is not None
+    assert bbox[1] > 800 / 2, "box should start below the midpoint"
+
+
+def test_middle_position_straddles_the_centre(qapp):
+    s = Settings(box_position="center")
+    bbox = full_bbox(render(s, ONE), s)
+    assert bbox is not None
+    centre = (bbox[1] + bbox[3]) / 2
+    # The strip below the box drags the measured centre down a little.
+    assert abs(centre - 400) < 90, f"box centred at {centre}, expected near 400"
+
+
+def test_the_three_positions_are_ordered_down_the_screen(qapp):
+    tops = []
+    for position in ("top", "center", "bottom"):
+        s = Settings(box_position=position)
+        bbox = full_bbox(render(s, ONE), s)
+        assert bbox is not None
+        tops.append(bbox[1])
+    assert tops[0] < tops[1] < tops[2]
+
+
+def test_top_margin_follows_the_margin_setting(qapp):
+    """bottom_margin_pct becomes the top margin when anchored to the top."""
+    near = full_bbox(render(Settings(box_position="top", bottom_margin_pct=2), ONE),
+                     Settings(box_position="top", bottom_margin_pct=2))
+    far = full_bbox(render(Settings(box_position="top", bottom_margin_pct=20), ONE),
+                    Settings(box_position="top", bottom_margin_pct=20))
+    assert near is not None and far is not None
+    assert far[1] > near[1], "a bigger margin should push the box further down"
+
+
+def test_a_top_box_stays_fully_on_screen(qapp):
+    s = Settings(box_position="top", max_lines=4, font_size=96)
+    bbox = full_bbox(render(s, ONE), s)
+    assert bbox is not None
+    assert bbox[1] >= 0 and bbox[3] < 800
+
+
+def test_position_does_not_change_the_box_width(qapp):
+    widths = []
+    for position in ("top", "center", "bottom"):
+        s = Settings(box_position=position)
+        bbox = full_bbox(render(s, ONE), s)
+        widths.append(bbox[2] - bbox[0])
+    assert max(widths) - min(widths) <= 2  # only the strip differs
+
+
+def test_the_indicator_follows_the_box_to_the_top(qapp):
+    """The dot sits just below the box, wherever the box is."""
+    s = Settings(box_position="top", fixed_box=True)
+    view = make_view(s, [])
+    view.set_indicator(Indicator.LIVE)
+    bbox = full_bbox(render_view(view), s)
+    assert bbox is not None
+    assert bbox[3] < 800 / 2, "box and its indicator should both be in the top half"
