@@ -128,11 +128,13 @@ Pick a device under **Settings → Audio Input**.
 - Set your mixer peak near **-12 dBFS**; the app applies no software gain
 - Any sample rate and channel count works — the device is opened at its own rate and downmixed to mono
 
-If the chosen device delivers nothing for 12 seconds, LiveCap says
-`No audio from <device>`. A misrouted input opens and streams silence rather
-than failing, so without that warning a dead device looks exactly like a quiet
-room. Levels for reference: a quiet room on a built-in mic reads about
-**-36 dBFS**, while an input with nothing routed into it reads about **-88**.
+If the chosen device delivers nothing for 12 seconds, LiveCap logs
+`no signal from <device>` to stderr — a misrouted input opens and streams
+silence rather than failing, so a dead device otherwise looks exactly like a
+quiet room. Deliberately log-only: a silent input is often intentional, and
+nothing is allowed to cover the captions. Levels for reference: a quiet room
+on a built-in mic reads about **-36 dBFS**, while an input with nothing routed
+into it reads about **-88**.
 
 ## Display sleep
 

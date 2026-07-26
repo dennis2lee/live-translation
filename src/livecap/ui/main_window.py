@@ -674,10 +674,12 @@ class CaptionWindow(QMainWindow):
         self._check_input_level()
 
     def _check_input_level(self) -> None:
-        """Warn when the chosen device is delivering nothing at all.
+        """Note in the log when the chosen device is delivering nothing at all.
 
-        A misrouted input streams silence rather than failing, so without this
-        a dead device is indistinguishable from a quiet room.
+        A misrouted input streams silence rather than failing, so a dead device
+        is otherwise indistinguishable from a quiet room. Deliberately **not**
+        shown in the caption area: a silent input is often intentional, and a
+        message that covers the captions is worse than the ambiguity.
         """
         capture = self._capture
         if capture is None or self._state is State.IDLE:
@@ -691,8 +693,10 @@ class CaptionWindow(QMainWindow):
             return
         self._warned_silent = True
         name = capture.device.name if capture.device is not None else "the input device"
-        _log.warning("no signal from %r for %.0fs", name, SILENT_INPUT_SECONDS)
-        self._show_notice(f"No audio from {name} — check the input and its level")
+        _log.warning(
+            "no signal from %r for %.0fs — check the input and its level",
+            name, SILENT_INPUT_SECONDS,
+        )
 
     def _push_lines(self) -> None:
         self._view.set_lines(self._buffer.display_lines())

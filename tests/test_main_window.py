@@ -611,42 +611,52 @@ def _run_with_capture(window, monkeypatch, tmp_path, capture):
     window.start_translation()
 
 
-def test_a_device_delivering_no_signal_is_reported(window, monkeypatch, tmp_path):
-    """A misrouted input looks exactly like a quiet room without this."""
+def test_a_device_delivering_no_signal_is_logged_not_shown(
+    window, monkeypatch, tmp_path, caplog
+):
+    """A misrouted input goes to the log; the caption area stays clean.
+
+    A silent input is often intentional, so nothing may cover the captions.
+    """
     _run_with_capture(window, monkeypatch, tmp_path, _SilentCapture(peak=0.0))
     window._loud_at = time.monotonic() - mw.SILENT_INPUT_SECONDS - 1
-    window._check_input_level()
-    assert "No audio from Sound Blaster X3" in window._view._status
+    with caplog.at_level("WARNING", logger="livecap.ui.main_window"):
+        window._check_input_level()
+    assert any("no signal from 'Sound Blaster X3'" in r.message for r in caplog.records)
+    assert window._view._status == ""  # nothing on screen
+    assert window._notice == ""
 
 
-def test_a_working_device_is_never_reported_as_silent(window, monkeypatch, tmp_path):
+def test_a_working_device_is_never_reported_as_silent(window, monkeypatch, tmp_path, caplog):
     _run_with_capture(window, monkeypatch, tmp_path, _SilentCapture(peak=0.02))
     window._loud_at = time.monotonic() - mw.SILENT_INPUT_SECONDS - 1
-    window._check_input_level()
+    with caplog.at_level("WARNING", logger="livecap.ui.main_window"):
+        window._check_input_level()
+    assert not caplog.records
     assert window._view._status == ""
 
 
-def test_a_brief_pause_is_not_reported_as_silence(window, monkeypatch, tmp_path):
+def test_a_brief_pause_is_not_reported_as_silence(window, monkeypatch, tmp_path, caplog):
     """Nobody speaking for a second or two is normal, not a fault."""
     _run_with_capture(window, monkeypatch, tmp_path, _SilentCapture(peak=0.0))
     window._loud_at = time.monotonic() - 2.0
-    window._check_input_level()
+    with caplog.at_level("WARNING", logger="livecap.ui.main_window"):
+        window._check_input_level()
+    assert not caplog.records
     assert window._view._status == ""
 
 
-def test_the_silence_warning_is_not_repeated_every_tick(window, monkeypatch, tmp_path):
-    """The tick runs ten times a second; the warning must be raised once."""
+def test_the_silence_warning_is_not_repeated_every_tick(
+    window, monkeypatch, tmp_path, caplog
+):
+    """The tick runs ten times a second; the log line must appear once."""
     capture = _SilentCapture(peak=0.0)
     _run_with_capture(window, monkeypatch, tmp_path, capture)
-
-    notices: list[str] = []
-    monkeypatch.setattr(
-        mw.CaptionWindow, "_show_notice", lambda _self, text: notices.append(text)
-    )
     window._loud_at = time.monotonic() - mw.SILENT_INPUT_SECONDS - 1
-    for _ in range(20):
-        window._check_input_level()
-    assert len(notices) == 1
+    with caplog.at_level("WARNING", logger="livecap.ui.main_window"):
+        for _ in range(20):
+            window._check_input_level()
+    assert sum("no signal" in r.message for r in caplog.records) == 1
 
 
 def test_signal_returning_rearms_the_warning(window, monkeypatch, tmp_path):
@@ -661,8 +671,10 @@ def test_signal_returning_rearms_the_warning(window, monkeypatch, tmp_path):
     assert window._warned_silent is False
 
 
-def test_no_silence_check_while_idle(window):
-    window._check_input_level()  # no capture at all — must not raise
+def test_no_silence_check_while_idle(window, caplog):
+    with caplog.at_level("WARNING", logger="livecap.ui.main_window"):
+        window._check_input_level()  # no capture at all — must not raise
+    assert not caplog.records
     assert window._view._status == ""
 
 
