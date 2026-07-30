@@ -1,5 +1,9 @@
 """Preferences dialog — the single place everything is configured.
 
+Apply applies without closing, OK applies and closes, and Cancel puts back the
+settings that were in force when the dialog opened — including undoing a key
+Apply had already written.
+
 The API key is written to the encrypted credential store, never into Settings
 and never to a `.env` file.
 """
@@ -21,6 +25,7 @@ from PyQt6.QtWidgets import (
     QHBoxLayout,
     QLabel,
     QLineEdit,
+    QPlainTextEdit,
     QProgressBar,
     QPushButton,
     QSlider,
@@ -30,7 +35,7 @@ from PyQt6.QtWidgets import (
     QWidget,
 )
 
-from .. import config
+from .. import config, netcheck
 from ..audio import AudioCapture, list_input_devices
 from ..caption_buffer import Policy
 from ..config import BOX_POSITION_MENU_TEXT, BoxPosition, Settings
@@ -44,6 +49,13 @@ POLICY_LABELS = {
     Policy.INCREMENTAL: "A — incremental",
     Policy.UTTERANCE: "B — per utterance",
 }
+
+# How long closing Preferences waits for a worker to finish. Neither the key
+# test nor the speed test can be cancelled — both are blocking calls — so a
+# worker that overruns is detached instead, because destroying a QThread while
+# it is still running crashes.
+WORKER_WAIT_MS = 3000
+_DETACHED_WORKERS: set[QThread] = set()
 
 METER_MS = 100
 # Peak in dBFS mapped onto the meter. Below the floor there is nothing to see;
@@ -115,6 +127,20 @@ class _KeyTest(QObject):
             )
 
 
+class _NetTest(QObject):
+    """Runs the speed test off the UI thread. Takes several seconds."""
+
+    done = pyqtSignal(object)  # a netcheck.Report
+
+    def run(self) -> None:
+        try:
+            report = netcheck.run_check()
+        except Exception as exc:  # noqa: BLE001 — every failure is a message
+            report = netcheck.Report()
+            report.latency.error = f"{type(exc).__name__}: {exc}"[:120]
+        self.done.emit(report)
+
+
 class _ColorButton(QPushButton):
     """A button showing a colour, which opens the picker when clicked."""
 
@@ -166,6 +192,10 @@ class _ColorButton(QPushButton):
 
 
 class SettingsDialog(QDialog):
+    """Preferences. Emits `applied` whenever Apply or OK is pressed."""
+
+    applied = pyqtSignal(object)  # a Settings
+
     def __init__(self, settings: Settings, parent: QWidget | None = None) -> None:
         super().__init__(parent)
         self.setWindowTitle("LiveCap Preferences")
@@ -173,18 +203,29 @@ class SettingsDialog(QDialog):
         self._settings = settings
         self._capture: AudioCapture | None = None
         self._key_thread: QThread | None = None
+        self._net_thread: QThread | None = None
+        # Taken before anything is written, so Cancel can undo an Apply.
+        self._key_at_open = config.stored_api_key()
+        self._key_written = False
 
         tabs = QTabWidget()
         tabs.addTab(self._api_tab(), "API Key")
         tabs.addTab(self._audio_tab(settings), "Audio")
+        tabs.addTab(self._network_tab(), "Network")
+        tabs.addTab(self._vocabulary_tab(settings), "Vocabulary")
         tabs.addTab(self._appearance_tab(settings), "Appearance")
         tabs.addTab(self._behaviour_tab(settings), "Behaviour")
 
         buttons = QDialogButtonBox(
-            QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel
+            QDialogButtonBox.StandardButton.Ok
+            | QDialogButtonBox.StandardButton.Apply
+            | QDialogButtonBox.StandardButton.Cancel
         )
         buttons.accepted.connect(self._accept)
         buttons.rejected.connect(self.reject)
+        self._apply_btn = buttons.button(QDialogButtonBox.StandardButton.Apply)
+        self._apply_btn.setToolTip("Apply the changes and keep this window open")
+        self._apply_btn.clicked.connect(self.apply_now)
 
         root = QVBoxLayout(self)
         root.addWidget(tabs)
@@ -248,7 +289,8 @@ class SettingsDialog(QDialog):
             "The key is encrypted before it is written to disk. The passphrase is part of "
             "the application, so treat this as keeping the key out of plain sight rather "
             "than as real secrecy — the Keychain is stronger. A GEMINI_API_KEY environment "
-            "variable still takes precedence over both."
+            "variable still takes precedence over both. Cancel puts the encrypted store back "
+            "as it was, but a copy already made in the Keychain stays there."
         )
         note.setWordWrap(True)
         note.setStyleSheet("color: gray;")
@@ -391,6 +433,139 @@ class SettingsDialog(QDialog):
         self._meter.setValue(peak_to_percent(peak))
         self._meter_label.setText(peak_verdict(peak))
 
+    # --- network ----------------------------------------------------------
+
+    def _network_tab(self) -> QWidget:
+        form = QFormLayout()
+
+        self._net_btn = QPushButton("Run Speed Test")
+        self._net_btn.setToolTip(
+            "Times TCP handshakes to the Live API host, then transfers a few\n"
+            "megabytes of zeros to measure upload and download speed."
+        )
+        self._net_btn.clicked.connect(self._run_speed_test)
+        form.addRow("", self._net_btn)
+
+        self._net_verdict = QLabel("Not run yet.")
+        self._net_verdict.setWordWrap(True)
+        form.addRow("Result", self._net_verdict)
+
+        self._net_detail = QLabel("")
+        self._net_detail.setWordWrap(True)
+        self._net_detail.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
+        form.addRow("Detail", self._net_detail)
+
+        note = QLabel(
+            f"A session sends a steady {netcheck.AUDIO_KBPS:.0f} kbit/s of audio upstream, so "
+            "upload speed and latency matter far more than download speed. Latency is measured "
+            f"against {netcheck.LIVE_API_HOST} itself and costs nothing — no session is opened "
+            f"and no key is needed. Throughput uses the public {netcheck.SPEED_HOST} endpoints; "
+            "the payload is zeros, so no audio, transcript or key material leaves this machine."
+        )
+        note.setWordWrap(True)
+        note.setStyleSheet("color: gray;")
+        form.addRow("", note)
+
+        page = QWidget()
+        page.setLayout(form)
+        return page
+
+    def _run_speed_test(self) -> None:
+        if self._net_thread is not None:
+            return  # already running
+        self._net_btn.setEnabled(False)
+        self._net_verdict.setText("Measuring… this takes a few seconds.")
+        self._net_verdict.setStyleSheet("")
+        self._net_detail.setText("")
+
+        thread = QThread(self)
+        worker = _NetTest()
+        worker.moveToThread(thread)
+        thread.started.connect(worker.run)
+        worker.done.connect(self._speed_tested)
+        worker.done.connect(thread.quit)
+        thread.finished.connect(worker.deleteLater)
+        thread.finished.connect(self._speed_test_finished)
+        self._net_thread = thread
+        self._net_worker = worker  # keep a reference, or it is collected mid-flight
+        thread.start()
+
+    def _speed_tested(self, report: netcheck.Report) -> None:
+        verdict = report.verdict()
+        self._net_verdict.setText(verdict)
+        good = verdict.startswith("Good")
+        usable = good or verdict.startswith(("Enough", "Usable"))
+        self._net_verdict.setStyleSheet(
+            "color: green;" if good else ("color: #B7791F;" if usable else "color: #C0392B;")
+        )
+        self._net_detail.setText("\n".join(report.summary_lines()))
+
+    def _speed_test_finished(self) -> None:
+        self._net_btn.setEnabled(True)
+        self._net_thread = None
+
+    # --- vocabulary -------------------------------------------------------
+
+    def _vocabulary_tab(self, settings: Settings) -> QWidget:
+        form = QFormLayout()
+
+        self._vocab_source = self._terms_box(
+            settings.vocabulary_source,
+            placeholder="영업이익률\n평우\nLiveCap",
+            tip=(
+                "Names, jargon and product names as they are SPOKEN, one per line.\n"
+                "\n"
+                "These bias speech recognition towards hearing them correctly — use\n"
+                "it for a Korean name or a technical term the model keeps mangling.\n"
+                "Because the translation is made from what the model heard, getting\n"
+                "this right is what improves the captions.\n"
+                "\n"
+                "Sent as the API's custom_vocabulary on the source transcription."
+            ),
+        )
+        form.addRow("Source terms", self._vocab_source)
+
+        self._vocab_captions = self._terms_box(
+            settings.vocabulary_captions,
+            placeholder="operating margin\nPyeongwoo Lee\nLiveCap",
+            tip=(
+                "The same idea for the other side: how names and terms should come\n"
+                "out IN THE CAPTIONS, one per line.\n"
+                "\n"
+                "Use this when a name is heard correctly but written inconsistently —\n"
+                "spelled differently from one sentence to the next, for instance.\n"
+                "\n"
+                "Sent as the API's custom_vocabulary on the caption transcription."
+            ),
+        )
+        form.addRow("Caption terms", self._vocab_captions)
+
+        note = QLabel(
+            "One term per line; blank lines are ignored and duplicates are dropped. "
+            f"At most {config.MAX_VOCABULARY_TERMS} terms per list — they are re-sent on "
+            "every reconnect, so a long list slows each one. The terms are fixed when a "
+            "session connects, so changing them here reopens the translator; audio and "
+            "the transcript carry on. "
+            "Whether the model actually honours them has not been measured — the API "
+            "accepts them, which is not the same thing."
+        )
+        note.setWordWrap(True)
+        note.setStyleSheet("color: gray;")
+        form.addRow("", note)
+
+        page = QWidget()
+        page.setLayout(form)
+        return page
+
+    def _terms_box(self, value: str, *, placeholder: str, tip: str) -> QPlainTextEdit:
+        box = QPlainTextEdit(value)
+        box.setPlaceholderText(placeholder)
+        box.setToolTip(tip)
+        box.setMinimumWidth(320)
+        box.setMaximumHeight(110)
+        box.setLineWrapMode(QPlainTextEdit.LineWrapMode.NoWrap)
+        return box
+
     # --- appearance -------------------------------------------------------
 
     def _appearance_tab(self, settings: Settings) -> QWidget:
@@ -470,8 +645,21 @@ class SettingsDialog(QDialog):
         self._clear_after, clear_after_row = self._slider(
             int(settings.clear_after_seconds * 10), 0, 100, ""
         )
-        self._clear_after.setToolTip("0 keeps captions on screen indefinitely.")
+        self._clear_after.setToolTip(
+            "Counted from when the last buffered line reached the screen and the\n"
+            "input went quiet — not from the last fragment. 0 keeps captions up."
+        )
         form.addRow("Clear after silence (0.1 s steps)", clear_after_row)
+
+        self._line_hold, line_hold_row = self._slider(
+            int(settings.line_hold_seconds * 10), 0, 30, ""
+        )
+        self._line_hold.setToolTip(
+            "The model translates a whole utterance at a time, so several\n"
+            "sentences can settle at once. Holding each line this long stops the\n"
+            "burst scrolling past unread. 0 shows everything immediately."
+        )
+        form.addRow("Hold each line (0.1 s steps)", line_hold_row)
 
         self._save_transcript = QCheckBox("Save the transcript as a .md file")
         self._save_transcript.setToolTip("The filename is the session start timestamp.")
@@ -549,21 +737,60 @@ class SettingsDialog(QDialog):
 
     # --- lifetime ---------------------------------------------------------
 
-    def _accept(self) -> None:
+    def _save_typed_key(self) -> None:
         typed = self._key_edit.text().strip()
-        if typed:
-            config.save_api_key(typed, to_keychain=self._also_keychain.isChecked())
+        if not typed:
+            return
+        config.save_api_key(typed, to_keychain=self._also_keychain.isChecked())
+        self._key_written = True
+
+    def apply_now(self) -> None:
+        """Apply the current values without closing. Bound to Apply."""
+        self._save_typed_key()
+        settings = self.result_settings()
+        # Keep it as the new baseline, so the next Apply diffs against this one.
+        self._settings = settings
+        self.applied.emit(settings)
+
+    def _accept(self) -> None:
+        self._save_typed_key()
         self._stop_meter()
         self.accept()
 
     def reject(self) -> None:  # noqa: D102 — Qt override
+        # Cancel means "as it was": undo a key Apply already wrote. The window
+        # puts the settings themselves back, since it owns them.
+        if self._key_written:
+            config.restore_stored_api_key(self._key_at_open)
+            self._key_written = False
         self._stop_meter()
         super().reject()
 
     def closeEvent(self, event) -> None:  # noqa: N802 (Qt naming)
         # The meter holds the microphone open; never leave it running.
         self._stop_meter()
+        self._settle_workers()
         super().closeEvent(event)
+
+    def _settle_workers(self) -> None:
+        """Let running workers finish before this dialog can be destroyed.
+
+        The threads are children of the dialog, and a QThread destroyed while it
+        is still running crashes. A speed test can take several seconds, so one
+        that overruns the wait is detached rather than waited on for ever.
+        """
+        for attr in ("_key_thread", "_net_thread"):
+            thread = getattr(self, attr, None)
+            if thread is None:
+                continue
+            thread.quit()
+            if thread.wait(WORKER_WAIT_MS):
+                continue
+            _log.warning("a preferences worker is still running — detaching it")
+            thread.setParent(None)
+            _DETACHED_WORKERS.add(thread)
+            thread.finished.connect(lambda t=thread: _DETACHED_WORKERS.discard(t))
+            setattr(self, attr, None)
 
     # --- result -----------------------------------------------------------
 
@@ -582,6 +809,7 @@ class SettingsDialog(QDialog):
             bottom_margin_pct=self._bottom_margin.value(),
             box_opacity=self._opacity.value() / 100.0,
             clear_after_seconds=self._clear_after.value() / 10.0,
+            line_hold_seconds=self._line_hold.value() / 10.0,
             save_transcript=self._save_transcript.isChecked(),
             show_direction_hint=self._direction_hint.isChecked(),
             transcript_dir=self._transcript_dir.text().strip() or DEFAULT_DIR,
@@ -592,4 +820,6 @@ class SettingsDialog(QDialog):
             caption_policy=self._policy.currentData(),
             target_language_code=self._target_lang.text().strip() or "en",
             debug_logging=self._debug_logging.isChecked(),
+            vocabulary_source=self._vocab_source.toPlainText(),
+            vocabulary_captions=self._vocab_captions.toPlainText(),
         ).clamped()

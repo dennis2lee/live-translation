@@ -1,8 +1,10 @@
 """Shared fixtures.
 
-The credential store lives in the real application-support directory, so
-without isolation a test run would read — and overwrite — the key the user
-actually uses. Every test gets its own empty store instead.
+Both of the places LiveCap persists things are outside the repository: the
+encrypted credential store in Application Support, and the preferences plist
+under ~/Library/Preferences. Without isolation a test run would read — and
+overwrite — the key and the settings the user actually uses. Every test gets its
+own empty copy of both instead.
 """
 
 from __future__ import annotations
@@ -19,6 +21,24 @@ def isolated_credential_store(tmp_path, monkeypatch):
         credentials, "store_path", lambda: tmp_path / "credentials.enc"
     )
     yield tmp_path / "credentials.enc"
+
+
+@pytest.fixture(autouse=True)
+def isolated_qsettings(tmp_path, monkeypatch):
+    """Point QSettings at a per-test file. Applied to every test.
+
+    `config.reset()` calls `QSettings.clear()`, which without this would wipe the
+    developer's own preferences for real.
+    """
+    from PyQt6.QtCore import QSettings
+
+    from livecap import config
+
+    path = str(tmp_path / "preferences.ini")
+    monkeypatch.setattr(
+        config, "_qsettings", lambda: QSettings(path, QSettings.Format.IniFormat)
+    )
+    yield path
 
 
 @pytest.fixture(autouse=True)

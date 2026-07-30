@@ -279,6 +279,129 @@ def test_clearing_removes_the_stored_key(monkeypatch):
     assert config.load_api_key() is None
 
 
+def test_stored_api_key_ignores_the_environment(monkeypatch):
+    """Preferences needs the value it can put back, not the one in force."""
+    no_keychain(monkeypatch)
+    monkeypatch.setenv("GEMINI_API_KEY", "AIzaFromTheEnvironment")
+    credentials.put("GEMINI_API_KEY", "AIzaFromTheStore")
+    assert config.load_api_key() == "AIzaFromTheEnvironment"
+    assert config.stored_api_key() == "AIzaFromTheStore"
+
+
+def test_restoring_puts_the_previous_key_back(monkeypatch):
+    no_keychain(monkeypatch)
+    config.save_api_key("AIzaTheOriginal")
+    config.save_api_key("AIzaTypedByMistake")
+    config.restore_stored_api_key("AIzaTheOriginal")
+    assert config.load_api_key() == "AIzaTheOriginal"
+
+
+def test_restoring_nothing_removes_the_key(monkeypatch):
+    no_keychain(monkeypatch)
+    assert config.stored_api_key() is None
+    config.save_api_key("AIzaTypedByMistake")
+    config.restore_stored_api_key(None)
+    assert config.stored_api_key() is None
+
+
+# --- vocabulary hints -----------------------------------------------------
+
+
+def test_terms_are_split_one_per_line():
+    assert config.parse_terms("first\nsecond\nthird") == ["first", "second", "third"]
+
+
+def test_a_term_may_contain_a_comma():
+    """Splitting on commas would cut an adaptation phrase in half."""
+    assert config.parse_terms("revenue is up, year over year") == [
+        "revenue is up, year over year"
+    ]
+
+
+def test_blank_lines_and_surrounding_space_are_dropped():
+    assert config.parse_terms("\n  one  \n\n\t\ntwo\n") == ["one", "two"]
+
+
+def test_duplicates_are_dropped_keeping_the_first_order():
+    assert config.parse_terms("b\na\nb\nc\na") == ["b", "a", "c"]
+
+
+def test_no_terms_is_an_empty_list():
+    assert config.parse_terms("") == []
+    assert config.parse_terms("   \n \n") == []
+
+
+def test_the_term_count_is_capped():
+    """They ride in the setup message of every reconnect."""
+    many = "\n".join(f"term{i}" for i in range(config.MAX_VOCABULARY_TERMS + 50))
+    assert len(config.parse_terms(many)) == config.MAX_VOCABULARY_TERMS
+
+
+def test_clamping_stores_exactly_what_will_be_sent():
+    from dataclasses import replace
+
+    messy = replace(config.Settings(), vocabulary_source="  a  \n\nb\na\n")
+    assert messy.clamped().vocabulary_source == "a\nb"
+
+
+def test_vocabulary_round_trips_through_qsettings():
+    """Newlines have to survive the plist, or every term merges into one."""
+    from dataclasses import replace
+
+    saved = replace(
+        config.Settings(),
+        vocabulary_source="영업이익률\n평우",
+        vocabulary_captions="operating margin",
+    )
+    config.save(saved)
+    try:
+        loaded = config.load()
+        assert loaded.source_terms == ["영업이익률", "평우"]
+        assert loaded.caption_terms == ["operating margin"]
+    finally:
+        config.reset()
+
+
+def test_the_two_lists_do_not_share_state():
+    from dataclasses import replace
+
+    s = replace(config.Settings(), vocabulary_source="only source")
+    assert s.source_terms == ["only source"]
+    assert s.caption_terms == []
+
+
+# --- the caption timing settings ------------------------------------------
+
+
+def test_the_new_timing_settings_round_trip_through_qsettings():
+    from dataclasses import replace
+
+    saved = replace(config.Settings(), clear_after_seconds=1.5, line_hold_seconds=1.2)
+    config.save(saved)
+    try:
+        loaded = config.load()
+        assert loaded.clear_after_seconds == 1.5
+        assert loaded.line_hold_seconds == 1.2
+    finally:
+        config.reset()
+
+
+def test_the_timing_settings_are_clamped_to_their_documented_ranges():
+    from dataclasses import replace
+
+    wild = replace(config.Settings(), clear_after_seconds=999.0, line_hold_seconds=-4.0)
+    clamped = wild.clamped()
+    assert clamped.clear_after_seconds == 30.0
+    assert clamped.line_hold_seconds == 0.0
+
+
+def test_the_clear_default_matches_the_buffer_default():
+    from livecap.caption_buffer import CLEAR_AFTER_SECONDS, LINE_HOLD_SECONDS
+
+    assert config.Settings().clear_after_seconds == CLEAR_AFTER_SECONDS
+    assert config.Settings().line_hold_seconds == LINE_HOLD_SECONDS
+
+
 def test_api_key_is_never_written_to_qsettings():
     """The Settings schema must have nowhere to put a key."""
     from dataclasses import fields

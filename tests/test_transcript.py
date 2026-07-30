@@ -194,10 +194,17 @@ def test_clearing_the_display_does_not_drop_undrained_lines():
 
 
 def test_short_clear_window_still_records_pending_text():
-    """Recording survives clear_after_seconds shorter than idle_commit_seconds."""
+    """Recording survives clear_after_seconds shorter than idle_commit_seconds.
+
+    A window that short never lets the 1.2 s idle commit run, so the clear path
+    has to settle the pending text itself. Otherwise it would neither reach the
+    transcript nor ever let the display report itself drained.
+    """
     buf = CaptionBuffer(policy=Policy.INCREMENTAL, clear_after_seconds=0.5)
     buf.feed("no terminator here", 0.0)
-    buf.tick(0.6)
+    buf.tick(0.6)  # settles and shows it
+    assert buf.committed_lines == ["no terminator here"]
+    buf.tick(1.2)  # 0.5 s after it reached the screen
     assert buf.is_empty
     assert buf.drain_new_commits() == ["no terminator here"]
 

@@ -233,6 +233,39 @@ def test_audio_buffered_before_the_session_opens_is_not_lost(rec):
         t.stop()
 
 
+def test_the_audio_backlog_is_measured(rec):
+    """Says whether burstiness on screen came from us or from the API.
+
+    A backlog near zero means the audio went out as fast as it arrived, so
+    anything bursty about the captions happened upstream.
+    """
+    ring = RingBuffer(CHUNK_BYTES * 100)
+    for _ in range(20):  # two seconds of audio waiting before anything connects
+        ring.write(bytes([7]) * CHUNK_BYTES)
+
+    t = make_translator(rec, [[]], ring=ring)
+    t.start()
+    try:
+        assert wait_until(lambda: t.stats.chunks_sent >= 20)
+        # 20 chunks of 100 ms; the first read sees all of it still queued.
+        assert t.stats.max_backlog_ms >= 1900.0
+    finally:
+        t.stop()
+    assert "max_backlog=" in t.stats.summary()
+
+
+def test_no_backlog_when_the_ring_keeps_up(rec):
+    ring = RingBuffer(CHUNK_BYTES * 100)
+    t = make_translator(rec, [[]], ring=ring)
+    t.start()
+    try:
+        ring.write(bytes([7]) * CHUNK_BYTES)
+        assert wait_until(lambda: t.stats.chunks_sent >= 1)
+        assert t.stats.max_backlog_ms <= 100.0
+    finally:
+        t.stop()
+
+
 def test_audio_written_during_a_reconnect_reaches_the_new_session(rec):
     ring = RingBuffer(CHUNK_BYTES * 100)
     t = make_translator(rec, [[msg(go_away=True)], []], ring=ring)
@@ -367,6 +400,76 @@ def test_config_matches_the_preview_model_contract(rec):
         assert cfg.translation_config.target_language_code == "en"
         assert cfg.translation_config.echo_target_language is False
         assert cfg.context_window_compression.sliding_window is not None
+    finally:
+        t.stop()
+
+
+# --- vocabulary hints -------------------------------------------------
+
+
+def test_no_terms_sends_a_plain_transcription_config(rec):
+    """Nothing extra when there is nothing to bias — the common case."""
+    t = make_translator(rec, [[]])
+    t.start()
+    try:
+        assert wait_until(lambda: len(rec.configs) >= 1)
+        cfg = rec.configs[0]
+        assert cfg.input_audio_transcription.custom_vocabulary is None
+        assert cfg.output_audio_transcription.custom_vocabulary is None
+    finally:
+        t.stop()
+
+
+def test_source_terms_reach_the_input_transcription(rec):
+    t = make_translator(rec, [[]], source_terms=["영업이익률", "평우"])
+    t.start()
+    try:
+        assert wait_until(lambda: len(rec.configs) >= 1)
+        cfg = rec.configs[0]
+        assert cfg.input_audio_transcription.custom_vocabulary == ["영업이익률", "평우"]
+        assert cfg.output_audio_transcription.custom_vocabulary is None
+    finally:
+        t.stop()
+
+
+def test_caption_terms_reach_the_output_transcription(rec):
+    t = make_translator(rec, [[]], caption_terms=["operating margin", "Pyeongwoo Lee"])
+    t.start()
+    try:
+        assert wait_until(lambda: len(rec.configs) >= 1)
+        cfg = rec.configs[0]
+        assert cfg.output_audio_transcription.custom_vocabulary == [
+            "operating margin",
+            "Pyeongwoo Lee",
+        ]
+        assert cfg.input_audio_transcription.custom_vocabulary is None
+    finally:
+        t.stop()
+
+
+def test_the_two_term_lists_stay_on_their_own_side(rec):
+    """A source-language hint must never bias the caption transcription."""
+    t = make_translator(
+        rec, [[]], source_terms=["한국어 용어"], caption_terms=["English term"]
+    )
+    t.start()
+    try:
+        assert wait_until(lambda: len(rec.configs) >= 1)
+        cfg = rec.configs[0]
+        assert cfg.input_audio_transcription.custom_vocabulary == ["한국어 용어"]
+        assert cfg.output_audio_transcription.custom_vocabulary == ["English term"]
+    finally:
+        t.stop()
+
+
+def test_adaptation_phrases_is_never_sent(rec):
+    """The SDK marks that field deprecated and describes it identically to
+    custom_vocabulary, so LiveCap does not use it at all."""
+    t = make_translator(rec, [[]], source_terms=["term"])
+    t.start()
+    try:
+        assert wait_until(lambda: len(rec.configs) >= 1)
+        assert rec.configs[0].input_audio_transcription.adaptation_phrases is None
     finally:
         t.stop()
 

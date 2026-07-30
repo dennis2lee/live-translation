@@ -159,6 +159,56 @@ recognised Korean and flags anything below a threshold.
 
 ---
 
+## Captions arriving in a burst
+
+Reported symptom: nothing on screen for a while, then everything at once.
+
+Reproduced offline, no API needed, by feeding five settled sentences 20 ms apart
+— which is what a turn-based model does when it finishes translating a long
+utterance:
+
+| | Lines that reached a repaint |
+|---|---|
+| Before | **2 of 5** |
+| After pacing the release | **4 of 5** |
+
+Cause: `CaptionBuffer._committed` was capped at `max_lines`, so each new settled
+line evicted one immediately. Qt coalesces `update()` calls, so all five arrived
+inside a single repaint and the reader saw only the final pair. Nothing was lost
+from the transcript — that is written from `drain_new_commits()`, which is
+independent of the display.
+
+Fix: settled lines join a queue and are released one per `line_hold_seconds`
+(default 0.7 s). No more than `max_lines` are ever held back, so the display
+trails the audio by at most 1.4 s at the defaults. A burst longer than that still
+loses its oldest line from the screen — two lines cannot show five sentences.
+
+**Not the cause, and unchanged:** the audio path. `Stats.max_backlog_ms` now
+records the most unsent audio ever held in the ring, so a client-side stall can
+be told apart from the API answering in bursts. A backlog near zero means the
+audio went out as fast as it arrived.
+
+---
+
+## Network baseline
+
+Measured by the new `netcheck` module on the development machine, 2026-07-29:
+
+| Measurement | Value |
+|---|---|
+| Latency to `generativelanguage.googleapis.com` | 12–18 ms median, 5–43 ms jitter |
+| Upload | 15.8–31.2 Mbit/s |
+| Download | 132–176 Mbit/s |
+
+A session needs **256 kbit/s upstream** (16 kHz × 16-bit mono), so this has
+roughly 60× the headroom. Network capacity was therefore ruled out as a cause of
+the bursty captions.
+
+Cloudflare's `speed.cloudflare.com` endpoints answer `Python-urllib/3.x` with
+**403**; a `User-Agent` header is required.
+
+---
+
 ## Still unverified
 
 - Capture from the actual USB audio interface — everything so far used the built-in microphone or file input

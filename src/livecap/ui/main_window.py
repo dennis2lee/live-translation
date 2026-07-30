@@ -48,6 +48,12 @@ NOTICE_SECONDS = 6.0
 # on a built-in mic, while an input with nothing routed to it reads -88.
 SILENT_INPUT_SECONDS = 12.0
 SILENT_INPUT_PEAK = 0.002  # about -54 dBFS
+
+# Above this the input counts as somebody speaking, which holds the captions on
+# screen even while the model has stopped sending fragments. Well clear of the
+# -36 dBFS a quiet room reads on a built-in mic, so room noise does not keep
+# stale captions up for ever.
+SPEECH_PEAK = 0.05  # about -26 dBFS
 FONT_SIZE_CHOICES = (24, 32, 44, 56, 72, 96)
 LINE_COUNT_CHOICES = (1, 2, 3, 4)
 
@@ -359,6 +365,7 @@ class CaptionWindow(QMainWindow):
     def _apply_buffer_settings(self) -> None:
         self._buffer.set_max_lines(self._settings.max_lines)
         self._buffer.clear_after_seconds = self._settings.clear_after_seconds
+        self._buffer.line_hold_seconds = self._settings.line_hold_seconds
         self._buffer.set_policy(self._settings.policy)
 
     def _update(self, **changes: object) -> None:
@@ -414,9 +421,17 @@ class CaptionWindow(QMainWindow):
         self._apply_session_changes(old)
 
     def _open_settings(self) -> None:
+        """Open Preferences. Apply applies, OK applies and closes, Cancel reverts."""
+        original = self._settings
         dlg = SettingsDialog(self._settings, self)
+        dlg.applied.connect(self._apply_new_settings)
         if dlg.exec():
             self._apply_new_settings(dlg.result_settings())
+        elif self._settings != original:
+            # Apply was pressed and then Cancel — put back what was in force
+            # when the dialog opened, including restarting whatever that needs.
+            _log.info("preferences cancelled — reverting the applied changes")
+            self._apply_new_settings(original)
 
     def _apply_new_settings(self, new: Settings) -> None:
         """Apply a full settings replacement, restarting what a live session needs."""
@@ -432,8 +447,9 @@ class CaptionWindow(QMainWindow):
     def _apply_session_changes(self, old: Settings) -> None:
         """Restart the affected part of a running session after a settings change.
 
-        The audio device is fixed when the stream opens and the target language
-        when the session connects, so those changes cannot apply silently.
+        The audio device is fixed when the stream opens, and the target language
+        and the vocabulary hints when the session connects, so those changes
+        cannot apply silently.
         """
         if self._state is State.IDLE:
             return
@@ -447,6 +463,8 @@ class CaptionWindow(QMainWindow):
             old.target_language_code != new.target_language_code
             or old.silence_gate != new.silence_gate
             or old.echo_target_language != new.echo_target_language
+            or old.vocabulary_source != new.vocabulary_source
+            or old.vocabulary_captions != new.vocabulary_captions
         ):
             if old.target_language_code != new.target_language_code:
                 if self._writer is not None:
@@ -543,6 +561,8 @@ class CaptionWindow(QMainWindow):
             target_language_code=self._settings.target_language_code,
             echo_target_language=self._settings.echo_target_language,
             silence_gate=self._settings.silence_gate,
+            source_terms=self._settings.source_terms,
+            caption_terms=self._settings.caption_terms,
             on_source=self._bridge.source_text.emit,
             on_target=self._bridge.target_text.emit,
             on_state=lambda s, d: self._bridge.state_changed.emit(s.value, d),
@@ -691,12 +711,23 @@ class CaptionWindow(QMainWindow):
         self._refresh_overlay()
 
     def _on_tick(self) -> None:
-        if self._buffer.tick(time.monotonic()):
+        # One reader per tick: take_peak() resets the meter, so the buffer and
+        # the dead-input check have to share the same reading.
+        peak = self._take_input_peak()
+        speaking = None if peak is None else peak >= SPEECH_PEAK
+        if self._buffer.tick(time.monotonic(), speaking=speaking):
             self._push_lines()
         self._record_new_lines()
-        self._check_input_level()
+        self._check_input_level(peak)
 
-    def _check_input_level(self) -> None:
+    def _take_input_peak(self) -> float | None:
+        """The loudest sample since the last tick, or None when nothing is open."""
+        capture = self._capture
+        if capture is None or self._state is State.IDLE:
+            return None
+        return capture.take_peak()
+
+    def _check_input_level(self, peak: float | None = None) -> None:
         """Note in the log when the chosen device is delivering nothing at all.
 
         A misrouted input streams silence rather than failing, so a dead device
@@ -707,8 +738,10 @@ class CaptionWindow(QMainWindow):
         capture = self._capture
         if capture is None or self._state is State.IDLE:
             return
+        if peak is None:
+            peak = capture.take_peak()
         now = time.monotonic()
-        if capture.take_peak() >= SILENT_INPUT_PEAK:
+        if peak >= SILENT_INPUT_PEAK:
             self._loud_at = now
             self._warned_silent = False
             return

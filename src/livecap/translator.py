@@ -25,7 +25,7 @@ import numpy as np
 from google import genai
 from google.genai import types
 
-from .audio import CHUNK_BYTES, RingBuffer
+from .audio import BYTES_PER_SAMPLE, CHUNK_BYTES, TARGET_RATE, RingBuffer
 from .util import logging as log
 
 _log = log.get(__name__)
@@ -71,6 +71,15 @@ IDLE_POLL_SECONDS = 0.02
 SILENCE_RMS_THRESHOLD = 0.003
 SILENCE_HOLD_SECONDS = 3.0
 
+BYTES_PER_MS = TARGET_RATE * BYTES_PER_SAMPLE / 1000.0  # 32, at 16 kHz 16-bit mono
+
+# Unsent audio in the ring means the captions trail the speaker by at least that
+# much, and that whatever the model does answer arrives all at once. A backlog is
+# normal while connecting, so it is only worth reporting once a session has
+# settled — hence the grace period.
+BACKLOG_WARN_MS = 1500.0
+BACKLOG_GRACE_SECONDS = 15.0
+
 
 class State(StrEnum):
     IDLE = "idle"
@@ -87,12 +96,21 @@ class Stats:
     chunks_sent: int = 0
     started_at: float = 0.0
 
+    max_backlog_ms: float = 0.0
+    """Most unsent audio ever held in the ring, in milliseconds.
+
+    The measurement that separates a client-side stall from the model answering
+    in bursts: a backlog near zero means the audio went out as it arrived, so
+    any burstiness on screen came from the API.
+    """
+
     def summary(self) -> str:
         gaps = ", ".join(f"{g:.0f}" for g in self.gaps_ms) or "-"
         elapsed = time.monotonic() - self.started_at if self.started_at else 0.0
         return (
             f"elapsed={elapsed / 60:.1f}min reconnects={self.reconnects} "
-            f"gaps_ms=[{gaps}] chunks_sent={self.chunks_sent}"
+            f"gaps_ms=[{gaps}] chunks_sent={self.chunks_sent} "
+            f"max_backlog={self.max_backlog_ms:.0f}ms"
         )
 
 
@@ -135,6 +153,8 @@ class LiveTranslator:
         target_language_code: str = "en",
         echo_target_language: bool = False,
         silence_gate: bool = False,
+        source_terms: list[str] | None = None,
+        caption_terms: list[str] | None = None,
         on_source: Callable[[str], None] | None = None,
         on_target: Callable[[str], None] | None = None,
         on_state: Callable[[State, str], None] | None = None,
@@ -145,6 +165,8 @@ class LiveTranslator:
         self._target_language = target_language_code
         self._echo_target = echo_target_language
         self._silence_gate = silence_gate
+        self._source_terms = list(source_terms or ())
+        self._caption_terms = list(caption_terms or ())
 
         self._on_source = on_source or (lambda _t: None)
         self._on_target = on_target or (lambda _t: None)
@@ -240,11 +262,17 @@ class LiveTranslator:
     def _client(self) -> genai.Client:
         return genai.Client(api_key=self._api_key)
 
+    def _transcription(self, terms: list[str]) -> types.AudioTranscriptionConfig:
+        """Transcription config, with vocabulary hints when there are any."""
+        if not terms:
+            return types.AudioTranscriptionConfig()
+        return types.AudioTranscriptionConfig(custom_vocabulary=terms)
+
     def _config(self) -> types.LiveConnectConfig:
         return types.LiveConnectConfig(
             response_modalities=RESPONSE_MODALITIES,
-            input_audio_transcription=types.AudioTranscriptionConfig(),
-            output_audio_transcription=types.AudioTranscriptionConfig(),
+            input_audio_transcription=self._transcription(self._source_terms),
+            output_audio_transcription=self._transcription(self._caption_terms),
             translation_config=types.TranslationConfig(
                 target_language_code=self._target_language,
                 echo_target_language=self._echo_target,
@@ -424,12 +452,27 @@ class LiveTranslator:
     async def _send_loop(self) -> None:
         """Ring buffer to the active session. With no session, audio just accumulates."""
         silent_since: float | None = None
+        warned_backlog = False
         while not self._stop.is_set():
             holder = self._active
             if holder is None or holder.session is None or holder.closed.is_set():
                 # Reconnecting. The buffer keeps filling; we drain it once a session opens.
                 await asyncio.sleep(IDLE_POLL_SECONDS)
                 continue
+
+            backlog_ms = self._ring.available() / BYTES_PER_MS
+            if backlog_ms > self.stats.max_backlog_ms:
+                self.stats.max_backlog_ms = backlog_ms
+            if (
+                not warned_backlog
+                and backlog_ms >= BACKLOG_WARN_MS
+                and time.monotonic() - self.stats.started_at >= BACKLOG_GRACE_SECONDS
+            ):
+                warned_backlog = True
+                _log.warning(
+                    "%.0f ms of audio waiting to be sent — captions will trail by at "
+                    "least that much, and arrive in bursts", backlog_ms,
+                )
 
             chunk = self._ring.read(CHUNK_BYTES)
             if chunk is None:

@@ -118,8 +118,13 @@ class Settings:
     # Turning this off makes it hug its content and disappear when empty.
     fixed_box: bool = True
 
-    # Clear captions this long after speech stops. 0 keeps them on screen.
-    clear_after_seconds: float = 3.0  # 0 ~ 30
+    # Clear captions this long after the caption backlog has drained and the
+    # input has gone quiet. 0 keeps them on screen.
+    clear_after_seconds: float = 2.0  # 0 ~ 30
+
+    # Minimum time a settled line holds the screen before the next replaces it.
+    # Stops a burst of sentences scrolling past inside a single repaint.
+    line_hold_seconds: float = 0.7  # 0 ~ 3
 
     # Transcript recording. The filename is the session start timestamp.
     save_transcript: bool = True
@@ -135,6 +140,12 @@ class Settings:
     show_source_text: bool = False
     fullscreen: bool = False
     silence_gate: bool = False
+
+    # Terms to bias speech recognition towards, one per line. Two lists, because
+    # they are genuinely different: what the model should hear in the source
+    # language, and how names should come out in the captions.
+    vocabulary_source: str = ""
+    vocabulary_captions: str = ""
 
     # API
     target_language_code: str = "en"
@@ -163,6 +174,7 @@ class Settings:
             max_lines=int(_clamp(self.max_lines, 1, 4)),
             fixed_box=bool(self.fixed_box),
             clear_after_seconds=_clamp(self.clear_after_seconds, 0.0, 30.0),
+            line_hold_seconds=_clamp(self.line_hold_seconds, 0.0, 3.0),
             save_transcript=bool(self.save_transcript),
             show_direction_hint=bool(self.show_direction_hint),
             transcript_dir=self.transcript_dir or transcript.DEFAULT_DIR,
@@ -171,6 +183,8 @@ class Settings:
             show_source_text=bool(self.show_source_text),
             fullscreen=bool(self.fullscreen),
             silence_gate=bool(self.silence_gate),
+            vocabulary_source=_normalise_terms(self.vocabulary_source),
+            vocabulary_captions=_normalise_terms(self.vocabulary_captions),
             target_language_code=self.target_language_code or "en",
             echo_target_language=bool(self.echo_target_language),
             caption_policy=(
@@ -187,6 +201,40 @@ class Settings:
     @property
     def position(self) -> BoxPosition:
         return BoxPosition(self.box_position)
+
+    @property
+    def source_terms(self) -> list[str]:
+        """Vocabulary hints for the language being spoken."""
+        return parse_terms(self.vocabulary_source)
+
+    @property
+    def caption_terms(self) -> list[str]:
+        """Vocabulary hints for the language on screen."""
+        return parse_terms(self.vocabulary_captions)
+
+
+# Our own ceiling, not the API's: the terms ride in the setup message of every
+# session, including each reconnect, so an unbounded list would slow every swap.
+MAX_VOCABULARY_TERMS = 200
+
+
+def parse_terms(text: str) -> list[str]:
+    """One term per line. Blank lines and surrounding spaces are dropped.
+
+    Split on newlines only, never commas — an adaptation phrase can be a whole
+    clause, and clauses contain commas.
+    """
+    seen: dict[str, None] = {}
+    for line in (text or "").splitlines():
+        term = line.strip()
+        if term:
+            seen.setdefault(term, None)
+    return list(seen)[:MAX_VOCABULARY_TERMS]
+
+
+def _normalise_terms(text: str) -> str:
+    """Store exactly what will be sent: stripped, de-duplicated, capped."""
+    return "\n".join(parse_terms(text))
 
 
 def _clamp(v: float, lo: float, hi: float) -> float:
@@ -413,6 +461,27 @@ def save_api_key(key: str, *, to_keychain: bool = False) -> bool:
             _log.error("could not write key to keychain: %s", exc)
             return False
     return ok
+
+
+def stored_api_key() -> str | None:
+    """The key held in the encrypted store, ignoring the env var and Keychain.
+
+    Preferences takes this before it writes anything, so cancelling can put the
+    store back exactly as it found it.
+    """
+    return credentials.get(API_KEY_VARS[0])
+
+
+def restore_stored_api_key(previous: str | None) -> None:
+    """Undo a write to the encrypted store, back to `previous`.
+
+    Only the store is restored. A key that was also copied into the Keychain
+    stays there — there is no way to tell a fresh copy from a pre-existing one.
+    """
+    if previous:
+        credentials.put(API_KEY_VARS[0], previous)
+    else:
+        credentials.remove(API_KEY_VARS[0])
 
 
 def clear_api_key() -> None:

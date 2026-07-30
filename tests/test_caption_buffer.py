@@ -263,8 +263,8 @@ def test_whitespace_only_fragment_does_not_create_a_line():
 def test_clear_after_silence_is_two_seconds_by_default():
     from livecap.caption_buffer import CLEAR_AFTER_SECONDS
 
-    assert CLEAR_AFTER_SECONDS == 3.0
-    assert CaptionBuffer().clear_after_seconds == 3.0
+    assert CLEAR_AFTER_SECONDS == 2.0
+    assert CaptionBuffer().clear_after_seconds == 2.0
 
 
 def test_captions_are_cleared_after_the_silence_window():
@@ -291,7 +291,10 @@ def test_clear_removes_uncommitted_pending_too():
     buf.feed("no terminator", 0.0)
     buf.tick(1.3)  # the 1.2 s idle commit
     assert buf.committed_lines == ["no terminator"]
-    buf.tick(2.5)
+    # The window runs from when the line reached the screen (1.3 s), not from
+    # the fragment that produced it.
+    assert buf.tick(2.5) is False
+    assert buf.tick(3.4) is True
     assert buf.is_empty
 
 
@@ -335,6 +338,235 @@ def test_clear_setting_can_be_changed_at_runtime():
     buf.clear_after_seconds = 2.0
     assert buf.tick(11.0) is True
     assert buf.is_empty
+
+
+# --- pacing a burst of settled lines --------------------------------------
+#
+# The model translates a whole utterance at a time, so several sentences can
+# settle inside one 100 ms display tick. Qt coalesces the repaints, so without
+# pacing the reader only ever sees the last pair and the rest flash past.
+
+BURST = [
+    "One sentence.",
+    "Two sentences.",
+    "Three sentences.",
+    "Four sentences.",
+    "Five sentences.",
+]
+
+
+def burst_into(buf: CaptionBuffer, start: float = 0.0, step: float = 0.02) -> float:
+    """Feed BURST far faster than one repaint. Returns the last timestamp."""
+    now = start
+    for text in BURST:
+        now += step
+        buf.feed(text, now)
+    return now
+
+
+def display_states(buf: CaptionBuffer, start: float, ticks: int = 40) -> list[list[str]]:
+    """Every distinct display state the 100 ms tick produces."""
+    states = [buf.committed_lines]
+    for i in range(1, ticks):
+        buf.tick(start + i * 0.1)
+        if buf.committed_lines and buf.committed_lines != states[-1]:
+            states.append(buf.committed_lines)
+    return states
+
+
+def test_a_burst_no_longer_flashes_past_within_one_repaint():
+    """The measured regression: 5 sentences at once used to show only 2.
+
+    Qt coalesces repaints, so before pacing the reader saw the final pair and
+    the other three never appeared on screen at all.
+    """
+    buf = inc(max_lines=2, line_hold_seconds=0.7)
+    now = burst_into(buf)
+    shown = {line for state in display_states(buf, now) for line in state}
+    assert len(shown) == 4, "was 2 of 5 before the release was paced"
+
+
+def test_the_display_advances_one_line_at_a_time():
+    buf = inc(max_lines=2, line_hold_seconds=0.7)
+    now = burst_into(buf)
+    states = display_states(buf, now)
+    assert len(states) > 1
+    for before, after in zip(states, states[1:], strict=False):
+        assert len(set(after) - set(before)) == 1, f"{before} jumped to {after}"
+
+
+def test_no_line_is_replaced_before_its_hold_elapses():
+    buf = inc(max_lines=2, line_hold_seconds=0.7)
+    now = burst_into(buf)
+    changed_at = [now]
+    previous = buf.committed_lines
+    for i in range(1, 40):
+        t = now + i * 0.1
+        buf.tick(t)
+        if buf.committed_lines != previous:
+            changed_at.append(t)
+            previous = buf.committed_lines
+    gaps = [b - a for a, b in zip(changed_at, changed_at[1:], strict=False)]
+    assert gaps, "the queue never drained"
+    assert min(gaps) >= 0.7 - 1e-9
+
+
+def test_a_single_sentence_is_never_delayed():
+    """Pacing must not add latency to the ordinary one-line case."""
+    buf = inc(max_lines=2, line_hold_seconds=0.7)
+    buf.feed("Just the one.", 0.0)
+    assert buf.committed_lines == ["Just the one."]
+    assert buf.queued_lines == []
+    assert buf.output_complete is True
+
+
+def test_a_line_is_not_replaced_before_its_hold_elapses():
+    buf = inc(max_lines=1, line_hold_seconds=0.7)
+    buf.feed("First.", 0.0)
+    buf.feed("Second.", 0.1)
+    assert buf.committed_lines == ["First."]  # Second is queued
+    assert buf.tick(0.5) is False
+    assert buf.committed_lines == ["First."]
+    assert buf.tick(0.9) is True
+    assert buf.committed_lines == ["Second."]
+
+
+def test_pacing_never_lets_the_display_fall_further_behind():
+    """More than max_lines waiting means catching up, not queueing for ever.
+
+    This is the bound that keeps the captions near the audio: the display can
+    trail by at most max_lines * line_hold_seconds, 1.4 s at the defaults. A
+    burst longer than that loses its oldest lines from the screen, which is why
+    the transcript is written from a separate path.
+    """
+    buf = inc(max_lines=2, line_hold_seconds=0.7)
+    for i in range(20):
+        buf.feed(f"Sentence {i}.", i * 0.02)
+    assert len(buf.queued_lines) <= buf.max_lines
+
+
+def test_zero_hold_shows_everything_at_once():
+    buf = inc(max_lines=2, line_hold_seconds=0.0)
+    burst_into(buf)
+    assert buf.queued_lines == []
+    assert buf.committed_lines == ["Four sentences.", "Five sentences."]
+
+
+def test_the_transcript_keeps_every_line_of_a_burst():
+    """Pacing is a display concern; recording must not lose anything."""
+    buf = inc(max_lines=2)
+    burst_into(buf)
+    assert buf.drain_new_commits() == BURST
+
+
+def test_unsettled_text_is_withheld_while_the_queue_drains():
+    """Showing live text under lines still catching up would jumble the order."""
+    buf = inc(max_lines=2)
+    burst_into(buf)
+    buf.feed(" still being said", 1.0)
+    assert buf.pending_text == "still being said"
+    assert all(settled for _t, settled in buf.display_lines())
+    assert buf.output_complete is False
+
+
+def test_output_complete_once_the_queue_has_drained():
+    buf = inc(max_lines=2, line_hold_seconds=0.7)
+    now = burst_into(buf)
+    assert buf.output_complete is False
+    for i in range(1, 40):
+        buf.tick(now + i * 0.1)
+    assert buf.output_complete is True
+    assert buf.queued_lines == []
+
+
+def test_a_reconnect_continues_a_line_that_is_still_queued():
+    """The line to continue may be waiting its turn rather than on screen."""
+    buf = inc(max_lines=1)
+    buf.feed("the quarterly numbers.", 0.0)
+    buf.feed("A second line.", 0.1)  # queued, not displayed
+    assert buf.queued_lines == ["A second line."]
+
+    buf.note_reconnect()
+    buf.feed(" continued from there.", 1.0)
+    # Merged rather than started afresh, and settled again by the full stop.
+    assert buf.committed_lines == ["A second line. continued from there."]
+    assert buf.drain_new_commits() == [
+        "the quarterly numbers.",
+        "A second line. continued from there.",
+    ]
+
+
+# --- clearing: drained output plus a quiet input ---------------------------
+
+
+def test_the_clear_window_starts_when_the_last_line_reaches_the_screen():
+    """Not when the fragment arrived — a queued burst is still being read."""
+    buf = CaptionBuffer(policy=Policy.INCREMENTAL, clear_after_seconds=2.0, max_lines=2)
+    now = burst_into(buf)
+
+    drained_at = cleared_at = None
+    for i in range(1, 80):
+        t = now + i * 0.1
+        buf.tick(t)
+        if drained_at is None and buf.output_complete and not buf.is_empty:
+            drained_at = t
+        if buf.is_empty:
+            cleared_at = t
+            break
+
+    assert drained_at is not None, "the queue never drained"
+    assert cleared_at is not None, "the captions never cleared"
+    # Two seconds after the backlog finished, not two seconds after the burst.
+    assert cleared_at - drained_at >= 2.0 - 1e-9
+    assert cleared_at - now > 3.0
+
+
+def test_speech_holds_the_captions_even_with_no_fragments():
+    """The model can stop sending mid-sentence; captions must not vanish then."""
+    buf = CaptionBuffer(policy=Policy.INCREMENTAL, clear_after_seconds=2.0)
+    buf.feed("Half of what was said.", 0.0)
+    for i in range(1, 60):  # six seconds of somebody talking
+        assert buf.tick(i * 0.1, speaking=True) is False
+    assert buf.committed_lines == ["Half of what was said."]
+
+
+def test_captions_clear_two_seconds_after_the_room_goes_quiet():
+    buf = CaptionBuffer(policy=Policy.INCREMENTAL, clear_after_seconds=2.0)
+    buf.feed("All of what was said.", 0.0)
+    for i in range(1, 50):  # still talking for five seconds
+        buf.tick(i * 0.1, speaking=True)
+    assert not buf.is_empty
+
+    buf.tick(5.0, speaking=False)  # quiet starts here
+    assert buf.tick(6.9, speaking=False) is False
+    assert buf.tick(7.1, speaking=False) is True
+    assert buf.is_empty
+
+
+def test_an_unknown_input_level_falls_back_to_fragment_timing():
+    """With no capture open there is no level to go on, so behave as before."""
+    buf = CaptionBuffer(policy=Policy.INCREMENTAL, clear_after_seconds=2.0)
+    buf.feed("Hello there.", 0.0)
+    assert buf.tick(1.5, speaking=None) is False
+    assert buf.tick(2.1, speaking=None) is True
+
+
+def test_captions_never_linger_past_the_ceiling():
+    """A noisy room must not pin stale captions on screen for ever."""
+    from livecap.caption_buffer import MAX_CLEAR_WAIT_SECONDS
+
+    buf = CaptionBuffer(policy=Policy.INCREMENTAL, clear_after_seconds=2.0)
+    buf.feed("Said once, long ago.", 0.0)
+    assert buf.tick(MAX_CLEAR_WAIT_SECONDS - 0.1, speaking=True) is False
+    assert buf.tick(MAX_CLEAR_WAIT_SECONDS + 0.1, speaking=True) is True
+    assert buf.is_empty
+
+
+def test_the_ceiling_does_not_override_a_disabled_clear():
+    buf = CaptionBuffer(policy=Policy.INCREMENTAL, clear_after_seconds=0.0)
+    buf.feed("Stays put.", 0.0)
+    assert buf.tick(600.0, speaking=False) is False
+    assert buf.committed_lines == ["Stays put."]
 
 
 # --- switching policy at runtime ------------------------------------------

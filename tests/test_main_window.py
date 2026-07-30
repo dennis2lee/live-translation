@@ -198,9 +198,15 @@ def test_clear_captions_empties_the_view(window):
 
 
 def test_silence_clear_setting_reaches_the_buffer(window):
-    assert window._buffer.clear_after_seconds == 3.0
+    assert window._buffer.clear_after_seconds == 2.0
     window._update(clear_after_seconds=5.0)
     assert window._buffer.clear_after_seconds == 5.0
+
+
+def test_line_hold_setting_reaches_the_buffer(window):
+    assert window._buffer.line_hold_seconds == 0.7
+    window._update(line_hold_seconds=1.5)
+    assert window._buffer.line_hold_seconds == 1.5
 
 
 def test_tick_clears_the_view_after_silence(window, monkeypatch):
@@ -328,12 +334,16 @@ def test_starting_translation_announces_the_direction(window, monkeypatch):
 class _StubCapture:
     def __init__(self, *a, **k):
         self.ring = object()
+        self.device = InputDevice(0, "Stub Mic", 1, 48000.0)
 
     def start(self):
-        return InputDevice(0, "Stub Mic", 1, 48000.0)
+        return self.device
 
     def stop(self):
         pass
+
+    def take_peak(self) -> float:
+        return 0.0
 
 
 class _StubTranslator:
@@ -454,6 +464,15 @@ def test_changing_the_silence_gate_in_preferences_reconnects(window, monkeypatch
     assert [m["silence_gate"] for m in made] == [False, True]
 
 
+def test_changing_the_vocabulary_in_preferences_reconnects(window, monkeypatch, tmp_path):
+    """The terms are fixed when the session connects, so they cannot apply silently."""
+    made, _events = _running_window(window, monkeypatch, tmp_path)
+    window._apply_new_settings(
+        replace(window._settings, vocabulary_source="영업이익률\n평우")
+    )
+    assert [m["source_terms"] for m in made] == [[], ["영업이익률", "평우"]]
+
+
 def test_changing_the_audio_device_in_preferences_restarts_capture(
     window, monkeypatch, tmp_path
 ):
@@ -479,6 +498,116 @@ def test_preferences_apply_the_clear_delay_and_policy_immediately(window):
     )
     assert window._buffer.clear_after_seconds == 9.0
     assert window._buffer.effective_policy is Policy.UTTERANCE
+
+
+# --- Apply, OK and Cancel in Preferences ----------------------------------
+
+
+class _FakeDialog:
+    """Stands in for SettingsDialog: scripted button presses, no widgets."""
+
+    def __init__(self, script, result):
+        self._script = script  # callables run inside exec()
+        self._result = result  # what exec() returns: 1 = OK, 0 = Cancel
+        self._settings = None
+        self.applied = _Signal()
+
+    def exec(self):
+        for step in self._script:
+            step(self)
+        return self._result
+
+    def result_settings(self):
+        return self._settings
+
+
+class _Signal:
+    def __init__(self):
+        self._slots = []
+
+    def connect(self, slot):
+        self._slots.append(slot)
+
+    def emit(self, value):
+        for slot in self._slots:
+            slot(value)
+
+
+def _open_with(window, monkeypatch, script, result, base=None):
+    """Run _open_settings against a scripted dialog."""
+    base = base if base is not None else window._settings
+    made = {}
+
+    def factory(settings, parent=None):
+        dlg = _FakeDialog(script, result)
+        dlg._settings = base
+        made["dlg"] = dlg
+        return dlg
+
+    monkeypatch.setattr(mw, "SettingsDialog", factory)
+    window._open_settings()
+    return made["dlg"]
+
+
+def test_apply_takes_effect_while_the_dialog_is_still_open(window, monkeypatch):
+    target = replace(window._settings, font_size=72)
+    seen: list[int] = []
+
+    def press_apply(dlg):
+        dlg.applied.emit(target)
+        seen.append(window._settings.font_size)  # read from inside exec()
+        seen.append(window._view._settings.font_size)
+
+    _open_with(window, monkeypatch, script=[press_apply], result=1, base=target)
+    assert seen == [72, 72], "Apply must reach the window and the view at once"
+
+
+def test_apply_then_ok_keeps_the_change(window, monkeypatch):
+    target = replace(window._settings, font_size=72)
+    _open_with(
+        window, monkeypatch, script=[lambda d: d.applied.emit(target)], result=1, base=target
+    )
+    assert window._settings.font_size == 72
+
+
+def test_apply_then_cancel_restores_the_original_settings(window, monkeypatch):
+    """Cancel means "as it was", even when Apply already changed things."""
+    original = window._settings
+    applied = replace(original, font_size=96, bg_color="#123456", max_lines=4)
+    _open_with(
+        window, monkeypatch, script=[lambda d: d.applied.emit(applied)], result=0, base=applied
+    )
+    assert window._settings == original
+    assert window._view._settings.font_size == original.font_size
+    assert window._buffer.max_lines == original.max_lines
+
+
+def test_cancel_without_apply_changes_nothing(window, monkeypatch):
+    original = window._settings
+    _open_with(window, monkeypatch, script=[], result=0)
+    assert window._settings == original
+
+
+def test_ok_applies_the_dialog_result(window, monkeypatch):
+    target = replace(window._settings, font_size=32)
+    _open_with(window, monkeypatch, script=[], result=1, base=target)
+    assert window._settings.font_size == 32
+
+
+def test_apply_reaches_a_live_session_and_cancel_takes_it_back(
+    window, monkeypatch, tmp_path
+):
+    """Apply must restart what a live session needs, and Cancel must undo that."""
+    made, _events = _running_window(window, monkeypatch, tmp_path)
+    assert [m["target_language_code"] for m in made] == ["en"]
+
+    applied = replace(window._settings, target_language_code="ko")
+    _open_with(
+        window, monkeypatch, script=[lambda d: d.applied.emit(applied)], result=0, base=applied
+    )
+    # Applied, then reverted: the translator reconnected twice, ending on "en".
+    assert [m["target_language_code"] for m in made] == ["en", "ko", "en"]
+    assert window._settings.target_language_code == "en"
 
 
 def test_resetting_settings_keeps_undrained_lines_in_the_transcript(
@@ -599,6 +728,9 @@ class _SilentCapture(_StubCapture):
         self._peak = peak
         self.device = InputDevice(1, "Sound Blaster X3", 2, 96000.0)
 
+    def start(self):
+        return self.device
+
     def take_peak(self) -> float:
         return self._peak
 
@@ -676,6 +808,58 @@ def test_no_silence_check_while_idle(window, caplog):
         window._check_input_level()  # no capture at all — must not raise
     assert not caplog.records
     assert window._view._status == ""
+
+
+def test_the_tick_reads_the_peak_only_once(window, monkeypatch, tmp_path):
+    """take_peak() resets the meter, so two readers would each see half of it."""
+    reads = []
+
+    class _Counting(_SilentCapture):
+        def take_peak(self) -> float:
+            reads.append(1)
+            return self._peak
+
+    _run_with_capture(window, monkeypatch, tmp_path, _Counting(peak=0.1))
+    reads.clear()
+    window._on_tick()
+    assert len(reads) == 1
+
+
+def test_a_loud_input_tells_the_buffer_somebody_is_speaking(
+    window, monkeypatch, tmp_path
+):
+    _run_with_capture(window, monkeypatch, tmp_path, _SilentCapture(peak=0.2))
+    window._on_tick()
+    assert window._buffer._quiet_since is None
+    assert window._buffer._audio_known is True
+
+
+def test_a_quiet_input_starts_the_clear_countdown(window, monkeypatch, tmp_path):
+    _run_with_capture(window, monkeypatch, tmp_path, _SilentCapture(peak=0.0))
+    window._on_tick()
+    assert window._buffer._quiet_since is not None
+
+
+def test_no_capture_leaves_the_level_unknown(window):
+    window._on_tick()
+    assert window._buffer._audio_known is False
+
+
+def test_speech_keeps_the_captions_up_when_fragments_stop(
+    window, monkeypatch, tmp_path
+):
+    """The reported symptom: captions vanished while the speaker was mid-sentence."""
+    base = time.monotonic()
+    monkeypatch.setattr(mw.time, "monotonic", lambda: base)
+    _run_with_capture(window, monkeypatch, tmp_path, _SilentCapture(peak=0.2))
+    window._on_target_text("Half of a sentence.")
+    assert window._view._lines == [("Half of a sentence.", True)]
+
+    # Six seconds pass with the speaker still talking and no fragments arriving.
+    for i in range(1, 61):
+        monkeypatch.setattr(mw.time, "monotonic", lambda t=base + i * 0.1: t)
+        window._on_tick()
+    assert window._view._lines == [("Half of a sentence.", True)]
 
 
 # --- quitting with a session open -----------------------------------------

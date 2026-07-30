@@ -29,8 +29,20 @@ and no config file to hand-edit.
 |---|---|
 | API Key | The Gemini key, **Test Key**, and where the key in force came from |
 | Audio | Input device, and a **live level meter** to check it |
+| Network | **Run Speed Test** — latency to the API, upload and download speed |
+| Vocabulary | Terms that bias speech recognition, for names and jargon the model mishears |
 | Appearance | Background, box and text colours; position, size, lines, margins |
-| Behaviour | Target language, transcript, clear delay, silence gate, verbose logging |
+| Behaviour | Target language, transcript, caption timing, silence gate, verbose logging |
+
+**Apply** applies the changes and keeps the window open, **OK** applies and
+closes, and **Cancel** puts back whatever was in force when the window opened —
+including undoing an Apply you have already pressed. Anything a live session
+needs is restarted in both directions, so cancelling a target-language change
+reconnects back to the original language.
+
+> Cancel restores the encrypted key store as it found it. A key that Apply also
+> copied into the Keychain stays there — there is no way to tell a fresh copy
+> from one that was already present.
 
 ### The API key
 
@@ -54,6 +66,38 @@ The key is encrypted and written to
 actually delivering, with a plain reading — `-12 dBFS — good`, `-88 dBFS —
 silent, check the input`. It answers "is this device even connected?" without
 starting a translation session or spending anything.
+
+### The speed test
+
+**Network → Run Speed Test** measures the three things that decide whether a
+session will hold up, and says so in one line — `Good — plenty of headroom`,
+`Too slow — 120 kbit/s up cannot carry the 256 kbit/s of audio a session needs`.
+
+| Measurement | Why it matters |
+|---|---|
+| Latency to `generativelanguage.googleapis.com` | Sets how far the captions trail the speaker |
+| Jitter | What actually produces stalls — a steady 200 ms is easier to watch than 80 ms that spikes to 400 |
+| Upload | Carries the audio: **256 kbit/s** continuously, 16 kHz × 16-bit mono |
+| Download | Only the transcription fragments come back, so this is never the limit |
+
+- Latency is timed against the API host itself, with TCP handshakes — free, no session is opened and no key is needed
+- Throughput uses the public `speed.cloudflare.com` endpoints; the payload is zeros, so no audio, transcript or key material leaves the machine
+- Runs on its own thread, so the captions never stall while it measures
+
+### Vocabulary hints
+
+**Preferences → Vocabulary** biases speech recognition towards names and jargon
+the model would otherwise mishear or spell inconsistently, one term per line.
+
+| Field | What it is for |
+|---|---|
+| Source terms | How a name or term is **spoken**, in the language you're speaking — a Korean name or technical term the model keeps mangling. Because the caption comes from what the model heard, fixing this is what actually improves the translation |
+| Caption terms | How a name should **appear in the captions**, in the target language — for a name that is heard correctly but spelled inconsistently between sentences |
+
+- Sent as the Live API's `custom_vocabulary` on the input and output transcriptions, respectively
+- Up to 200 terms per list; they ride in the setup message of every session and every reconnect, so a long list slows each one
+- Fixed when a session connects, like the target language — changing the list while translating reconnects the translator, audio and the transcript keep going
+- Whether the preview model actually honours these hints has not been measured — the API accepts them, which is not the same thing
 
 ## Keyboard shortcuts
 
@@ -156,15 +200,41 @@ just below the box, wherever it is.
 | Caption position | Bottom | Top / Middle / Bottom |
 | Font size | 44 px | 24–96 |
 | Max lines | 2 | 1–4 |
+| Hold each line | 0.7 s | 0–3 s |
+| Clear after silence | 2 s | 0–10 s |
 
 Unconfirmed text is drawn at 55% alpha so you can see a phrase being revised
 before it settles.
 
-## Clearing on silence
+## Caption timing
 
-- Captions clear **3 seconds** after the last transcription fragment arrives
+The model translates a whole utterance at a time, so several sentences can settle
+at once. Two settings control what happens then.
+
+### Holding each line
+
+Settled lines are queued and released **one per 0.7 s**, so a burst is read out
+rather than scrolling past between two repaints. Measured on a five-sentence
+burst: 2 of the 5 lines used to reach the screen, now 4 do.
+
+- No more than `max_lines` lines are ever held back, so the captions trail the audio by at most **1.4 s** at the defaults — pacing smooths a burst, it never accumulates
+- A burst longer than that still loses its oldest line from the screen; two lines cannot show five sentences. The transcript keeps every one of them regardless
+- `0` shows everything the instant it settles, which is the old behaviour
+
+### Clearing on silence
+
+Captions clear **2 seconds** after **both** of these hold:
+
+- the queue has drained — everything received has been shown
+- the input has been quiet, judged from the actual audio level, not from fragment arrival
+
+The audio condition is what stops captions vanishing under a speaker mid-sentence:
+the model can go quiet for several seconds while it works, and fragment arrival
+alone cannot tell that apart from a finished sentence.
+
 - Adjustable from 0–10 s in Preferences; `0` keeps captions on screen indefinitely
-- The trigger is fragment arrival, not audio level — fragments keep coming about once a second while someone is speaking, so captions never clear mid-sentence
+- Captions never linger more than **15 s** past the last fragment whatever the input is doing, so a noisy room cannot pin stale text on screen
+- Speech is anything above **-26 dBFS**, well clear of the -36 a quiet room reads on a built-in mic
 
 ## Audio input
 
@@ -248,6 +318,7 @@ src/livecap/
 ├── app.py                 entry point, --selftest
 ├── config.py              Settings, QSettings persistence, API key lookup
 ├── credentials.py         encrypted key store (replaces .env)
+├── netcheck.py            latency, jitter and throughput against what a session needs
 ├── audio.py               AudioCapture, RingBuffer (48k → 16k, int16 LE)
 ├── translator.py          LiveTranslator — sessions, resumption, pre-emptive reconnect
 ├── transcript.py          Markdown transcript writer
@@ -283,10 +354,14 @@ cd ~/work/live-translation && .venv/bin/python -m ruff check .
 ```
 
 - The whole suite runs offline — no test needs an API key or network access
+- Tests are isolated from both places the app persists things: the encrypted key store and the preferences plist. Without that, a run would read and overwrite the key and the settings actually in use
 - UI tests render offscreen and inspect pixels directly
 - `caption_buffer.py` has no Qt or network dependency and is covered by unit tests
+- The speed test is covered with the socket and `urlopen` calls replaced, so no test opens a connection
+- Caption pacing is pinned by a five-sentence burst: the number of lines reaching the display is asserted, not just the final state
 - Reconnect logic is tested against a fake Live session
 - Quitting mid-session is tested in both directions: the device is released and the transcript finished
+- Apply, OK and Cancel are tested as a cycle, including that cancelling after an Apply restarts a live session back to where it was
 - The Windows and Linux branches of `platform_support.py` are pinned by faking `sys.platform`
 
 Measurement scripts live in `spikes/`, and their findings are recorded in

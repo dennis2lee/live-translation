@@ -15,7 +15,20 @@ from enum import StrEnum
 
 SENTENCE_ENDERS = ".?!"
 IDLE_COMMIT_SECONDS = 1.2
-CLEAR_AFTER_SECONDS = 3.0
+CLEAR_AFTER_SECONDS = 2.0
+
+# A settled line has to stay on screen this long before the next one may push
+# it off. The model translates a whole utterance at a time, so several sentences
+# can settle inside a single 100 ms display tick; Qt coalesces the repaints and
+# the reader only ever sees the last pair. Releasing the backlog one line at a
+# time is what stops a burst flashing past unread.
+LINE_HOLD_SECONDS = 0.7
+
+# Ceiling on how long captions may sit on screen after the last fragment,
+# whatever the input is doing. Without it a noisy room would keep resetting the
+# clear countdown for ever.
+MAX_CLEAR_WAIT_SECONDS = 15.0
+
 _AUTO_SAMPLE_SIZE = 8
 _AUTO_UTTERANCE_CHARS = 25
 
@@ -37,6 +50,15 @@ class Policy(StrEnum):
 class CaptionBuffer:
     """Holds arriving fragments as committed lines plus pending text.
 
+    A settled line does not go straight on screen. It joins a queue that is
+    released one line at a time, so a burst of sentences is read out at a
+    readable pace rather than scrolling past inside one repaint. Pacing never
+    accumulates: no more than `max_lines` lines are ever held back, so the
+    display trails the audio by at most `max_lines * line_hold_seconds`. A burst
+    longer than that loses its oldest line from the screen — the transcript
+    still gets every one of them, since `drain_new_commits` is independent of
+    what is displayed.
+
     Time is injected via `now` rather than read from a clock, which keeps the
     tests deterministic.
     """
@@ -46,12 +68,22 @@ class CaptionBuffer:
     idle_commit_seconds: float = IDLE_COMMIT_SECONDS
 
     clear_after_seconds: float = CLEAR_AFTER_SECONDS
-    """Clear captions this long after the last fragment. 0 disables clearing."""
+    """Clear this long after the backlog has drained and the input went quiet.
+
+    0 disables clearing.
+    """
+
+    line_hold_seconds: float = LINE_HOLD_SECONDS
+    """Minimum time a line stays on screen before the next may replace it."""
 
     _committed: deque[str] = field(default_factory=lambda: deque(maxlen=2), init=False)
+    _queue: deque[str] = field(default_factory=deque, init=False)
     _pending: str = field(default="", init=False)
     _last_text: str | None = field(default=None, init=False)
     _last_feed_at: float = field(default=0.0, init=False)
+    _released_at: float = field(default=0.0, init=False)
+    _audio_known: bool = field(default=False, init=False)
+    _quiet_since: float | None = field(default=None, init=False)
     _continue_next: bool = field(default=False, init=False)
     _resolved: Policy | None = field(default=None, init=False)
     _samples: list[int] = field(default_factory=list, init=False)
@@ -76,19 +108,37 @@ class CaptionBuffer:
         return self._pending
 
     @property
+    def queued_lines(self) -> list[str]:
+        """Settled lines still waiting for their turn on screen, oldest first."""
+        return list(self._queue)
+
+    @property
+    def output_complete(self) -> bool:
+        """True when everything received has been shown.
+
+        Nothing is queued and nothing is half-settled, so the display has caught
+        up with the audio. The clear countdown only runs once this holds.
+        """
+        return not self._queue and not self._pending
+
+    @property
     def effective_policy(self) -> Policy:
         """AUTO counts as INCREMENTAL until enough fragments have been seen."""
         return self._resolved or Policy.INCREMENTAL
 
     @property
     def is_empty(self) -> bool:
-        """True when there is nothing to show."""
-        return not self._committed and not self._pending
+        """True when there is nothing to show and nothing waiting to be shown."""
+        return not self._committed and not self._pending and not self._queue
 
     def display_lines(self) -> list[tuple[str, bool]]:
-        """(text, settled) pairs, at most max_lines, dropping the oldest."""
+        """(text, settled) pairs, at most max_lines, dropping the oldest.
+
+        Unsettled text is withheld while the queue drains: appending live text
+        under lines that are still catching up would show them out of order.
+        """
         lines: list[tuple[str, bool]] = [(t, True) for t in self._committed]
-        if self._pending:
+        if self._pending and not self._queue:
             lines.append((self._pending, False))
         return lines[-self.max_lines :]
 
@@ -129,18 +179,24 @@ class CaptionBuffer:
                 )
 
         # The first fragment after a reconnect may continue the previous sentence,
-        # so pull the last committed line back into pending rather than starting new.
+        # so pull the last settled line back into pending rather than starting new.
+        # It may still be queued rather than on screen, so check the queue first.
         if self._continue_next:
             self._continue_next = False
-            if not self._pending and self._committed:
-                resumed = self._committed.pop()
-                self._pending = resumed
-                if self._new_commits and self._new_commits[-1] == resumed:
-                    # Not handed to the transcript yet — emit the merged line whole.
-                    self._new_commits.pop()
-                else:
-                    # Already written out — emit only the continuation, not a duplicate.
-                    self._resumed_prefix = resumed
+            if not self._pending:
+                resumed = ""
+                if self._queue:
+                    resumed = self._queue.pop()
+                elif self._committed:
+                    resumed = self._committed.pop()
+                if resumed:
+                    self._pending = resumed
+                    if self._new_commits and self._new_commits[-1] == resumed:
+                        # Not handed to the transcript yet — emit the merged line whole.
+                        self._new_commits.pop()
+                    else:
+                        # Already written out — emit only the continuation.
+                        self._resumed_prefix = resumed
 
         self._pending = _join(self._pending, text)
 
@@ -148,12 +204,28 @@ class CaptionBuffer:
             tuple(SENTENCE_ENDERS)
         ):
             self._commit()
+            # Show it straight away when there is room, so a single sentence
+            # never waits for the next tick.
+            self._drain(now)
         return True
 
-    def tick(self, now: float) -> bool:
-        """Call periodically. Settles idle text, then clears after longer silence."""
+    def tick(self, now: float, *, speaking: bool | None = None) -> bool:
+        """Call periodically. Settles idle text, releases the backlog, then clears.
+
+        `speaking` reports whether the input carried signal since the last call.
+        `None` means the level is unknown — with no audio to go on, silence is
+        judged from fragment arrival alone, as it was before.
+        """
         changed = False
         idle = now - self._last_feed_at
+
+        # Three states, not two: somebody is speaking, the input is quiet, or
+        # there is no level to go on at all.
+        self._audio_known = speaking is not None
+        if speaking is True:
+            self._quiet_since = None
+        elif speaking is False and self._quiet_since is None:
+            self._quiet_since = now
 
         # Settle a phrase that stopped without sentence-final punctuation.
         if (
@@ -164,11 +236,18 @@ class CaptionBuffer:
             self._commit()
             changed = True
 
-        # Clear once speech has stopped. Applies to both policies.
-        if self.clear_after_seconds and not self.is_empty and idle >= self.clear_after_seconds:
-            # Settle first, or pending text vanishes from the transcript when
-            # clear_after_seconds is set shorter than idle_commit_seconds.
+        # A clear window shorter than the commit window would otherwise strand
+        # pending text: the display would never report itself complete, so it
+        # would never clear and the text would never reach the transcript.
+        if self.clear_after_seconds and self._pending and idle >= self.clear_after_seconds:
             self._commit()
+            changed = True
+
+        if self._drain(now):
+            changed = True
+
+        # Clear once the backlog has drained and the room has gone quiet.
+        if self._clear_due(now):
             self.clear()
             changed = True
 
@@ -198,6 +277,7 @@ class CaptionBuffer:
 
     def clear(self) -> None:
         self._committed.clear()
+        self._queue.clear()
         self._pending = ""
         self._last_text = None
         self._continue_next = False
@@ -205,13 +285,52 @@ class CaptionBuffer:
 
     # --- internals --------------------------------------------------------
 
+    def _drain(self, now: float) -> bool:
+        """Release as many queued lines as their hold times allow."""
+        changed = False
+        while self._release_due(now):
+            self._committed.append(self._queue.popleft())
+            self._released_at = now
+            changed = True
+        return changed
+
+    def _release_due(self, now: float) -> bool:
+        """Whether the next queued line may go on screen yet."""
+        if not self._queue:
+            return False
+        if len(self._committed) < self.max_lines:
+            return True  # room to spare — nothing readable is pushed off
+        if len(self._queue) > self.max_lines:
+            return True  # too far behind to keep pacing; catch up in one go
+        return now - self._released_at >= self.line_hold_seconds
+
+    def _clear_due(self, now: float) -> bool:
+        if not self.clear_after_seconds or self.is_empty:
+            return False
+        # The ceiling comes first: captions must not sit on screen for ever
+        # because the room is noisy or the backlog stopped draining.
+        if now - self._last_feed_at >= MAX_CLEAR_WAIT_SECONDS:
+            return True
+        if not self.output_complete:
+            return False  # still pouring out — the countdown has not started
+        if self._audio_known and self._quiet_since is None:
+            # Somebody is talking. The model can go quiet mid-sentence, and
+            # wiping the captions underneath them is the reported complaint.
+            return False
+        # The countdown runs from the later of the last fragment, the last line
+        # reaching the screen, and the moment the input went quiet.
+        quiet_since = max(self._last_feed_at, self._released_at)
+        if self._quiet_since is not None:
+            quiet_since = max(quiet_since, self._quiet_since)
+        return now - quiet_since >= self.clear_after_seconds
+
     def _commit(self) -> None:
         line = self._pending.strip()
         self._pending = ""
         prefix, self._resumed_prefix = self._resumed_prefix, ""
         if not line:
             return
-        self._committed.append(line)
+        self._queue.append(line)
         if prefix and line.startswith(prefix):
             rest = line[len(prefix) :].strip()
             if rest:
