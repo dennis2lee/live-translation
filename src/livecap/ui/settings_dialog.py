@@ -13,7 +13,7 @@ from __future__ import annotations
 from dataclasses import replace
 
 from PyQt6.QtCore import QObject, Qt, QThread, QTimer, pyqtSignal
-from PyQt6.QtGui import QColor
+from PyQt6.QtGui import QColor, QFontMetrics
 from PyQt6.QtWidgets import (
     QCheckBox,
     QColorDialog,
@@ -56,6 +56,10 @@ POLICY_LABELS = {
 # it is still running crashes.
 WORKER_WAIT_MS = 3000
 _DETACHED_WORKERS: set[QThread] = set()
+
+# Width reserved for the Network tab's result labels, wide enough that most
+# verdicts fit on one line without forcing the dialog uncomfortably wide.
+NET_LABEL_WIDTH = 460
 
 METER_MS = 100
 # Peak in dBFS mapped onto the meter. Below the floor there is nothing to see;
@@ -448,11 +452,19 @@ class SettingsDialog(QDialog):
 
         self._net_verdict = QLabel("Not run yet.")
         self._net_verdict.setWordWrap(True)
+        # QFormLayout fixes a wrapped label's row height to whatever its text
+        # needs at construction time — "Not run yet." is one line. The real
+        # verdict can run to two, and without reserving room for that up front,
+        # the second line is clipped rather than the row growing to fit it.
+        self._size_for_wrapped_lines(self._net_verdict, lines=2, width=NET_LABEL_WIDTH)
         form.addRow("Result", self._net_verdict)
 
         self._net_detail = QLabel("")
         self._net_detail.setWordWrap(True)
         self._net_detail.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
+        # Three measurements, and the latency line alone can wrap on its own —
+        # same reservation, sized for the worst case rather than the empty start.
+        self._size_for_wrapped_lines(self._net_detail, lines=5, width=NET_LABEL_WIDTH)
         form.addRow("Detail", self._net_detail)
 
         note = QLabel(
@@ -706,6 +718,18 @@ class SettingsDialog(QDialog):
         return page
 
     # --- widget helpers ---------------------------------------------------
+
+    def _size_for_wrapped_lines(self, label: QLabel, *, lines: int, width: int) -> None:
+        """Reserve room for `lines` of wrapped text, at construction time.
+
+        A QFormLayout row built from a short placeholder fixes its height to
+        that placeholder — later text that needs more lines just gets clipped,
+        because nothing forces the row to grow again. Setting the height up
+        front, before any real content arrives, sidesteps that entirely.
+        """
+        label.setMinimumWidth(width)
+        fm = QFontMetrics(label.font())
+        label.setMinimumHeight(fm.lineSpacing() * lines)
 
     def _spin(self, value: int, lo: int, hi: int, suffix: str) -> QSpinBox:
         s = QSpinBox()

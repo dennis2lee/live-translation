@@ -423,6 +423,39 @@ def test_the_detail_lists_every_measurement(dialog):
     assert lines[2].startswith("Download")
 
 
+def test_the_result_labels_reserve_room_for_a_two_line_verdict(dialog):
+    """A QFormLayout row fixes its height to the placeholder it was built with —
+    "Not run yet." is one line, but a real verdict can run to two. Without
+    reserving the second line's height up front, it gets clipped rather than
+    the row growing to fit it."""
+    from PyQt6.QtGui import QFontMetrics
+
+    fm = QFontMetrics(dialog._net_verdict.font())
+    assert dialog._net_verdict.minimumHeight() >= fm.lineSpacing() * 2
+
+
+def test_the_detail_label_reserves_room_for_several_wrapped_lines(dialog):
+    """Three measurements, and the latency line alone can wrap on its own."""
+    from PyQt6.QtGui import QFontMetrics
+
+    fm = QFontMetrics(dialog._net_detail.font())
+    assert dialog._net_detail.minimumHeight() >= fm.lineSpacing() * 4
+
+
+def test_a_long_verdict_fits_within_its_reserved_height(dialog):
+    """The concrete regression: reserved height must cover the actual content,
+    not just look generous in isolation."""
+    dialog._speed_tested(_report(300.0, [450.0, 460.0]))
+    assert len(dialog._net_verdict.text()) > 60  # a real, non-trivial message
+    needed = dialog._net_verdict.heightForWidth(dialog._net_verdict.width())
+    assert dialog._net_verdict.minimumHeight() >= needed
+
+
+def test_the_result_labels_are_wide_enough_to_avoid_needless_wrapping(dialog):
+    assert dialog._net_verdict.minimumWidth() >= sd.NET_LABEL_WIDTH
+    assert dialog._net_detail.minimumWidth() >= sd.NET_LABEL_WIDTH
+
+
 def test_the_speed_test_button_is_re_enabled_afterwards(dialog):
     dialog._net_btn.setEnabled(False)
     dialog._speed_test_finished()
