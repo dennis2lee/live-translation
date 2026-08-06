@@ -140,6 +140,47 @@ while macOS shows the microphone prompt, because opening the device is a
 blocking call made on that goroutine. It happens once per install, and the
 status dot stays grey until the prompt is answered.
 
+### End to end, from a real microphone (2026-08-06)
+
+The `0` key on the built bundle: the status dot went green, the menu bar showed
+the microphone-in-use indicator, and a transcript was created. Dennis then spoke
+Korean into the built-in microphone, and the Go build translated it. Its
+transcript, in full:
+
+```
+# LiveCap transcript
+
+- **Started** 2026-08-06 08:08:44
+- **Target language** en
+- **Model** gemini-3.5-live-translate-preview
+
+---
+
+`01:59` Three, four,
+`02:00` two, two, three, four.
+`02:07` That's why I did it.
+
+---
+
+- **Ended** 2026-08-06 08:10:59
+- **Duration** 02:15
+- **Lines** 3
+- **Reconnects** 0
+```
+
+That is the whole chain: microphone → ring buffer → libsoxr → the Live API →
+fragments → the caption buffer → the transcript. The footer matters as much as
+the lines do — it is only written by `Shutdown`, so the single exit path ran and
+closed the file properly rather than leaving it half-written.
+
+**One false alarm, recorded because it wasted a round trip.** Before this,
+playing the Korean fixture through the speakers produced nothing. The cause was
+`output volume: 0, output muted: true` — the machine was silent, so the
+microphone had nothing to hear. Not a fault in the port. When two builds of the
+same application are installed and both are called LiveCap, check *which*
+process is running and which transcript grew before concluding anything: the
+first "it went green" of the morning was the Python build, not this one.
+
 ## A1 — malgo capture
 
 `go run ./spikes/a1_capture -device "MacBook Air"`.

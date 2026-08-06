@@ -792,11 +792,16 @@ in `src_go/spikes/RESULTS.md`.
   back to Gio with a hand-built menu, and that decision would come back to
   Dennis with evidence before any code is written on it.
 
-Status, 2026-08-06: **G1 to G6 are written and green.** `go vet`, `gofmt` and
+Status, 2026-08-06: **G1 to G6 are written and green, and the whole chain has
+run once for real** — Korean spoken into the built-in microphone came back as
+English through the bundled application, with a properly closed transcript
+(`src_go/spikes/RESULTS.md`). `go vet`, `gofmt` and
 `go test -race ./...` all pass, and the bundle runs its own `--selftest`. What
-is *not* yet done is the measuring: the 30-minute endurance run of G3, the
-side-by-side visual comparison of G4, and the manual checklist walk. Those are
-the parity gate (§12), and they are what stands between this and 1.0.0.
+is *not* yet done is the measuring at length: the 30-minute endurance run of G3,
+the side-by-side visual comparison of G4, and the manual checklist walk. One
+parity gap is also open — the Python build opens maximised and Fyne has no
+maximise API. Those are the parity gate (§12), and they are what stands between
+this and 1.0.0.
 
 **G1 — Pure logic.** captions, config, credentials, netcheck, transcript,
 platform (minus display-sleep wiring). Exit: every mapped test green,
