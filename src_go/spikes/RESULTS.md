@@ -462,3 +462,58 @@ The G3 endurance line of the parity gate is closed.
 The thinner English around the swaps in the first run is thereby explained:
 nothing was lost from the audio or the recognition — the model simply phrases
 each pass differently, and the English is the wrong place to measure.
+
+
+---
+
+## G4/G5 — transcript parity and the live direction switch (2026-08-06)
+
+### Transcript byte-format: identical
+
+`spikes/g4_transcript_golden` feeds the identical fragment script — same start
+time, same lines including Korean, same elapsed values, same reconnect and
+direction notes, same trailing-space and empty-line cases — to the Go writer
+and to the Python `TranscriptWriter`, and diffs the files:
+
+```
+IDENTICAL apart from the Ended wall-clock line
+```
+
+Even the filenames match (`2026-07-24_143052.md`). The one normalised line is
+`- **Ended**`, which is wall clock in both implementations by design.
+
+### Direction switch, live
+
+`spikes/g5_direction` mimics `Window.restartTranslator` exactly: one ring
+buffer and one transcript writer survive the switch, the translator alone is
+stopped and reopened with the new target, and the switch is noted in the
+transcript. Korean audio fed to the KO→EN half, English to the EN→KO half:
+
+```
+target=en  fragments=73  with-hangul=0
+  first: Hello. Today's quarterly earnings meeting
+target=ko  fragments=76  with-hangul=75
+  first: 여러분, 분기별 실적 회의를 시작하겠습니다.
+PASS — one transcript, both directions, switch noted
+```
+
+EN→KO is thereby proven live, not just configured — the gate line closes.
+
+### Display sleep, and a first shutdown route
+
+- `TestAssertionIsVisibleToPmset` acquires the same `DisplaySleepBlocker` the
+  window uses and greps `pmset -g assertions` for it, then releases and greps
+  again. Green — the assertion really appears and disappears.
+- SIGTERM against a running (idle) instance logged
+  `shutdown complete goroutines=9` and exited cleanly. The mid-session version
+  of all four routes still needs the screen, and screen access was declined
+  while the Python build was live — deferred, not skipped.
+
+### A cosmetic warning, kept honest
+
+The app logs Fyne's "not been migrated to the fyne.Do threading model" warning
+once at launch. The tick loop now starts with the event loop (armed inside
+`Lifecycle().SetOnStarted`, which also un-hangs the test driver), but the
+warning persists, so its trigger is elsewhere — possibly Fyne-internal. It is
+cosmetic today and a crash risk at the next major Fyne release, so it is filed
+as follow-up work rather than forgotten.

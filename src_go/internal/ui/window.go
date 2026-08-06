@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"log/slog"
 	"os/exec"
+	"runtime"
 	"strings"
 	"sync"
 	"time"
@@ -123,8 +124,17 @@ func NewWindow(app fyne.App, settings config.Settings) *Window {
 		w.win.SetFullScreen(true)
 	}
 
-	w.tickStopped.Add(1)
-	go w.tickLoop()
+	// The tick starts with the event loop, not before it. A fyne.Do issued
+	// before the driver runs executes inline on the calling goroutine, which
+	// is exactly the unmarshalled UI access the framework warns about at
+	// launch ("not been migrated to the fyne.Do threading model"). The
+	// WaitGroup is armed inside the callback: under the test driver OnStarted
+	// never fires, and a Wait armed for a loop that never ran would hang
+	// Shutdown for ever.
+	app.Lifecycle().SetOnStarted(func() {
+		w.tickStopped.Add(1)
+		go w.tickLoop()
+	})
 	return w
 }
 
@@ -667,7 +677,10 @@ func (w *Window) Shutdown() {
 			}
 		})
 		guard("releasing the audio backend", audio.ReleaseContext)
-		slog.Info("shutdown complete")
+		// The goroutine count is the leak check the gate asks for: after a
+		// clean shutdown it is the runtime's own housekeeping plus the main
+		// goroutine — anything climbing session over session is a leak.
+		slog.Info("shutdown complete", "goroutines", runtime.NumGoroutine())
 	})
 }
 

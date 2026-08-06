@@ -873,8 +873,9 @@ Ticked lines were checked on 2026-08-05/06 and are recorded in
 - [x] `.app` runs from Finder on this Mac; `--selftest` PASS; mic permission
       prompt appears with the right description string.
 - [x] Preferences opens with all six tabs and the three buttons.
-- [ ] Live: EN→KO as well as KO→EN, and a direction switch mid-session that
-      keeps the audio and the transcript (same file, switch noted).
+- [x] Live: EN→KO as well as KO→EN, and a direction switch mid-session that
+      keeps the audio and the transcript — `spikes/g5_direction`, 76 Hangul
+      fragments in the EN→KO half, one transcript, switch noted.
 - [x] 30-minute endurance: 3 reconnects at the 9-minute marks, gaps
       367–471 ms across two runs, backlog flat at 300 ms — and sentence loss
       scored by the Python build's own scorer on the collected Korean source
@@ -891,11 +892,14 @@ Ticked lines were checked on 2026-08-05/06 and are recorded in
       contract including the key restore, the key test, the level meter
       showing real levels, the speed-test verdicts.
 - [ ] Keychain entry read as well as the store; env-var precedence live.
-- [ ] Transcript byte-format identical (golden-file diff vs a Python-written
-      transcript of the same fragment script).
+- [x] Transcript byte-format identical — `spikes/g4_transcript_golden` diffs
+      the two writers on the same fragment script: identical apart from the
+      Ended wall-clock line, filenames included.
 - [ ] Shutdown from all four routes mid-session: device released, footer
       written, no orphan goroutines (verified with pprof goroutine dump).
-- [ ] Display-sleep assertion appears/disappears in `pmset -g assertions`.
+- [x] Display-sleep assertion appears/disappears in `pmset -g assertions` —
+      `TestAssertionIsVisibleToPmset`, on the same DisplaySleepBlocker the
+      window holds.
 - [ ] A1 rerun with the Sound Blaster X3 connected: ≥ 98% of nominal at
       96 kHz/2ch, and real dBFS levels rather than the −Inf a process without
       microphone permission reads.
