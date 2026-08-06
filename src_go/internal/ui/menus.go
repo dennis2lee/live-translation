@@ -14,9 +14,11 @@ import (
 // menuBar owns the native menu and the items whose state has to be kept in
 // step with the settings.
 //
-// Preferences lives in the Settings menu rather than the application menu:
-// spike F2 measured that Fyne 2.8 builds the app menu itself — About, Services,
-// Hide, Show All, Quit — and offers no hook for the conventional ⌘, slot.
+// Preferences is declared in the Settings menu but does not appear there: Fyne
+// recognises the label and hoists the item into the application menu with ⌘,
+// attached, which is where the Python build puts it. Spike F2 concluded that no
+// such hook existed, and was wrong — it never created a Preferences item, so
+// there was nothing for Fyne to hoist.
 type menuBar struct {
 	win  *Window
 	menu *fyne.MainMenu

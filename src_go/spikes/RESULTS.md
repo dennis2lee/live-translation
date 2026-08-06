@@ -92,11 +92,14 @@ cd src_go && go run ./spikes/f2_menus     # unbundled: everything but the app-me
    `"→"` with spaces throughout (`config.DIRECTION_LABEL`), so the port must
    either drop the spaces or use a different separator. `·` `…` `—` `✓` all
    render correctly; `⚠` comes out as a colour emoji.
-2. **No Preferences item in the app menu.** Fyne 2.8 builds the app menu itself
-   — About, Services, Hide, Show All, Quit — and offers no hook to add the
-   conventional Preferences (⌘,) slot. The Python build has one. Options for
-   G4: put Preferences in a regular menu, or reach into the native menu after
-   Fyne has built it.
+2. ~~**No Preferences item in the app menu.**~~ **This finding was wrong, and
+   was corrected on 2026-08-06 by looking at the finished application.** Fyne
+   2.8 recognises a menu item labelled `Preferences…` and hoists it into the
+   application menu itself, with ⌘, attached — exactly where the Python build
+   puts it. The spike concluded otherwise because it never created such an item,
+   so there was nothing for Fyne to hoist; "the slot was empty" was read as "the
+   slot cannot be filled". The item is declared in the Settings menu in
+   `menus.go` and simply appears in the app menu instead.
 3. **Escape did not leave full screen.** With `SetOnTypedRune` and
    `SetOnTypedKey` both set, the rune handler fired for every key tested but
    `KeyEscape` never reached the key handler while full screen. `F` toggled
@@ -106,6 +109,36 @@ cd src_go && go run ./spikes/f2_menus     # unbundled: everything but the app-me
 Fyne also inserts a **Window** menu of its own between the last custom menu and
 Help. Cosmetic, but it means the menu bar will never be exactly the Python
 app's.
+
+### What the finished application actually shows (2026-08-06)
+
+Checked on the built bundle, not the spike:
+
+- Application menu reads **LiveCap**, with **About LiveCap**, **Preferences… ⌘,**
+  and **Quit LiveCap** — the correction above.
+- Menu bar: LiveCap, Translate, Settings, Window, Help.
+- The Settings menu carries every item, with the ticks matching the settings
+  imported from the Python build's plist (complete phrases on, fixed box on,
+  three caption lines).
+- Preferences opens with all six tabs and Cancel / Apply / OK, and reports
+  "Key in use, from: encrypted store".
+- The caption view paints: black background, the rounded `#1B4965` box at the
+  bottom in fixed-box mode, the grey idle dot at its bottom-right.
+- The `0` key reaches the application: pressing it opened the audio device,
+  which raised the macOS microphone prompt. `NSMicrophoneUsageDescription` is
+  therefore doing its job.
+
+**One parity gap found, and not papered over.** The Python build opens
+`showMaximized()`, so the caption window fills the screen with the menu bar
+still visible. **Fyne 2.8 has no maximise API and no public screen-size API**,
+so the Go window opens at a fixed 1280×800. Full screen works and is reachable
+from the menu; "maximised but not full screen" is not expressible. This needs a
+decision rather than a workaround, and it belongs to the parity gate.
+
+**One behaviour worth knowing.** Starting translation blocks the UI goroutine
+while macOS shows the microphone prompt, because opening the device is a
+blocking call made on that goroutine. It happens once per install, and the
+status dot stays grey until the prompt is answered.
 
 ## A1 — malgo capture
 
