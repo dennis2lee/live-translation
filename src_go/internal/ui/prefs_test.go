@@ -1,0 +1,258 @@
+package ui
+
+import (
+	"strconv"
+	"strings"
+	"testing"
+
+	"github.com/dennis2lee/live-translation/src_go/internal/config"
+)
+
+// openPrefs builds the dialog's state and widgets without showing it, so the
+// Apply/OK/Cancel contract can be exercised without a display.
+func openPrefs(t *testing.T, w *Window) *prefsDialog {
+	t.Helper()
+	p := &prefsDialog{
+		win:       w,
+		original:  w.settings,
+		storedKey: config.StoredAPIKey(),
+		working:   w.settings,
+		levelStop: make(chan struct{}),
+	}
+	// The tabs are what construct the widgets that collect() reads back.
+	p.apiTab()
+	p.audioTab()
+	p.networkTab()
+	p.vocabularyTab()
+	p.appearanceTab()
+	p.behaviourTab()
+	t.Cleanup(p.close)
+	return p
+}
+
+// Apply applies and leaves the dialog open; the window keeps the new settings.
+func TestApplyAppliesAndKeepsWorking(t *testing.T) {
+	w := newTestWindow(t)
+	p := openPrefs(t, w)
+
+	p.fontSize.SetValue(72)
+	p.maxLines.SetSelected("4")
+	p.completeOnly.SetChecked(true)
+	p.apply()
+
+	if w.settings.FontSize != 72 {
+		t.Errorf("FontSize = %d after Apply", w.settings.FontSize)
+	}
+	if w.settings.MaxLines != 4 {
+		t.Errorf("MaxLines = %d after Apply", w.settings.MaxLines)
+	}
+	if !w.settings.CompletePhrasesOnly {
+		t.Error("CompletePhrasesOnly did not apply")
+	}
+	// The dialog stays usable: a second Apply on top of the first works.
+	p.fontSize.SetValue(56)
+	p.apply()
+	if w.settings.FontSize != 56 {
+		t.Errorf("FontSize = %d after a second Apply", w.settings.FontSize)
+	}
+}
+
+// Cancel after Apply puts back exactly what was in force when the dialog
+// opened — that is the whole reason the dialog keeps `original`.
+func TestCancelUndoesAnApply(t *testing.T) {
+	w := newTestWindow(t)
+	before := w.settings
+	p := openPrefs(t, w)
+
+	p.fontSize.SetValue(96)
+	p.completeOnly.SetChecked(!before.CompletePhrasesOnly)
+	p.apply()
+	if w.settings == before {
+		t.Fatal("Apply changed nothing, so Cancel has nothing to undo")
+	}
+
+	p.cancel()
+	if w.settings != before {
+		t.Errorf("Cancel left the settings at\n %+v\nwant\n %+v", w.settings, before)
+	}
+}
+
+// Cancel without Apply must not touch anything, including the key store.
+func TestCancelWithoutApplyIsANoOp(t *testing.T) {
+	w := newTestWindow(t)
+	if err := config.SaveAPIKey("original-key", false); err != nil {
+		t.Fatal(err)
+	}
+	before := w.settings
+	p := openPrefs(t, w)
+	p.fontSize.SetValue(24) // typed, never applied
+	p.cancel()
+
+	if w.settings != before {
+		t.Error("Cancel changed the settings although Apply was never pressed")
+	}
+	if got := config.StoredAPIKey(); got != "original-key" {
+		t.Errorf("StoredAPIKey = %q", got)
+	}
+}
+
+// Applying a key writes it to the encrypted store, and Cancel puts the
+// previous one back. A Keychain copy is deliberately *not* undone — there is
+// no way to tell a fresh copy from one that was already there.
+func TestCancelRestoresTheKeyStore(t *testing.T) {
+	w := newTestWindow(t)
+	if err := config.SaveAPIKey("original-key", false); err != nil {
+		t.Fatal(err)
+	}
+	p := openPrefs(t, w)
+
+	p.apiKey.SetText("typed-by-mistake")
+	p.apply()
+	if got := config.StoredAPIKey(); got != "typed-by-mistake" {
+		t.Fatalf("StoredAPIKey = %q after Apply", got)
+	}
+	// The field is cleared once applied, so the key is not left on screen.
+	if p.apiKey.Text != "" {
+		t.Errorf("the key field still holds %q after Apply", p.apiKey.Text)
+	}
+
+	p.cancel()
+	if got := config.StoredAPIKey(); got != "original-key" {
+		t.Errorf("StoredAPIKey = %q after Cancel, want the original back", got)
+	}
+}
+
+// Cancel must also cope with there having been no key at all: restoring
+// "nothing" empties the store rather than writing an empty string.
+func TestCancelRestoresAnEmptyStore(t *testing.T) {
+	w := newTestWindow(t)
+	p := openPrefs(t, w)
+	p.apiKey.SetText("AIzaSyExampleNotARealKey")
+	p.apply()
+	if config.StoredAPIKey() == "" {
+		t.Fatal("Apply did not store the key")
+	}
+	p.cancel()
+	if got := config.StoredAPIKey(); got != "" {
+		t.Errorf("StoredAPIKey = %q, want nothing", got)
+	}
+}
+
+// Everything the six tabs collect must survive a round trip through Apply.
+func TestApplyCollectsEveryTab(t *testing.T) {
+	w := newTestWindow(t)
+	p := openPrefs(t, w)
+
+	p.silenceGate.SetChecked(true)
+	p.vocabSource.SetText("영업이익률\n분기 실적")
+	p.vocabCaption.SetText("Pyeongwoo Lee")
+	p.fontSize.SetValue(56)
+	p.maxLines.SetSelected("2")
+	p.boxOpacity.SetValue(0.8)
+	p.cornerRadius.SetValue(12)
+	p.boxWidth.SetValue(80)
+	p.bottomMargin.SetValue(10)
+	p.boxPosition.SetSelected("Middle")
+	p.fixedBox.SetChecked(false)
+	p.sourceText.SetChecked(true)
+	p.directionHint.SetChecked(false)
+	p.clearAfter.SetValue(5)
+	p.lineHold.SetValue(1.5)
+	p.completeOnly.SetChecked(true)
+	p.saveScript.SetChecked(false)
+	p.transcriptDir.SetText("/tmp/somewhere")
+	p.debugLogging.SetChecked(true)
+	p.apply()
+
+	s := w.settings
+	checks := []struct {
+		name string
+		got  any
+		want any
+	}{
+		{"SilenceGate", s.SilenceGate, true},
+		{"VocabularySource", s.VocabularySource, "영업이익률\n분기 실적"},
+		{"VocabularyCaptions", s.VocabularyCaptions, "Pyeongwoo Lee"},
+		{"FontSize", s.FontSize, 56},
+		{"MaxLines", s.MaxLines, 2},
+		{"BoxOpacity", s.BoxOpacity, 0.8},
+		{"CornerRadius", s.CornerRadius, 12},
+		{"BoxMaxWidthPct", s.BoxMaxWidthPct, 80},
+		{"BottomMarginPct", s.BottomMarginPct, 10},
+		{"BoxPosition", s.BoxPosition, string(config.BoxCenter)},
+		{"FixedBox", s.FixedBox, false},
+		{"ShowSourceText", s.ShowSourceText, true},
+		{"ShowDirectionHint", s.ShowDirectionHint, false},
+		{"ClearAfterSeconds", s.ClearAfterSeconds, 5.0},
+		{"LineHoldSeconds", s.LineHoldSeconds, 1.5},
+		{"CompletePhrasesOnly", s.CompletePhrasesOnly, true},
+		{"SaveTranscript", s.SaveTranscript, false},
+		{"TranscriptDir", s.TranscriptDir, "/tmp/somewhere"},
+		{"DebugLogging", s.DebugLogging, true},
+	}
+	for _, c := range checks {
+		if c.got != c.want {
+			t.Errorf("%s = %v, want %v", c.name, c.got, c.want)
+		}
+	}
+	// The two vocabularies must stay separate all the way through.
+	if len(s.SourceTerms()) != 2 || s.SourceTerms()[0] != "영업이익률" {
+		t.Errorf("SourceTerms = %q", s.SourceTerms())
+	}
+	if len(s.CaptionTerms()) != 1 || s.CaptionTerms()[0] != "Pyeongwoo Lee" {
+		t.Errorf("CaptionTerms = %q", s.CaptionTerms())
+	}
+}
+
+// Whatever the widgets offer, what is stored is clamped.
+func TestApplyClamps(t *testing.T) {
+	w := newTestWindow(t)
+	p := openPrefs(t, w)
+	p.transcriptDir.SetText("   ")
+	p.apply()
+	if w.settings.TranscriptDir == "   " {
+		t.Error("a blank transcript directory was stored as-is")
+	}
+}
+
+// The dialog opens showing the settings in force, not the defaults.
+func TestDialogOpensOnTheCurrentSettings(t *testing.T) {
+	w := newTestWindow(t)
+	w.update(func(s *config.Settings) {
+		s.FontSize = 72
+		s.MaxLines = 1
+		s.BoxPosition = string(config.BoxTop)
+	})
+	p := openPrefs(t, w)
+
+	if p.fontSize.Value != 72 {
+		t.Errorf("font-size slider = %v", p.fontSize.Value)
+	}
+	if p.maxLines.Selected != strconv.Itoa(1) {
+		t.Errorf("lines selector = %q", p.maxLines.Selected)
+	}
+	if p.boxPosition.Selected != config.BoxPositionMenuText[config.BoxTop] {
+		t.Errorf("position selector = %q", p.boxPosition.Selected)
+	}
+}
+
+// The key status line says where the key comes from, and never shows the key.
+func TestKeyStatusNamesTheSourceNotTheKey(t *testing.T) {
+	w := newTestWindow(t)
+	p := openPrefs(t, w)
+	if p.keyStatus.Text == "" {
+		t.Fatal("the key status is blank")
+	}
+
+	const secret = "AIzaSyExampleNotARealKey"
+	if err := config.SaveAPIKey(secret, false); err != nil {
+		t.Fatal(err)
+	}
+	p.refreshKeyStatus()
+	if p.keyStatus.Text != "Key in use, from: encrypted store" {
+		t.Errorf("key status = %q", p.keyStatus.Text)
+	}
+	if strings.Contains(p.keyStatus.Text, secret) {
+		t.Error("the key status shows the key itself")
+	}
+}

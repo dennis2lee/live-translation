@@ -7,6 +7,7 @@ import (
 	"runtime"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"fyne.io/fyne/v2"
@@ -92,7 +93,9 @@ type Window struct {
 
 	shutdownOnce sync.Once
 	stopTick     chan struct{}
-	tickStopped  sync.WaitGroup
+	// shuttingDown turns onTick into a no-op. Shutdown signals the tick and
+	// never waits for it — see Shutdown for why waiting deadlocks.
+	shuttingDown atomic.Bool
 }
 
 // NewWindow builds the caption window.
@@ -131,10 +134,7 @@ func NewWindow(app fyne.App, settings config.Settings) *Window {
 	// WaitGroup is armed inside the callback: under the test driver OnStarted
 	// never fires, and a Wait armed for a loop that never ran would hang
 	// Shutdown for ever.
-	app.Lifecycle().SetOnStarted(func() {
-		w.tickStopped.Add(1)
-		go w.tickLoop()
-	})
+	app.Lifecycle().SetOnStarted(func() { go w.tickLoop() })
 	return w
 }
 
@@ -524,7 +524,6 @@ func (w *Window) onStateChanged(state translator.State, detail string) {
 // --- tick -----------------------------------------------------------------
 
 func (w *Window) tickLoop() {
-	defer w.tickStopped.Done()
 	ticker := time.NewTicker(tickInterval)
 	defer ticker.Stop()
 	for {
@@ -538,6 +537,9 @@ func (w *Window) tickLoop() {
 }
 
 func (w *Window) onTick() {
+	if w.shuttingDown.Load() {
+		return
+	}
 	// One reader per tick: TakePeak resets the meter, so the buffer and the
 	// dead-input check have to share the same reading.
 	peak, known := w.takeInputPeak()
@@ -667,8 +669,14 @@ func (w *Window) OpenTranscriptDir() {
 // calls StopTranslation directly.
 func (w *Window) Shutdown() {
 	w.shutdownOnce.Do(func() {
+		// The tick is signalled and never waited for. It may be parked inside
+		// fyne.Do, which needs the UI goroutine — and Shutdown itself runs
+		// *on* the UI goroutine, because that is the only thread AppKit lets
+		// tear the window down. Waiting here deadlocked the first mid-session
+		// SIGINT: the transcript footer was never written, which is precisely
+		// what this path exists to guarantee. onTick no-ops instead.
+		w.shuttingDown.Store(true)
 		close(w.stopTick)
-		w.tickStopped.Wait()
 		guard("stopping translation during shutdown", w.StopTranslation)
 		guard("stopping the caption animations", w.view.StopAnimations)
 		guard("saving settings during shutdown", func() {

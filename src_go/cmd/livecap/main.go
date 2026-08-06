@@ -6,11 +6,14 @@ package main
 
 import (
 	"flag"
+
 	"fmt"
+	"fyne.io/fyne/v2"
 	"log/slog"
 	"os"
 	"os/signal"
 	"syscall"
+	"time"
 
 	"fyne.io/fyne/v2/app"
 
@@ -28,6 +31,11 @@ import (
 // can be installed while the port is being compared against it. The visible
 // name is distinct too — see ui.AppName.
 const AppID = "com.LiveCap.LiveCapGo"
+
+// shutdownDeadline bounds how long a signal waits for the UI goroutine before
+// exiting anyway. Long enough for a transcript footer, short enough that a
+// wedged process still dies on Ctrl-C.
+const shutdownDeadline = 5 * time.Second
 
 func main() {
 	selftest := flag.Bool("selftest", false, "check the environment and exit")
@@ -57,12 +65,31 @@ func main() {
 	// SIGINT and SIGTERM reach the same single exit path as closing the window
 	// and quitting, so a live session is always closed and the transcript
 	// always finished with its footer.
+	//
+	// Shutdown is queued onto the UI goroutine rather than called here.
+	// Calling it from the signal goroutine crashed with an NSException inside
+	// cgo the first time it was tried mid-session: Shutdown tears down window
+	// state, and AppKit aborts when that happens off the main thread. The same
+	// rule the audio callback lives by applies to the signal handler — it is
+	// just another foreign thread.
+	//
+	// fyne.Do, not DoAndWait: the process must not hang if the UI goroutine is
+	// wedged, so the wait has a deadline and a complaint.
 	signals := make(chan os.Signal, 1)
 	signal.Notify(signals, os.Interrupt, syscall.SIGTERM)
 	go func() {
 		sig := <-signals
 		slog.Info("signal received — shutting down", "signal", sig)
-		window.Shutdown()
+		done := make(chan struct{})
+		fyne.Do(func() {
+			window.Shutdown()
+			close(done)
+		})
+		select {
+		case <-done:
+		case <-time.After(shutdownDeadline):
+			slog.Error("shutdown did not finish in time", "deadline", shutdownDeadline)
+		}
 		os.Exit(0)
 	}()
 

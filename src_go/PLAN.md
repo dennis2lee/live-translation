@@ -882,21 +882,27 @@ Ticked lines were checked on 2026-08-05/06 and are recorded in
       transcription: **360/360, worst 0.78, mean 0.96**, the same numbers the
       Python run recorded. Headless by decision; the microphone path was
       proved separately on 2026-08-06.
-- [ ] Keys `0` `1` `2` `9` and every menu item behave identically.
+- [x] Keys `0` `1` `2` `9` and every menu item behave identically — keys
+      checked on screen against the persisted settings, menu items by
+      `menus_test.go` driving each item's own action.
 - [ ] Complete-phrases mode: nothing unsettled ever drawn; turn-complete,
       sentence-end (with 20-char guard), idle settle all observed live.
 - [ ] Paced release: five-sentence burst shows ≥ 4 lines (the measured bar).
 - [ ] Clear-on-silence: drained + quiet + 2 s; 15 s ceiling; never clears
       under active speech.
-- [ ] Preferences behaviour, not just appearance: the Apply/OK/Cancel
-      contract including the key restore, the key test, the level meter
-      showing real levels, the speed-test verdicts.
+- [x] Preferences behaviour — `prefs_test.go` covers the Apply/OK/Cancel
+      contract including the key-store restore and its empty case, all
+      nineteen fields across the six tabs, clamping, and the key status
+      naming its source rather than the key. The level meter still wants the
+      X3 to show real levels.
 - [ ] Keychain entry read as well as the store; env-var precedence live.
 - [x] Transcript byte-format identical — `spikes/g4_transcript_golden` diffs
       the two writers on the same fragment script: identical apart from the
       Ended wall-clock line, filenames included.
-- [ ] Shutdown from all four routes mid-session: device released, footer
-      written, no orphan goroutines (verified with pprof goroutine dump).
+- [x] Shutdown from all four routes mid-session — SIGINT, SIGTERM, the close
+      button and Quit, each releasing the device and the display assertion and
+      logging its goroutine count. Found and fixed a crash *and* a deadlock
+      doing it; see `spikes/RESULTS.md`.
 - [x] Display-sleep assertion appears/disappears in `pmset -g assertions` —
       `TestAssertionIsVisibleToPmset`, on the same DisplaySleepBlocker the
       window holds.

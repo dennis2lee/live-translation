@@ -517,3 +517,75 @@ once at launch. The tick loop now starts with the event loop (armed inside
 warning persists, so its trigger is elsewhere — possibly Fyne-internal. It is
 cosmetic today and a crash risk at the next major Fyne release, so it is filed
 as follow-up work rather than forgotten.
+
+
+---
+
+## Shutdown routes, menus and Preferences (2026-08-06)
+
+### A real defect, found by the gate
+
+The first mid-session SIGINT **crashed** — `libc++abi: terminating due to
+uncaught exception of type NSException`, `signal arrived during cgo execution`.
+Shutdown tears down window state, and AppKit aborts when that happens off the
+main thread; the signal handler is just another foreign thread, subject to the
+same rule as the audio callback.
+
+Marshalling it with `fyne.DoAndWait` stopped the crash and exposed a worse
+one: the app exited **without writing the transcript footer**, and with no
+shutdown log at all. `Shutdown` ran on the UI goroutine and waited on the tick
+goroutine, which was itself parked in `fyne.Do` waiting for that same UI
+goroutine. A deadlock — and the window-close button took the identical path, so
+it was latent there too, on the route a user takes every day.
+
+The fix is two rules, both now written into the code:
+
+- **Shutdown never waits on the UI goroutine.** The tick is signalled and
+  `onTick` turns itself into a no-op; nothing is joined.
+- **The signal handler queues Shutdown with `fyne.Do`, not `DoAndWait`**, and
+  waits on a channel with a 5-second deadline, so a wedged UI goroutine cannot
+  stop the process dying on Ctrl-C.
+
+All four routes then passed mid-session, each releasing the audio device and
+the display-sleep assertion and logging its goroutine count:
+
+| route | result |
+|---|---|
+| SIGINT | `audio capture stopped` → `display sleep no longer blocked` → `shutdown complete goroutines=9` |
+| SIGTERM | same, `goroutines=9` |
+| window close button | same, `goroutines=12` |
+| Quit (Apple Event, as the Quit menu item sends) | same, `goroutines=12` |
+
+The transcript vanished on these runs by design, not by fault:
+`removed empty transcript` — a session that captured nothing is not kept. The
+footer path itself was proved by the microphone run earlier the same day and by
+the golden-file diff.
+
+### Menus and Preferences: tested, not clicked
+
+macOS treats the menu bar as the desktop shell, and screen access to it was
+declined. Driving the menu items and the Preferences dialog **through their own
+Go functions** turned out to be the better test anyway: reproducible, in CI,
+and able to assert state a screenshot cannot.
+
+`menus_test.go` — every item enumerated including submenu parents; no enabled
+item without an action; the twenty labels the Python build has; every checkable
+item drives its setting *and* follows it back; direction, font size and box
+position behave as exclusive groups; Start/Stop enablement keyed off the
+session objects, so a failed start leaves Start usable; the status line carries
+the cause; Clear Captions does not strand lines; Reset restores the defaults and
+the ticks follow.
+
+`prefs_test.go` — the three-button contract in full: Apply applies and leaves
+the dialog working, a second Apply stacks on the first, Cancel after Apply
+restores exactly what was in force when the dialog opened, Cancel without Apply
+touches nothing, and **Cancel restores the encrypted key store** — including
+the "there was no key" case, which must empty the store rather than write an
+empty string. Also: all nineteen fields across the six tabs survive a round
+trip, the two vocabularies stay separate, values are clamped on the way in, the
+dialog opens on the settings in force, and the key status names its source and
+never the key.
+
+What was checked on screen instead, and passed: the `9`, `2` and `1` keys drove
+their settings and persisted them, and the `EN→KO` direction hint rendered
+correctly — no tofu, because the label carries no spaces around the arrow.
