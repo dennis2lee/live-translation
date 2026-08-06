@@ -6,7 +6,8 @@ the parity gate (§12).
 
 **Status, 2026-08-06.** This started as a plan and is now also a record. G0 to
 G6 are written and green — `go vet`, `gofmt` and `go test -race ./...` all pass,
-and `dist/LiveCap.app` runs its own `--selftest`. Where the code and this
+and `dist/LiveCapGo.app` runs its own `--selftest`. A Windows executable and
+MSI cross-build too, though nothing here can run them. Where the code and this
 document disagree, the code won and the paragraph was corrected; the reasoning
 is kept so the choices can be argued with. What remains is measurement, not
 construction: see §10 and the parity gate in §12.
@@ -857,11 +858,23 @@ in the same session, so the spec never forks.
 ## 12. Parity gate — definition of "equivalent"
 
 The port ships (and the Python app is frozen in place per §13) only when
-every line here checks:
+every line here checks. **Decided 2026-08-06: no pre-release.** The Windows
+MSI and the macOS `.app` are built and waiting, but the first published
+release is the real 1.0.0, cut after this list is complete.
 
-- [ ] All §8 test ports green, `-race`, offline.
-- [ ] Live: KO→EN and EN→KO sessions, direction switch mid-session keeps
-      audio + transcript (same file, switch noted).
+Ticked lines were checked on 2026-08-05/06 and are recorded in
+`src_go/spikes/RESULTS.md`.
+
+- [x] All §8 test ports green, `-race`, offline.
+- [x] One live KO→EN session from a real microphone, end to end, with a
+      properly closed transcript.
+- [x] Reads the **existing** `credentials.enc`; source label correct.
+- [x] Settings imported from the plist once; subsequent runs use JSON.
+- [x] `.app` runs from Finder on this Mac; `--selftest` PASS; mic permission
+      prompt appears with the right description string.
+- [x] Preferences opens with all six tabs and the three buttons.
+- [ ] Live: EN→KO as well as KO→EN, and a direction switch mid-session that
+      keeps the audio and the transcript (same file, switch noted).
 - [ ] 30-minute endurance: ≥ 3 seamless reconnects, no lost sentences.
 - [ ] Keys `0` `1` `2` `9` and every menu item behave identically.
 - [ ] Complete-phrases mode: nothing unsettled ever drawn; turn-complete,
@@ -869,29 +882,36 @@ every line here checks:
 - [ ] Paced release: five-sentence burst shows ≥ 4 lines (the measured bar).
 - [ ] Clear-on-silence: drained + quiet + 2 s; 15 s ceiling; never clears
       under active speech.
-- [ ] Preferences: all six tabs; Apply/OK/Cancel contract incl. key restore;
-      key test; level meter (X3 shows real levels); speed test verdicts.
-- [ ] Reads the **existing** `credentials.enc` and Keychain entry; env var
-      precedence; source label correct.
-- [ ] Settings imported from the plist once; subsequent runs use JSON.
+- [ ] Preferences behaviour, not just appearance: the Apply/OK/Cancel
+      contract including the key restore, the key test, the level meter
+      showing real levels, the speed-test verdicts.
+- [ ] Keychain entry read as well as the store; env-var precedence live.
 - [ ] Transcript byte-format identical (golden-file diff vs a Python-written
       transcript of the same fragment script).
 - [ ] Shutdown from all four routes mid-session: device released, footer
       written, no orphan goroutines (verified with pprof goroutine dump).
 - [ ] Display-sleep assertion appears/disappears in `pmset -g assertions`.
-- [ ] `.app` runs from Finder on this Mac; `--selftest` PASS; mic permission
-      prompt appears with the right description string.
+- [ ] A1 rerun with the Sound Blaster X3 connected: ≥ 98% of nominal at
+      96 kHz/2ch, and real dBFS levels rather than the −Inf a process without
+      microphone permission reads.
+- [ ] **Windows, on real hardware.** The MSI installs, the Start-menu entry
+      launches it, Korean renders, the capture devices are listed, `0` starts
+      translating and Windows asks for the microphone — and **full screen
+      covers the taskbar**, which is the requirement that chose Fyne and the
+      only one still taken on documented behaviour rather than measurement.
 - [ ] `spikes/RESULTS.md` updated with Go measurements alongside Python's.
 
 At cutover: `CLAUDE.md` gains a Go section (SDK name, commands, layout),
-`README.md` swaps the architecture/dev sections, and the first Go release is
-**1.0.0** (decided — see §13).
+`README.md` swaps the architecture/dev sections, the application is renamed
+from LiveCapGo back to **LiveCap**, and the first Go release is **1.0.0**
+(decided — see §13), carrying both the `.app` and the `.msi`.
 
 ---
 
-## 13. Decisions (Dennis, 2026-08-05)
+## 13. Decisions (Dennis)
 
-The three questions this plan was reviewed against, now closed:
+Closed as they came up. The first three were the review questions; the rest
+came out of building it.
 
 1. **UI toolkit: Fyne.** Decided by a requirement stated at review: full
    screen must be able to cover the title bar, menu and taskbar **on
@@ -904,3 +924,13 @@ The three questions this plan was reviewed against, now closed:
    stay in the repository untouched as the executable specification. No
    feature or fix lands there after the parity gate passes; until the gate,
    the freeze-and-mirror policy of §10 applies.
+4. **Maximised window: left alone** (2026-08-06). Fyne has no maximise API,
+   and reaching for cgo and NSWindow's `zoom:` would put macOS-only code back
+   into the one layer this port has kept free of it. The window opens at a
+   usable size and the person running it maximises or goes full screen.
+5. **Name: LiveCapGo until cutover** (2026-08-06). Both builds installed as
+   an application called LiveCap with the same caption window, and were
+   mistaken for each other more than once — once badly enough to credit the
+   Python build's behaviour to this one.
+6. **No pre-release** (2026-08-06). The artefacts exist; the first published
+   release is the real 1.0.0, after the gate.
