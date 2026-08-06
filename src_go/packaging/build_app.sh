@@ -19,8 +19,8 @@ set -euo pipefail
 
 cd "$(dirname "$0")/.."
 
-APP_NAME="LiveCap"
-BUNDLE_ID="com.LiveCap.LiveCap.go"
+APP_NAME="$(grep -o 'AppName     = "[^"]*"' internal/ui/version.go | cut -d'"' -f2)"
+BUNDLE_ID="com.LiveCap.LiveCapGo"
 VERSION="$(grep -o 'Version     = "[^"]*"' internal/ui/version.go | cut -d'"' -f2)"
 DIST="dist"
 APP="$DIST/$APP_NAME.app"

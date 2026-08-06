@@ -128,12 +128,16 @@ Checked on the built bundle, not the spike:
   which raised the macOS microphone prompt. `NSMicrophoneUsageDescription` is
   therefore doing its job.
 
-**One parity gap found, and not papered over.** The Python build opens
+**One parity gap, now decided rather than open.** The Python build opens
 `showMaximized()`, so the caption window fills the screen with the menu bar
 still visible. **Fyne 2.8 has no maximise API and no public screen-size API**,
-so the Go window opens at a fixed 1280×800. Full screen works and is reachable
-from the menu; "maximised but not full screen" is not expressible. This needs a
-decision rather than a workaround, and it belongs to the parity gate.
+so the Go window opens at a fixed 1280×800. Reaching for cgo and calling
+NSWindow's `zoom:` would work and would put macOS-only code back into the UI
+layer, which is the one place this port has kept free of it.
+
+**Dennis decided (2026-08-06): leave it.** The window opens at a usable size and
+the person running it maximises or goes full screen themselves. No workaround,
+and the gap comes off the parity gate.
 
 **One behaviour worth knowing.** Starting translation blocks the UI goroutine
 while macOS shows the microphone prompt, because opening the device is a

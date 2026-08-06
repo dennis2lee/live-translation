@@ -25,8 +25,9 @@ import (
 )
 
 // AppID must stay distinct from the Python build's bundle identifier, so both
-// can be installed while the port is being compared against it.
-const AppID = "com.LiveCap.LiveCap.go"
+// can be installed while the port is being compared against it. The visible
+// name is distinct too — see ui.AppName.
+const AppID = "com.LiveCap.LiveCapGo"
 
 func main() {
 	selftest := flag.Bool("selftest", false, "check the environment and exit")
@@ -34,7 +35,7 @@ func main() {
 	flag.Parse()
 
 	if *version {
-		fmt.Printf("LiveCap %s\n", ui.Version)
+		fmt.Printf("%s %s\n", ui.AppName, ui.Version)
 		return
 	}
 
@@ -92,7 +93,7 @@ func runSelftest() int {
 		fmt.Printf("  %s  %-24s %s\n", mark, name, detail)
 	}
 
-	fmt.Printf("LiveCap %s selftest\n\n", ui.Version)
+	fmt.Printf("%s %s selftest\n\n", ui.AppName, ui.Version)
 
 	report("settings", true, config.Path())
 	report("credential store", true, credentials.StorePath())

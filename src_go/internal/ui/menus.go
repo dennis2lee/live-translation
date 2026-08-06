@@ -174,7 +174,7 @@ func newMenuBar(w *Window) *menuBar {
 		reset,
 	)
 
-	help := fyne.NewMenu("Help", fyne.NewMenuItem("About LiveCap", w.ShowAbout))
+	help := fyne.NewMenu("Help", fyne.NewMenuItem("About "+AppName, w.ShowAbout))
 
 	m.menu = fyne.NewMainMenu(translate, settings, help)
 	m.populateDevices()

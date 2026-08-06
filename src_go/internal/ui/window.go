@@ -105,7 +105,7 @@ func NewWindow(app fyne.App, settings config.Settings) *Window {
 	w.buffer = newBuffer(settings)
 	w.view = NewCaptionView(settings)
 
-	w.win = app.NewWindow("LiveCap")
+	w.win = app.NewWindow(AppName)
 	w.win.SetContent(w.view)
 	w.win.Resize(fyne.NewSize(1280, 800))
 	w.win.SetCloseIntercept(func() {

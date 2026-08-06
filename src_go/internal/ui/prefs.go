@@ -469,11 +469,11 @@ func (p *prefsDialog) startLevelMeter() {
 // ShowAbout is the About box.
 func (w *Window) ShowAbout() {
 	body := fmt.Sprintf(
-		"LiveCap %s\n\nReal-time speech translation captions.\n"+
+		"%s %s\n\nReal-time speech translation captions.\n"+
 			"Engine: Google Gemini Live API\nModel: %s\n\n"+
 			"Created by %s\n%s\n\nCopyright © 2026 %s. All rights reserved.",
-		Version, translator.Model, Author, AuthorEmail, Author)
-	dialog.ShowInformation("About LiveCap", body, w.win)
+		AppName, Version, translator.Model, Author, AuthorEmail, Author)
+	dialog.ShowInformation("About "+AppName, body, w.win)
 }
 
 // ResetSettings forgets every preference.
