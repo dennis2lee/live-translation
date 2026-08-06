@@ -392,3 +392,50 @@ it imports nothing unusual, and the MSI is structurally correct" is the
 strongest claim available; the build script prints the five things to check on
 real hardware, starting with the one that chose the toolkit — whether full
 screen covers the taskbar.
+
+
+---
+
+## G3 — the 30-minute endurance run (2026-08-06)
+
+Headless, by decision: the fixture is fed into the ring buffer at real time and
+the real translator, caption buffer and transcript writer run above it — the
+same objects the window drives, minus the painting and the microphone.
+`spikes/g3_endurance` is the harness.
+
+### First run: every counter passed
+
+| | measured | bar |
+|---|---|---|
+| elapsed | 30 m 10 s | 30 min |
+| reconnects | **3**, at 9:01 / 18:01 / 27:01 | ≥ 3 |
+| gaps | **442 / 471 / 413 ms** | < 1 s each |
+| max send backlog | 300 ms (start-up; flat after) | < 1500 ms |
+| chunks sent | 18 000 — exactly 30 min × 600 | no audio dropped |
+| fragments / lines | 1 549 / 483, first at 3.14 s | — |
+
+`go_away` arrived every 9 minutes with `time_left=50s`, matching both the
+Python run and the API's documented cadence.
+
+### The measurement that was almost done wrong
+
+Reading the *English* transcript around each swap showed thinner output than
+the same passage translated cleanly elsewhere in the loop, and that first read
+as sentences lost. It is the wrong test: the model rephrases freely on every
+pass, so English prose cannot distinguish "lost across the swap" from
+"translated differently this time".
+
+The Python build never judged it that way. Its "no lost sentences —
+360/360, worst 0.78, mean 0.96" comes from `s2_headless_run.py`, which collects
+the **Korean input transcription** and scores every script sentence's coverage
+in it with a SequenceMatcher. The harness now saves the collected source
+transcription in exactly that scorer's input format, and the **same Python
+scorer** grades the Go build — no ported scorer to drift:
+
+```
+.venv/bin/python spikes/s2_headless_run.py --compare-only <out>/source.txt \
+    --script spikes/fixtures/ko_script.txt --repeat 20
+```
+
+The first run predates the source capture, so its counters stand but its
+sentence-loss question is unanswered; the rerun below answers it.
