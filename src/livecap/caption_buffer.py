@@ -29,6 +29,12 @@ LINE_HOLD_SECONDS = 0.7
 # clear countdown for ever.
 MAX_CLEAR_WAIT_SECONDS = 15.0
 
+# A full stop only ends a sentence once there is this much text behind it.
+# Abbreviations — "Dr.", "vs.", "Mr." — otherwise settle a two-word fragment as
+# though it were a whole sentence. Only consulted in complete-phrases mode,
+# where a premature commit is what the reader actually sees.
+MIN_SENTENCE_CHARS = 20
+
 _AUTO_SAMPLE_SIZE = 8
 _AUTO_UTTERANCE_CHARS = 25
 
@@ -75,6 +81,16 @@ class CaptionBuffer:
 
     line_hold_seconds: float = LINE_HOLD_SECONDS
     """Minimum time a line stays on screen before the next may replace it."""
+
+    complete_phrases_only: bool = False
+    """Show only settled text, never a phrase still being revised.
+
+    The model streams its translation a fragment at a time and rewrites as it
+    goes, so drawing every fragment makes the captions visibly churn. With this
+    on, unsettled text is withheld until it settles — at a sentence end, at the
+    server's `turn_complete`, or after `idle_commit_seconds` of quiet. Costs a
+    little latency, and in exchange the captions stop moving under the reader.
+    """
 
     _committed: deque[str] = field(default_factory=lambda: deque(maxlen=2), init=False)
     _queue: deque[str] = field(default_factory=deque, init=False)
@@ -136,9 +152,11 @@ class CaptionBuffer:
 
         Unsettled text is withheld while the queue drains: appending live text
         under lines that are still catching up would show them out of order.
+        In complete-phrases mode it is withheld always — that is the whole point
+        of the mode, so the reader never watches a phrase rewrite itself.
         """
         lines: list[tuple[str, bool]] = [(t, True) for t in self._committed]
-        if self._pending and not self._queue:
+        if self._pending and not self._queue and not self.complete_phrases_only:
             lines.append((self._pending, False))
         return lines[-self.max_lines :]
 
@@ -200,13 +218,38 @@ class CaptionBuffer:
 
         self._pending = _join(self._pending, text)
 
-        if self.effective_policy is Policy.UTTERANCE or self._pending.rstrip().endswith(
-            tuple(SENTENCE_ENDERS)
-        ):
+        if self.effective_policy is Policy.UTTERANCE or self._ends_a_sentence():
             self._commit()
             # Show it straight away when there is room, so a single sentence
             # never waits for the next tick.
             self._drain(now)
+        return True
+
+    def _ends_a_sentence(self) -> bool:
+        """Whether the pending text has reached a sentence end.
+
+        In complete-phrases mode a full stop also has to have enough text behind
+        it: "Dr." and "vs." would otherwise settle a two-word fragment as a
+        sentence, and there is no dimmed pending line left on screen to show the
+        reader that more is coming.
+        """
+        settled = self._pending.rstrip()
+        if not settled.endswith(tuple(SENTENCE_ENDERS)):
+            return False
+        return not (self.complete_phrases_only and len(settled) < MIN_SENTENCE_CHARS)
+
+    def note_turn_complete(self, now: float) -> bool:
+        """Settle whatever is buffered — the server says the turn ended.
+
+        `server_content.turn_complete` is the only boundary the API reports
+        reliably; `Transcription.finished` exists in the SDK but does not arrive
+        in practice. Outside complete-phrases mode this changes nothing visible,
+        since unsettled text is already on screen.
+        """
+        if not self._pending:
+            return False
+        self._commit()
+        self._drain(now)
         return True
 
     def tick(self, now: float, *, speaking: bool | None = None) -> bool:

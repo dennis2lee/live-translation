@@ -297,6 +297,67 @@ def test_custom_target_language_gets_a_generic_label(window):
     assert not any(a.isChecked() for a in window._direction_actions.values())
 
 
+# --- complete phrases only ------------------------------------------------
+
+
+def test_the_nine_key_is_bound_to_complete_phrases(window):
+    assert window._act_complete_phrases.shortcut().toString() == "9"
+
+
+def test_it_is_off_by_default(window):
+    assert window._settings.complete_phrases_only is False
+    assert window._act_complete_phrases.isChecked() is False
+    assert window._buffer.complete_phrases_only is False
+
+
+def test_toggling_it_reaches_the_buffer(window):
+    window._update(complete_phrases_only=True)
+    assert window._buffer.complete_phrases_only is True
+    assert window._act_complete_phrases.isChecked() is True
+
+
+def test_it_withholds_unsettled_text_from_the_view(window):
+    """The reported symptom: captions rewriting themselves as the model works."""
+    window._update(complete_phrases_only=True)
+    window._on_target_text("The quarterly numbers")
+    assert window._view._lines == []
+
+    window._on_target_text(" are ahead of plan.")
+    assert window._view._lines == [("The quarterly numbers are ahead of plan.", True)]
+
+
+def test_turn_complete_flushes_the_buffer_to_the_view(window):
+    window._update(complete_phrases_only=True)
+    window._on_target_text("A phrase with no full stop")
+    assert window._view._lines == []
+
+    window._bridge.turn_complete.emit()
+    assert window._view._lines == [("A phrase with no full stop", True)]
+
+
+def test_turn_complete_writes_the_line_to_the_transcript(
+    window, monkeypatch, tmp_path
+):
+    _running_window(window, monkeypatch, tmp_path)
+    path = window._writer.path
+    window._update(complete_phrases_only=True)
+    window._on_target_text("Settled by the end of the turn")
+    window._bridge.turn_complete.emit()
+    assert "Settled by the end of the turn" in path.read_text(encoding="utf-8")
+
+
+def test_a_saved_setting_reaches_the_buffer_at_startup(qapp, monkeypatch):
+    """It used to take a Preferences visit before the buffer picked this up."""
+    monkeypatch.setattr(mw.config, "save", lambda _s: None)
+    w = mw.CaptionWindow(replace(Settings(), complete_phrases_only=True, line_hold_seconds=1.5))
+    try:
+        assert w._buffer.complete_phrases_only is True
+        assert w._buffer.line_hold_seconds == 1.5
+    finally:
+        w._tick.stop()
+        w.close()
+
+
 # --- the 0 key ------------------------------------------------------------
 
 

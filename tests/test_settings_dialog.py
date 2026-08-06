@@ -227,6 +227,19 @@ def test_the_clear_delay_reaches_the_result(dialog):
     assert dialog.result_settings().clear_after_seconds == 2.5
 
 
+def test_complete_phrases_reaches_the_result(dialog):
+    assert dialog.result_settings().complete_phrases_only is False
+    dialog._complete_phrases.setChecked(True)
+    assert dialog.result_settings().complete_phrases_only is True
+
+
+def test_complete_phrases_has_a_tooltip_and_names_its_shortcut(dialog):
+    tip = dialog._complete_phrases.toolTip()
+    assert len(tip) > 60
+    assert "9" in dialog._complete_phrases.text()
+    assert "9 key" in tip
+
+
 # --- vocabulary hints -----------------------------------------------------
 
 

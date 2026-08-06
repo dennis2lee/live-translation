@@ -126,6 +126,10 @@ class Settings:
     # Stops a burst of sentences scrolling past inside a single repaint.
     line_hold_seconds: float = 0.7  # 0 ~ 3
 
+    # Show only settled text, never a phrase the model is still revising.
+    # Trades a little latency for captions that stop moving under the reader.
+    complete_phrases_only: bool = False
+
     # Transcript recording. The filename is the session start timestamp.
     save_transcript: bool = True
     transcript_dir: str = transcript.DEFAULT_DIR
@@ -175,6 +179,7 @@ class Settings:
             fixed_box=bool(self.fixed_box),
             clear_after_seconds=_clamp(self.clear_after_seconds, 0.0, 30.0),
             line_hold_seconds=_clamp(self.line_hold_seconds, 0.0, 3.0),
+            complete_phrases_only=bool(self.complete_phrases_only),
             save_transcript=bool(self.save_transcript),
             show_direction_hint=bool(self.show_direction_hint),
             transcript_dir=self.transcript_dir or transcript.DEFAULT_DIR,

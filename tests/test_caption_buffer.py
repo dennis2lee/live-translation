@@ -569,6 +569,104 @@ def test_the_ceiling_does_not_override_a_disabled_clear():
     assert buf.committed_lines == ["Stays put."]
 
 
+# --- complete phrases only ------------------------------------------------
+#
+# The model streams its translation a fragment at a time and rewrites as it
+# goes. Drawing every fragment is what makes the captions visibly churn.
+
+
+def phrases(**kw) -> CaptionBuffer:
+    kw.setdefault("clear_after_seconds", 0.0)
+    return CaptionBuffer(policy=Policy.INCREMENTAL, complete_phrases_only=True, **kw)
+
+
+def test_unsettled_text_is_never_drawn():
+    buf = phrases()
+    buf.feed("The quarterly", 0.0)
+    buf.feed(" numbers are", 1.0)
+    assert buf.pending_text  # it is buffered...
+    assert buf.display_lines() == []  # ...but nothing half-written is shown
+
+
+def test_the_default_still_shows_unsettled_text_dimmed():
+    """The mode is opt-in; the old behaviour must survive untouched."""
+    buf = inc()
+    buf.feed("The quarterly", 0.0)
+    assert buf.display_lines() == [("The quarterly", False)]
+
+
+def test_a_finished_sentence_appears():
+    buf = phrases()
+    buf.feed("Revenue is up fourteen percent.", 0.0)
+    assert buf.display_lines() == [("Revenue is up fourteen percent.", True)]
+
+
+def test_an_abbreviation_does_not_end_a_sentence():
+    """"Dr." would otherwise settle a two-word fragment as a whole sentence."""
+    buf = phrases()
+    buf.feed("Dr.", 0.0)
+    assert buf.committed_lines == []
+    assert buf.pending_text == "Dr."
+
+
+def test_the_abbreviation_guard_only_applies_to_this_mode():
+    buf = inc()
+    buf.feed("Dr.", 0.0)
+    assert buf.committed_lines == ["Dr."]
+
+
+def test_a_short_sentence_still_settles_on_the_idle_timer():
+    """The length guard delays a short phrase, it must not strand it."""
+    buf = phrases()
+    buf.feed("Yes.", 0.0)
+    assert buf.committed_lines == []
+    assert buf.tick(1.3) is True
+    assert buf.committed_lines == ["Yes."]
+
+
+def test_turn_complete_settles_whatever_is_buffered():
+    """The one boundary the API reports reliably, per spikes/RESULTS.md."""
+    buf = phrases()
+    buf.feed("A phrase with no full stop", 0.0)
+    assert buf.display_lines() == []
+    assert buf.note_turn_complete(1.0) is True
+    assert buf.display_lines() == [("A phrase with no full stop", True)]
+
+
+def test_turn_complete_with_nothing_buffered_changes_nothing():
+    buf = phrases()
+    assert buf.note_turn_complete(1.0) is False
+    assert buf.is_empty
+
+
+def test_turn_complete_beats_the_abbreviation_guard():
+    """A genuinely short utterance must not wait for the idle timer."""
+    buf = phrases()
+    buf.feed("Yes.", 0.0)
+    assert buf.committed_lines == []
+    buf.note_turn_complete(0.2)
+    assert buf.committed_lines == ["Yes."]
+
+
+def test_the_transcript_gets_the_text_either_way():
+    """Withholding is a display concern; recording must not change."""
+    buf = phrases()
+    buf.feed("A phrase with no full stop", 0.0)
+    buf.note_turn_complete(1.0)
+    assert buf.drain_new_commits() == ["A phrase with no full stop"]
+
+
+def test_the_mode_can_be_switched_at_runtime():
+    """The 9 key flips it mid-session, so it cannot be construction-only."""
+    buf = inc()
+    buf.feed("Half a thought", 0.0)
+    assert buf.display_lines() == [("Half a thought", False)]
+    buf.complete_phrases_only = True
+    assert buf.display_lines() == []
+    buf.complete_phrases_only = False
+    assert buf.display_lines() == [("Half a thought", False)]
+
+
 # --- switching policy at runtime ------------------------------------------
 
 

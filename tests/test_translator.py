@@ -31,12 +31,14 @@ def wait_until(pred, timeout: float = 6.0) -> bool:
 # --- fake server messages -------------------------------------------------
 
 
-def msg(*, go_away=None, handle=None, out=None, src=None):
+def msg(*, go_away=None, handle=None, out=None, src=None, turn_complete=None):
     content = None
-    if out is not None or src is not None:
+    if out is not None or src is not None or turn_complete is not None:
         content = SimpleNamespace(
             input_transcription=SimpleNamespace(text=src) if src else None,
             output_transcription=SimpleNamespace(text=out) if out else None,
+            # The real end-of-turn message carries no transcription payload.
+            turn_complete=bool(turn_complete),
             model_turn=None,
         )
     return SimpleNamespace(
@@ -400,6 +402,35 @@ def test_config_matches_the_preview_model_contract(rec):
         assert cfg.translation_config.target_language_code == "en"
         assert cfg.translation_config.echo_target_language is False
         assert cfg.context_window_compression.sliding_window is not None
+    finally:
+        t.stop()
+
+
+def test_turn_complete_reaches_the_callback(rec):
+    """The end-of-turn message arrives with no transcription payload of its own."""
+    turns: list[int] = []
+    t = make_translator(
+        rec,
+        [[msg(out="Hello there."), msg(turn_complete=True)]],
+        on_turn_complete=lambda: turns.append(1),
+    )
+    t.start()
+    try:
+        assert wait_until(lambda: turns == [1])
+    finally:
+        t.stop()
+
+
+def test_a_message_without_turn_complete_does_not_fire_it(rec):
+    turns: list[int] = []
+    t = make_translator(
+        rec, [[msg(out="Hello there.")]], on_turn_complete=lambda: turns.append(1)
+    )
+    t.start()
+    try:
+        assert wait_until(lambda: rec.sessions and rec.sessions[0].sent is not None)
+        time.sleep(0.15)
+        assert turns == []
     finally:
         t.stop()
 

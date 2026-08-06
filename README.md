@@ -106,6 +106,7 @@ the model would otherwise mishear or spell inconsistently, one term per line.
 | `0` | Toggle translation on / off |
 | `1` | Korean → English |
 | `2` | English → Korean |
+| `9` | Complete phrases only, on / off |
 | ⌘R | Start translation |
 | ⌘. | Stop translation |
 | ⌘K | Clear captions |
@@ -220,6 +221,27 @@ burst: 2 of the 5 lines used to reach the screen, now 4 do.
 - No more than `max_lines` lines are ever held back, so the captions trail the audio by at most **1.4 s** at the defaults — pacing smooths a burst, it never accumulates
 - A burst longer than that still loses its oldest line from the screen; two lines cannot show five sentences. The transcript keeps every one of them regardless
 - `0` shows everything the instant it settles, which is the old behaviour
+
+### Complete phrases only
+
+The model streams its translation a fragment at a time and rewrites as it goes,
+so by default the caption visibly churns while it works — the unsettled line is
+drawn dimmed and keeps changing under the reader.
+
+**Settings → Complete Phrases Only**, or the **`9`** key, withholds a phrase
+until it has settled. Nothing half-written is ever drawn.
+
+A phrase settles at whichever of these comes first:
+
+| Trigger | Notes |
+|---|---|
+| A sentence ending in `.` `?` `!` | Needs at least 20 characters behind it, so `Dr.` and `vs.` do not settle a two-word fragment |
+| `turn_complete` from the server | The only end-of-turn signal the API reports reliably — `Transcription.finished` exists in the SDK but does not arrive in practice |
+| 1.2 s without a new fragment | The fallback, so a short utterance is never stranded by the length guard |
+
+Steadier to read, at the cost of a sentence arriving a beat later. Off by
+default. The transcript is unaffected either way — it is written from a separate
+path.
 
 ### Clearing on silence
 

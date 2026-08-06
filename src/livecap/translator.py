@@ -159,6 +159,7 @@ class LiveTranslator:
         on_target: Callable[[str], None] | None = None,
         on_state: Callable[[State, str], None] | None = None,
         on_reconnect: Callable[[], None] | None = None,
+        on_turn_complete: Callable[[], None] | None = None,
     ) -> None:
         self._ring = ring
         self._api_key = api_key
@@ -172,6 +173,7 @@ class LiveTranslator:
         self._on_target = on_target or (lambda _t: None)
         self._on_state = on_state or (lambda _s, _d: None)
         self._on_reconnect = on_reconnect or (lambda: None)
+        self._on_turn_complete = on_turn_complete or (lambda: None)
 
         self._loop: asyncio.AbstractEventLoop | None = None
         self._thread: threading.Thread | None = None
@@ -436,7 +438,14 @@ class LiveTranslator:
             if sc.output_transcription and sc.output_transcription.text:
                 self._on_target(sc.output_transcription.text)
 
-            # 5) Audio must be consumed and discarded, or the stream stalls
+            # 5) End of turn — the one boundary the API reports reliably.
+            # `Transcription.finished` exists in the SDK but does not arrive in
+            # practice, so never wait on it. This message carries no
+            # transcription payload of its own, hence the separate check.
+            if sc.turn_complete:
+                self._on_turn_complete()
+
+            # 6) Audio must be consumed and discarded, or the stream stalls
             if sc.model_turn:
                 for part in sc.model_turn.parts or ():
                     if part.inline_data is not None:

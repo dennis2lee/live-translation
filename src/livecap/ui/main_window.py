@@ -82,6 +82,7 @@ class _Bridge(QObject):
     target_text = pyqtSignal(str)
     state_changed = pyqtSignal(str, str)
     reconnected = pyqtSignal()
+    turn_complete = pyqtSignal()
 
 
 class CaptionWindow(QMainWindow):
@@ -105,6 +106,8 @@ class CaptionWindow(QMainWindow):
             max_lines=settings.max_lines,
             policy=settings.policy,
             clear_after_seconds=settings.clear_after_seconds,
+            line_hold_seconds=settings.line_hold_seconds,
+            complete_phrases_only=settings.complete_phrases_only,
         )
         self._view = CaptionView(settings, self)
         self.setCentralWidget(self._view)
@@ -115,6 +118,7 @@ class CaptionWindow(QMainWindow):
         self._bridge.target_text.connect(self._on_target_text)
         self._bridge.state_changed.connect(self._on_state_changed)
         self._bridge.reconnected.connect(self._on_reconnected)
+        self._bridge.turn_complete.connect(self._on_turn_complete)
 
         self._tick = QTimer(self)
         self._tick.timeout.connect(self._on_tick)
@@ -274,6 +278,20 @@ class CaptionWindow(QMainWindow):
         self._device_group: QActionGroup | None = None
 
         cfg.addSeparator()
+        # The 9 key, alongside 0 for start/stop and 1/2 for direction.
+        self._act_complete_phrases = QAction("Complete Phrases Only", self, checkable=True)
+        self._act_complete_phrases.setShortcut(QKeySequence("9"))
+        self._act_complete_phrases.setToolTip(
+            "Show a phrase only once it has settled, instead of drawing every\n"
+            "fragment as the model revises it.\n"
+            "Steadier to read, at the cost of a little latency."
+        )
+        self._act_complete_phrases.triggered.connect(
+            lambda c: self._update(complete_phrases_only=c)
+        )
+        cfg.addAction(self._act_complete_phrases)
+
+        cfg.addSeparator()
         self._act_fixed_box = QAction("Always Show Caption Box", self, checkable=True)
         self._act_fixed_box.setToolTip(
             "Keep the box at a fixed size and position.\n"
@@ -357,6 +375,7 @@ class CaptionWindow(QMainWindow):
         for direction, act in self._direction_actions.items():
             act.setChecked(direction is current)
         self._act_fixed_box.setChecked(self._settings.fixed_box)
+        self._act_complete_phrases.setChecked(self._settings.complete_phrases_only)
         self._act_source.setChecked(self._settings.show_source_text)
         self._act_fullscreen.setChecked(self._settings.fullscreen)
 
@@ -366,6 +385,7 @@ class CaptionWindow(QMainWindow):
         self._buffer.set_max_lines(self._settings.max_lines)
         self._buffer.clear_after_seconds = self._settings.clear_after_seconds
         self._buffer.line_hold_seconds = self._settings.line_hold_seconds
+        self._buffer.complete_phrases_only = self._settings.complete_phrases_only
         self._buffer.set_policy(self._settings.policy)
 
     def _update(self, **changes: object) -> None:
@@ -412,6 +432,8 @@ class CaptionWindow(QMainWindow):
             max_lines=self._settings.max_lines,
             policy=self._settings.policy,
             clear_after_seconds=self._settings.clear_after_seconds,
+            line_hold_seconds=self._settings.line_hold_seconds,
+            complete_phrases_only=self._settings.complete_phrases_only,
         )
         self._view.apply_settings(self._settings)
         self._view.clear()
@@ -567,6 +589,7 @@ class CaptionWindow(QMainWindow):
             on_target=self._bridge.target_text.emit,
             on_state=lambda s, d: self._bridge.state_changed.emit(s.value, d),
             on_reconnect=self._bridge.reconnected.emit,
+            on_turn_complete=self._bridge.turn_complete.emit,
         )
 
     def start_translation(self) -> None:
@@ -700,6 +723,16 @@ class CaptionWindow(QMainWindow):
             self._writer.note_reconnect(
                 time.monotonic() - self._started_at, gaps[-1] if gaps else 0.0
             )
+
+    def _on_turn_complete(self) -> None:
+        """The server says the turn ended — settle whatever is still buffered.
+
+        This is what stops complete-phrases mode holding the last phrase of an
+        utterance back until the idle timer catches it.
+        """
+        if self._buffer.note_turn_complete(time.monotonic()):
+            self._push_lines()
+        self._record_new_lines()
 
     def _on_state_changed(self, state_value: str, detail: str) -> None:
         try:

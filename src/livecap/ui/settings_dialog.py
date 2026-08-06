@@ -673,6 +673,21 @@ class SettingsDialog(QDialog):
         )
         form.addRow("Hold each line (0.1 s steps)", line_hold_row)
 
+        self._complete_phrases = QCheckBox("Complete phrases only  (9)")
+        self._complete_phrases.setToolTip(
+            "The model streams its translation a fragment at a time and rewrites\n"
+            "as it goes, so the captions visibly churn while it works.\n"
+            "\n"
+            "With this on, a phrase appears only once it has settled — at a\n"
+            "sentence end, when the server reports the turn finished, or after a\n"
+            "pause. Nothing half-written is ever drawn.\n"
+            "\n"
+            "Steadier to read; a sentence arrives a beat later than it would\n"
+            "otherwise. Also switched with the 9 key."
+        )
+        self._complete_phrases.setChecked(settings.complete_phrases_only)
+        form.addRow("", self._complete_phrases)
+
         self._save_transcript = QCheckBox("Save the transcript as a .md file")
         self._save_transcript.setToolTip("The filename is the session start timestamp.")
         self._save_transcript.setChecked(settings.save_transcript)
@@ -834,6 +849,7 @@ class SettingsDialog(QDialog):
             box_opacity=self._opacity.value() / 100.0,
             clear_after_seconds=self._clear_after.value() / 10.0,
             line_hold_seconds=self._line_hold.value() / 10.0,
+            complete_phrases_only=self._complete_phrases.isChecked(),
             save_transcript=self._save_transcript.isChecked(),
             show_direction_hint=self._direction_hint.isChecked(),
             transcript_dir=self._transcript_dir.text().strip() or DEFAULT_DIR,
