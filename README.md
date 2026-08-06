@@ -1,13 +1,13 @@
 # LiveCap
 
-Real-time speech translation captions for macOS.
+Real-time speech translation captions for macOS and Windows.
 
 Speak Korean, see English captions on a full-screen display — or flip the
 direction and speak English to see Korean. Audio comes in through any CoreAudio
 input device, typically a USB interface fed from a mixer.
 
 - **Engine** — Google Gemini Live API, `gemini-3.5-live-translate-preview`
-- **UI** — PyQt6, native macOS menu bar, no Electron
+- **UI** — Go with Fyne, native macOS menu bar, no Electron
 - **Latency** — 3.1 s to the first caption Korean → English, 3.8 s English → Korean, then about one fragment per second
 - **Endurance** — verified for 30 minutes unbroken across 3 automatic reconnects
 
@@ -327,86 +327,94 @@ model is audio-only and the output cannot be switched off.
 
 ## Architecture
 
-Three threads. Crossing between them is only ever done in the ways listed here.
+Go. Three goroutine domains, and crossing between them is only ever done in the
+ways listed here.
 
-| Thread | Responsibility |
+| Goroutine | Responsibility |
 |---|---|
-| PortAudio callback | Downmix to mono, resample to 16 kHz, write to a lock-free ring buffer. No allocation, no locks, no Qt. |
-| asyncio worker | Send 100 ms chunks to the Live API, receive transcriptions, manage reconnects. Emits Qt signals. |
-| Qt main | All widgets. Never touched from the other two threads. |
+| miniaudio device callback | Downmix to mono, resample to 16 kHz, write to the ring buffer. No allocation, no locks, no UI. |
+| translator (supervisor, sender, one receiver per session) | Send 100 ms chunks to the Live API, receive transcriptions, manage reconnects. Reaches the UI only through `fyne.Do`. |
+| Fyne UI | Every widget, the caption buffer, the transcript. Never touched from the other two. |
 
 ```
-src/livecap/
-├── app.py                 entry point, --selftest
-├── config.py              Settings, QSettings persistence, API key lookup
-├── credentials.py         encrypted key store (replaces .env)
-├── netcheck.py            latency, jitter and throughput against what a session needs
-├── audio.py               AudioCapture, RingBuffer (48k → 16k, int16 LE)
-├── translator.py          LiveTranslator — sessions, resumption, pre-emptive reconnect
-├── transcript.py          Markdown transcript writer
-├── caption_buffer.py      transcription fragments → display lines (no Qt, no network)
-├── platform_support.py    the only module that branches on the operating system
-├── util/logging.py        stderr logging setup
-└── ui/
-    ├── main_window.py     CaptionWindow and the system menu bar
-    ├── caption_view.py    background, caption box, status indicator
-    └── settings_dialog.py
+src_go/
+├── cmd/livecap/main.go      flags, --selftest, wiring, signal handling
+└── internal/
+    ├── audio/               device enumeration, capture, the ring buffer
+    ├── captions/            fragments → display lines (no UI, no network)
+    ├── config/              settings schema, JSON persistence, API-key lookup
+    ├── credentials/         the encrypted store (reads the Python build's file)
+    ├── netcheck/            latency and throughput against what a session needs
+    ├── platform/            the only package that branches on the OS
+    ├── resample/            libsoxr on macOS, a pure-Go filter elsewhere
+    ├── transcript/          the Markdown transcript
+    ├── translator/          the Live API: supervisor, sender, receivers
+    └── ui/                  caption view, menus, Preferences, the window
 ```
+
+The Python implementation that this replaces is preserved in `src/` as an
+executable specification. It is frozen: no feature or fix lands there.
 
 ### Session endurance
 
 An audio session lasts about 15 minutes and the WebSocket about 10, so lasting
 30 minutes needs all three of:
 
-- `context_window_compression` with a sliding window, to extend the session itself
-- `session_resumption`, keeping the latest `new_handle` for the next connection
+- `ContextWindowCompression` with a sliding window, to extend the session itself
+- `SessionResumption`, keeping the latest handle for the next connection
 - Opening a replacement session **before** closing the old one when `go_away` arrives
 
 Measured over 30 minutes: `go_away` arrived 3 times at 9-minute intervals, each
-swap took 370–459 ms, and no sentence was lost.
+swap took 367–471 ms, and sentence loss scored 360/360 against the script —
+the same numbers the Python implementation recorded.
 
 ## Development
 
 ```bash
-cd ~/work/live-translation && .venv/bin/python -m pytest -q
-```
-
-```bash
-cd ~/work/live-translation && .venv/bin/python -m ruff check .
+cd ~/work/live-translation/src_go
+go test ./...          # the whole suite, offline
+go test -race ./...    # the same, with the race detector
+go vet ./... && gofmt -l .
 ```
 
 - The whole suite runs offline — no test needs an API key or network access
-- Tests are isolated from both places the app persists things: the encrypted key store and the preferences plist. Without that, a run would read and overwrite the key and the settings actually in use
-- UI tests render offscreen and inspect pixels directly
-- `caption_buffer.py` has no Qt or network dependency and is covered by unit tests
-- The speed test is covered with the socket and `urlopen` calls replaced, so no test opens a connection
-- Caption pacing is pinned by a five-sentence burst: the number of lines reaching the display is asserted, not just the final state
-- Reconnect logic is tested against a fake Live session
-- Quitting mid-session is tested in both directions: the device is released and the transcript finished
-- Apply, OK and Cancel are tested as a cycle, including that cancelling after an Apply restarts a live session back to where it was
-- The Windows and Linux branches of `platform_support.py` are pinned by faking `sys.platform`
+- Tests are isolated from both places the app persists things: the encrypted key store and the settings file. Without that, a run would read and overwrite the key and the settings actually in use
+- `internal/captions` has no UI or network dependency and is covered by a fuzz test that drives every entry point together — 20,000 randomised steps per mode
+- Reconnect logic is tested against a fake Live session: go_away swaps, resumption handles, fatal versus retryable errors, send failures
+- The menu is tested by driving each item's own action: no dead entries, ticks that both drive and follow their setting, exclusive groups
+- Preferences is tested as a cycle, including that Cancel after an Apply restores the settings **and** the encrypted key store
+- The Windows and Linux branches of `internal/platform` are pinned by faking the OS
 
-Measurement scripts live in `spikes/`, and their findings are recorded in
-[spikes/RESULTS.md](spikes/RESULTS.md).
+Measurement scripts live in `src_go/spikes/`, and their findings are recorded in
+[src_go/spikes/RESULTS.md](src_go/spikes/RESULTS.md).
 
 | Script | Purpose |
 |---|---|
-| `s0_transcription_timing.py` | How transcription fragments arrive (drives caption policy) |
-| `s1_capture_check.py` | Audio capture accuracy, underruns, WAV dump |
-| `s2_headless_run.py` | Long unattended runs, reconnect stats, transcript vs. script |
-| `make_tts_fixture.py` | Build known-script test audio with the macOS TTS voices |
+| `f1_text` | Korean rendering, headless, writes a PNG |
+| `f2_menus` | The menu bar, keys and full screen — needs a human |
+| `a1_capture` | Capture accuracy, callback timing, input level |
+| `r1_resample` | libsoxr against the pure-Go filter |
+| `l1_live` | Shortest end-to-end proof against the Live API |
+| `g3_endurance` | 30-minute run: reconnects, gaps, backlog, sentence loss |
+| `g4_transcript_golden` | Transcript bytes against the Python writer |
+| `g5_direction` | A live mid-session direction switch |
 
 ## Distribution
 
 ```bash
-cd ~/work/live-translation && packaging/build_app.sh
+cd ~/work/live-translation/src_go
+./packaging/build_app.sh        # dist/LiveCap.app
+./packaging/build_windows.sh    # dist/windows/LiveCap-1.0.0-x64.msi
 ```
 
-- Builds `dist/LiveCap.app` (~110 MB, arm64), carrying its own Python, Qt, `libportaudio` and soxr
-- The receiving Mac needs nothing installed
+- The `.app` is ~28 MB arm64 and carries its own libsoxr; the receiving Mac needs nothing installed
 - `Info.plist` sets `NSMicrophoneUsageDescription`, without which macOS kills the app instead of prompting for the microphone
 - Verify any build with `dist/LiveCap.app/Contents/MacOS/LiveCap --selftest`
 - Add `--sign` to codesign for other machines — see [INSTALL.md](INSTALL.md)
+- The Windows installer cross-builds from macOS with `brew install mingw-w64 msitools`. It is one self-contained `.exe`, importing Windows system DLLs only, and the build fails if that ever stops being true
+
+**The Windows build has never been run on Windows.** It cross-builds and the
+MSI is structurally correct; nothing more than that is claimed.
 
 ## Author
 

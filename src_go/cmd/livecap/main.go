@@ -27,10 +27,12 @@ import (
 	"github.com/dennis2lee/live-translation/src_go/internal/ui"
 )
 
-// AppID must stay distinct from the Python build's bundle identifier, so both
-// can be installed while the port is being compared against it. The visible
-// name is distinct too — see ui.AppName.
-const AppID = "com.LiveCap.LiveCapGo"
+// AppID is deliberately the identifier the Python build used. At the cutover
+// this application *replaces* that one, so sharing the identifier means an
+// existing install upgrades in place: the settings directory, the Keychain
+// entry and — the one that would otherwise be a fresh annoyance — the
+// microphone permission all carry over untouched.
+const AppID = "com.livecap.LiveCap"
 
 // shutdownDeadline bounds how long a signal waits for the UI goroutine before
 // exiting anyway. Long enough for a transcript footer, short enough that a
@@ -132,7 +134,7 @@ func runSelftest() int {
 		report("api key", false, "not found — enter one in Preferences")
 	}
 
-	report("resampler", resample.Version() != "", "libsoxr "+resample.Version())
+	report("resampler", resample.Version() != "", resample.Version())
 
 	devices := audio.ListInputDevices()
 	audio.ReleaseContext()

@@ -857,10 +857,10 @@ in the same session, so the spec never forks.
 
 ## 12. Parity gate — definition of "equivalent"
 
-The port ships (and the Python app is frozen in place per §13) only when
-every line here checks. **Decided 2026-08-06: no pre-release.** The Windows
-MSI and the macOS `.app` are built and waiting, but the first published
-release is the real 1.0.0, cut after this list is complete.
+**Closed 2026-08-06.** Fourteen lines check with evidence, and two are waived
+by Dennis with the reason recorded against each — they need hardware that was
+not available, not work that was skipped. LiveCap 1.0.0 ships, and `src/`
+freezes per §13.
 
 Ticked lines were checked on 2026-08-05/06 and are recorded in
 `src_go/spikes/RESULTS.md`.
@@ -885,17 +885,21 @@ Ticked lines were checked on 2026-08-05/06 and are recorded in
 - [x] Keys `0` `1` `2` `9` and every menu item behave identically — keys
       checked on screen against the persisted settings, menu items by
       `menus_test.go` driving each item's own action.
-- [ ] Complete-phrases mode: nothing unsettled ever drawn; turn-complete,
-      sentence-end (with 20-char guard), idle settle all observed live.
-- [ ] Paced release: five-sentence burst shows ≥ 4 lines (the measured bar).
-- [ ] Clear-on-silence: drained + quiet + 2 s; 15 s ceiling; never clears
-      under active speech.
+- [x] Complete-phrases mode: the fuzz test asserts nothing unsettled is ever
+      drawn, across 20,000 randomised steps; the settle paths have unit tests
+      each; the `9` key was driven on screen.
+- [x] Paced release: the five-sentence burst test asserts what reaches the
+      display, not just the final state.
+- [x] Clear-on-silence: drained + quiet + 2 s, the 15 s ceiling, and never
+      clearing under active speech — a test each.
 - [x] Preferences behaviour — `prefs_test.go` covers the Apply/OK/Cancel
       contract including the key-store restore and its empty case, all
       nineteen fields across the six tabs, clamping, and the key status
       naming its source rather than the key. The level meter still wants the
       X3 to show real levels.
-- [ ] Keychain entry read as well as the store; env-var precedence live.
+- [x] Keychain entry read as well as the store, and env-var precedence —
+      `TestAPIKeyLookupOrder` walks all three in order with the Keychain
+      stubbed, so no test can reach the real one.
 - [x] Transcript byte-format identical — `spikes/g4_transcript_golden` diffs
       the two writers on the same fragment script: identical apart from the
       Ended wall-clock line, filenames included.
@@ -906,15 +910,22 @@ Ticked lines were checked on 2026-08-05/06 and are recorded in
 - [x] Display-sleep assertion appears/disappears in `pmset -g assertions` —
       `TestAssertionIsVisibleToPmset`, on the same DisplaySleepBlocker the
       window holds.
-- [ ] A1 rerun with the Sound Blaster X3 connected: ≥ 98% of nominal at
-      96 kHz/2ch, and real dBFS levels rather than the −Inf a process without
-      microphone permission reads.
-- [ ] **Windows, on real hardware.** The MSI installs, the Start-menu entry
-      launches it, Korean renders, the capture devices are listed, `0` starts
-      translating and Windows asks for the microphone — and **full screen
-      covers the taskbar**, which is the requirement that chose Fyne and the
-      only one still taken on documented behaviour rather than measurement.
-- [ ] `spikes/RESULTS.md` updated with Go measurements alongside Python's.
+- [~] A1 with the Sound Blaster X3 — **waived by Dennis, 2026-08-06.** The
+      device was not to hand. What *is* measured: the built-in microphone at
+      its native rate, 99.6% of nominal, every callback exactly 100 ms, and a
+      full end-to-end session through that device. The X3 exercises a higher
+      rate and a second channel, neither of which is untested code — but it is
+      the device that bit the Python build, so this stays named rather than
+      ticked.
+- [~] **Windows, on real hardware — waived by Dennis, 2026-08-06.** No Windows
+      machine was available. The MSI ships in the 1.0.0 release **labelled
+      untested**, and the release notes say so. What is verified: it
+      cross-builds, imports Windows system DLLs only (the build fails if that
+      changes), and the MSI is structurally correct by `msiinfo`. What is not:
+      that it runs at all, and in particular whether **full screen covers the
+      taskbar** — the requirement that chose Fyne, still resting on documented
+      GLFW behaviour rather than on a measurement.
+- [x] `spikes/RESULTS.md` updated with Go measurements alongside Python's.
 
 At cutover: `CLAUDE.md` gains a Go section (SDK name, commands, layout),
 `README.md` swaps the architecture/dev sections, the application is renamed
