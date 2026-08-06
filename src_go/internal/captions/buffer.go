@@ -578,3 +578,9 @@ func median(xs []int) int {
 	}
 	return ordered[len(ordered)/2]
 }
+
+// SetClearAfterSeconds changes the silence window. 0 disables clearing.
+func (b *Buffer) SetClearAfterSeconds(v float64) { b.clearAfterSeconds = v }
+
+// SetLineHoldSeconds changes how long a settled line holds the screen.
+func (b *Buffer) SetLineHoldSeconds(v float64) { b.lineHoldSeconds = v }

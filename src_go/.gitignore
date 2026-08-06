@@ -8,3 +8,7 @@
 
 # The built .app bundle.
 /dist/
+
+# The assembled bundle and the icon copied from ../packaging.
+/dist/
+/packaging/AppIcon.icns
