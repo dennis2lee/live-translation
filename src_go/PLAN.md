@@ -76,8 +76,22 @@ preview surface, the fallback is hand-rolled JSON over WebSocket against
 logging the Python SDK's outbound setup message. Documented here so the escape
 hatch is known, but it is not part of the plan.)
 
-Not yet verified, spike-gated (§10): Fyne's Korean text rendering, `malgo`
-device behaviour on the Sound Blaster X3, resampler quality choice.
+Proved end-to-end by spike L1 on 2026-08-05, not just present in the type
+system: the config above is accepted as-is and real KO→EN fragments come back.
+Two facts that cost a debugging session and must not be rediscovered:
+
+- **`TargetLanguageCode` must be `"en"`, not `"en-US"`.** The region-qualified
+  form is rejected, and rejected as a whole-config `1007 invalid payload data:
+  Request contains an invalid argument` about a second *after* `setupComplete`,
+  which makes it look like an SDK fault. `config.DIRECTION_TARGET` in the Python
+  build is the authority on these codes.
+- **`setupComplete` proves nothing.** It arrives before the server has looked at
+  any audio, so a probe that reads one message after connecting will call a
+  broken config healthy. Read until either a transcription or a hang-up.
+
+Not yet verified, spike-gated (§10): `malgo` device behaviour on the Sound
+Blaster X3. Fyne's Korean rendering and the resampler choice are now settled —
+see `src_go/spikes/RESULTS.md`.
 
 ---
 
@@ -88,7 +102,7 @@ device behaviour on the Sound Blaster X3, resampler quality choice.
 | Live API | `google-genai` | `google.golang.org/genai` v1.67.0, pinned | Raw WebSocket (escape hatch only) |
 | GUI | PyQt6 | **Fyne v2** (decided — see §3.1) | DarwinKit (rejected: macOS-only, and Windows full-screen is a requirement), Gio (last resort: no menu system) |
 | Audio capture | sounddevice/PortAudio | **`github.com/gen2brain/malgo`** (miniaudio; cgo but vendors its own C — no external install) | `gordonklaus/portaudio` (needs brew portaudio + dylib bundling) |
-| Resampling | soxr | **libsoxr via cgo** (already installed; dylib bundled into the .app) | Pure-Go windowed-sinc FIR (spike compares; only if bundling proves painful) |
+| Resampling | soxr | **libsoxr via cgo** (decided by R1 — `spikes/RESULTS.md`) | Pure-Go windowed-sinc FIR — **measured and viable** (−91 dB stopband, 0.6% realtime), kept as the fallback if dylib bundling turns painful |
 | Keychain | `keyring` | `github.com/zalando/go-keyring` (shells to `/usr/bin/security`, no cgo) | `keybase/go-keychain` (cgo) |
 | Encrypted store | `cryptography` Fernet | `github.com/fernet/fernet-go` + `golang.org/x/crypto/pbkdf2` — **must decrypt the existing file** | — |
 | Settings | QSettings plist | JSON at `~/Library/Application Support/LiveCap/settings.json`, one-time import from the plist | Writing the plist (rejected: ties us to CFPreferences quirks) |
@@ -180,6 +194,16 @@ external library to install or bundle**. Capture flow:
 Spike A1 (§10) reruns the Python project's capture acceptance test on this
 stack: 5 s from the X3 at 96 kHz/2ch must yield ≥ 98% of nominal bytes, 0
 drops — the same numbers `spikes/RESULTS.md` records for the Python pipeline.
+
+**A1, measured** (`src_go/spikes/RESULTS.md`): the built-in mic opened at its
+native 48 kHz and delivered 99.6% of nominal in 5 s, every callback exactly
+4800 frames. Two corrections to the paragraph above: `SampleRate: 0` does ask
+for the native rate and works, but `Channels: 0` is not how malgo expresses
+"native" — the channel count is read from `DeviceInfo.Formats[0]` and passed
+explicitly. Requesting `FormatS16` is fine: miniaudio converts the format
+without resampling, so the rule that matters — never let the backend resample —
+is still kept. The X3 run and the level check are still outstanding, for the
+reasons `RESULTS.md` records.
 
 ---
 
@@ -507,16 +531,24 @@ type Settings struct {
 
 ### 6.5 Credentials (`internal/credentials/store.go`) — byte compatibility
 
-The single most delicate port: the Go binary must decrypt the file the Python
-app wrote. Same passphrase, same salt, same KDF, same token format:
+**Written and passing as of 2026-08-05** — brought forward from G1 because
+spike L1 needed a real API key, which made it the cheapest way to close the
+port's most delicate risk early.
+
+The Go binary must decrypt the file the Python app wrote. Same passphrase, same
+salt, same KDF, same token format:
 
 ```go
-derived := pbkdf2.Key([]byte("praykepc"), []byte("livecap-credential-store-v1"),
-    200_000, 32, sha256.New)
-var key fernet.Key
-copy(key[:], derived)                       // Python: urlsafe_b64encode(derived) → Fernet
-plaintext := fernet.VerifyAndDecrypt(blob, 0 /* no TTL */, []*fernet.Key{&key})
+derived := pbkdf2.Key(passphrase, salt, 200_000, 32, sha256.New)
+// Python builds the Fernet key as urlsafe_b64encode(derived) and Fernet
+// base64-decodes it again, so Go decodes the same text to reach the same bytes.
+key, _ := fernet.DecodeKey(base64.URLEncoding.EncodeToString(derived))
+plaintext := fernet.VerifyAndDecrypt(blob, 0 /* no TTL */, []*fernet.Key{key})
 ```
+
+`fernet.DecodeKey` on the base64 text is the working form; copying the raw 32
+bytes into a `fernet.Key` by hand is not, because the two halves are the signing
+and encryption keys and `DecodeKey` is what splits them.
 
 Fernet is a fixed spec (AES-128-CBC + HMAC-SHA256 over a versioned token), so
 `fernet-go` and Python `cryptography` interoperate; the **acceptance test for
@@ -708,25 +740,29 @@ Mirrors the phase discipline that worked for the Python build. Each phase ends
 green (`go vet` + `staticcheck` + `go test -race ./...`) before the next
 starts.
 
-**G0 — Spikes (decisions before code).**
+**G0 — Spikes (decisions before code).** Run 2026-08-05; results and numbers
+in `src_go/spikes/RESULTS.md`.
 - ~~Go SDK Live surface~~ — already verified (§2).
-- **F1 Fyne text**: render `"영업이익률 up 14%. Dr. Smith agrees."` at 44 px
-  in a Fyne canvas with a loaded Apple SD Gothic Neo / embedded Noto Sans KR
-  theme. Exit: correct glyphs, mixed script on one line, screenshot reviewed.
-- **F2 Fyne menus**: native menu bar with the four menus, a checkable item
-  toggled at runtime, About/Preferences/Quit in the app menu. Exit: visual
-  confirmation on this Mac.
-- **A1 malgo capture**: 5 s captures from the built-in mic and the X3
-  (96 kHz/2ch). Exit: ≥ 98% nominal bytes, 0 drops, native rate honoured —
-  the `spikes/RESULTS.md` acceptance numbers.
-- **R1 resampler**: libsoxr cgo stream vs a pure-Go FIR on a 0–8 kHz sweep at
-  48 k→16 k and 44.1 k→16 k; compare spectra. Exit: pick one, record why.
-- **L1 live smoke**: shortest possible Go program — mic → session → fragments
-  printed. Exit: real KO→EN fragments on screen. Proves SDK preview surface
-  end-to-end before any architecture is built on it.
-- Gate: F1 or F2 failing no longer changes the toolkit (§3.1) — F1 failure →
-  embed Noto Sans KR; F2 failure → in-window menu on macOS as well. Only a
-  fundamental Fyne failure (text shaping or full-screen itself broken) falls
+- ~~**F1 Fyne text**~~ — **done, pass.** Fyne 2.8 renders Hangul with its own
+  bundled theme font, no font work at all. Embedding Noto Sans KR is now a
+  deliberate choice for cross-platform determinism (G4), not a fix.
+- **F2 Fyne menus** — **awaiting a look.** `go run ./spikes/f2_menus` builds and
+  lists the six things to check; the macOS menu bar is painted outside the
+  window, so no screenshot the program takes can contain it.
+- **A1 malgo capture** — **mechanics pass** (native 48 kHz honoured, 99.6% of
+  nominal, callbacks exactly 100 ms). Outstanding: the X3 at 96 kHz/2ch, which
+  was not connected, and the peak level, which reads −Inf because the
+  automation process holds no microphone permission — Python's `sounddevice`
+  reads 0 from the same process, so this is TCC, not malgo.
+- ~~**R1 resampler**~~ — **done, decided: libsoxr.** Flat to 7 kHz, −2.9 dB at
+  7.6 kHz where the pure-Go filter is −17.8 dB, −87 dB stopband, 10–20× cheaper.
+  The pure-Go FIR is now a measured fallback rather than a hope.
+- ~~**L1 live smoke**~~ — **done, pass.** Real KO→EN fragments through the Go
+  SDK from `ko_fixture.wav`: connect 292 ms, 22 fragments, first at 2.86 s,
+  resumption updates ≈ 1/s. No raw WebSocket needed.
+- Gate: F1 or F2 failing no longer changes the toolkit (§3.1) — F1 has now
+  passed outright; an F2 failure means an in-window menu on macOS as well. Only
+  a fundamental Fyne failure (text shaping or full-screen itself broken) falls
   back to Gio with a hand-built menu, and that decision would come back to
   Dennis with evidence before any code is written on it.
 
@@ -769,12 +805,12 @@ in the same session, so the spec never forks.
 
 | Risk | Odds | Mitigation |
 |---|---|---|
-| Fyne Korean rendering unacceptable | medium | F1 spike first; embed Noto Sans KR (deterministic fix) |
+| ~~Fyne Korean rendering unacceptable~~ | **closed** | F1 measured: renders with the bundled font, untouched |
 | Fyne native-menu gaps (roles, check-state) | low–medium | F2 spike; fall back to in-window menu on macOS (Windows behaviour anyway) |
 | Windows full-screen not covering the taskbar | low (documented GLFW behaviour) | cannot be tested from this Mac; first item of the Windows phase, on real hardware |
-| genai Go SDK "Preview" surface changes under us | medium over time | pin v1.67.0; L1 smoke re-run on every bump; raw-WS escape hatch documented |
-| malgo device quirks vs PortAudio (X3!) | low–medium | A1 spike uses the exact device that bit us before |
-| libsoxr bundling friction | low | rpath fix in build script; R1's pure-Go fallback |
+| genai Go SDK "Preview" surface changes under us | medium over time | pin v1.67.0; L1 smoke re-run on every bump; raw-WS escape hatch documented. L1 proved the surface works, so a regression is now detectable in one command |
+| malgo device quirks vs PortAudio (X3!) | low–medium | A1 spike uses the exact device that bit us before — **still to be run**, the X3 was not connected on 2026-08-05 |
+| libsoxr bundling friction | low | rpath fix in build script; R1's pure-Go fallback, now measured rather than assumed |
 | Unsigned Go binary re-prompts Keychain after every rebuild | certain, dev-only | known annoyance; documented; goes away with codesigning |
 | cgo + `-race` + three native callbacks | low | race detector in CI from G1; callback code allocation-free and lock-free by rule |
 | Fyne needs main goroutine; malgo/genai callbacks elsewhere | by design | §4 rules; dispatcher is the only UI writer |

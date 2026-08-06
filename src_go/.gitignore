@@ -1,0 +1,10 @@
+# Compiled spike and command binaries, which `go build` drops in place.
+/a1_capture
+/l1_live
+/f1_text
+/f2_menus
+/r1_resample
+/livecap
+
+# The built .app bundle.
+/dist/
