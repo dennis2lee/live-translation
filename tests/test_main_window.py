@@ -197,6 +197,38 @@ def test_clear_captions_empties_the_view(window):
     assert window._buffer.is_empty
 
 
+def test_settled_lines_do_not_pile_up_when_transcripts_are_off(window, monkeypatch):
+    """The buffer holds settled lines until somebody takes them, and it outlives
+    a session — so nothing may depend on a transcript being open to drain it."""
+    monkeypatch.setattr(mw.config, "load_api_key", lambda: "test-key")
+    monkeypatch.setattr(mw, "AudioCapture", _StubCapture)
+    monkeypatch.setattr(mw, "LiveTranslator", _StubTranslator)
+    window._update(save_transcript=False)
+    window.start_translation()
+    assert window._writer is None
+
+    for i in range(200):
+        window._on_target_text(f"Sentence number {i} spoken aloud.")
+    assert window._buffer._new_commits == []
+
+    window.stop_translation()
+    assert window._buffer._new_commits == []
+
+
+def test_clearing_the_captions_keeps_them_in_the_transcript(
+    window, monkeypatch, tmp_path
+):
+    """Clearing the screen must not truncate the record mid-sentence."""
+    _running_window(window, monkeypatch, tmp_path)
+    path = window._writer.path
+    window._on_target_text("A finished sentence.")
+    window._on_target_text(" And half of another")
+    window._clear_captions()
+    text = path.read_text(encoding="utf-8")
+    assert "A finished sentence." in text
+    assert "And half of another" in text
+
+
 def test_silence_clear_setting_reaches_the_buffer(window):
     assert window._buffer.clear_after_seconds == 2.0
     window._update(clear_after_seconds=5.0)

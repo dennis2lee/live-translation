@@ -35,6 +35,12 @@ MAX_CLEAR_WAIT_SECONDS = 15.0
 # where a premature commit is what the reader actually sees.
 MIN_SENTENCE_CHARS = 20
 
+# How soon a byte-identical fragment counts as the API redelivering the same
+# one rather than the speaker genuinely repeating a word. Fragments arrive about
+# a second apart (spikes/RESULTS.md), so this sits far below any real repeat —
+# " the" twice in one sentence is ordinary English and must not be swallowed.
+DUPLICATE_WINDOW_SECONDS = 0.25
+
 _AUTO_SAMPLE_SIZE = 8
 _AUTO_UTTERANCE_CHARS = 25
 
@@ -59,11 +65,12 @@ class CaptionBuffer:
     A settled line does not go straight on screen. It joins a queue that is
     released one line at a time, so a burst of sentences is read out at a
     readable pace rather than scrolling past inside one repaint. Pacing never
-    accumulates: no more than `max_lines` lines are ever held back, so the
-    display trails the audio by at most `max_lines * line_hold_seconds`. A burst
-    longer than that loses its oldest line from the screen — the transcript
-    still gets every one of them, since `drain_new_commits` is independent of
-    what is displayed.
+    accumulates: once the display has caught up, no more than `max_lines` lines
+    are held back, so it trails the audio by at most
+    `max_lines * line_hold_seconds`. (Shrinking `max_lines` leaves the queue
+    briefly over that bound; the next `tick` drains it.) A burst longer than
+    that loses its oldest line from the screen — the transcript still gets every
+    one of them, since `drain_new_commits` is independent of what is displayed.
 
     Time is injected via `now` rather than read from a clock, which keeps the
     tests deterministic.
@@ -181,8 +188,10 @@ class CaptionBuffer:
         """Take one transcription fragment. True when the display should change."""
         if not text:
             return False
-        # Ordering is not guaranteed, so ignore an immediately repeated fragment.
-        if text == self._last_text:
+        # Ordering is not guaranteed, so ignore a fragment the API redelivered.
+        # Only within a short window: a second later the same text is the
+        # speaker repeating a word, and dropping it loses what they said.
+        if text == self._last_text and now - self._last_feed_at < DUPLICATE_WINDOW_SECONDS:
             return False
         self._last_text = text
         self._last_feed_at = now
@@ -319,6 +328,15 @@ class CaptionBuffer:
         self._last_text = None
 
     def clear(self) -> None:
+        """Wipe the display. What was already said still reaches the transcript.
+
+        Half-finished text is settled first rather than dropped: recording is
+        deliberately independent of what is on screen, and a sentence the
+        speaker finished saying should not vanish because the captions were
+        cleared underneath it. `_commit` files it under `_new_commits`, and
+        emptying the queue below keeps it off the screen.
+        """
+        self._commit()
         self._committed.clear()
         self._queue.clear()
         self._pending = ""

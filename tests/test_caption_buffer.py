@@ -1,3 +1,5 @@
+import pytest
+
 from livecap.caption_buffer import CaptionBuffer, Policy
 
 
@@ -22,10 +24,28 @@ def test_starts_empty_so_the_box_is_hidden():
 
 
 def test_duplicate_consecutive_fragments_are_ignored():
+    """A redelivery arrives at once — ordering is not guaranteed."""
     buf = inc()
     assert buf.feed("hello", 0.0) is True
     assert buf.feed("hello", 0.1) is False
     assert buf.pending_text == "hello"
+
+
+def test_a_word_genuinely_repeated_later_is_kept():
+    """Fragments arrive about a second apart, so the same text a second on is
+    the speaker repeating a word, not the API sending it twice. Swallowing it
+    loses what they actually said."""
+    buf = inc()
+    assert buf.feed(" the", 0.0) is True
+    assert buf.feed(" the", 1.0) is True
+    assert buf.pending_text == "the the"
+
+
+def test_the_duplicate_window_is_well_under_the_fragment_interval():
+    """Measured median inter-arrival is about 1000 ms (spikes/RESULTS.md)."""
+    from livecap.caption_buffer import DUPLICATE_WINDOW_SECONDS
+
+    assert DUPLICATE_WINDOW_SECONDS < 0.5
 
 
 def test_empty_fragment_is_ignored():
@@ -41,6 +61,26 @@ def test_clear_removes_everything():
     buf.clear()
     assert buf.is_empty
     assert buf.committed_lines == []
+
+
+def test_clearing_the_display_still_records_what_was_said():
+    """Recording is independent of the screen — see drain_new_commits. Half a
+    sentence must not vanish from the transcript because the captions were
+    cleared underneath it."""
+    buf = inc()
+    buf.feed("a finished sentence.", 0.0)
+    buf.feed(" and half of another", 1.0)
+    buf.clear()
+    assert buf.drain_new_commits() == [
+        "a finished sentence.",
+        "and half of another",
+    ]
+
+
+def test_clearing_an_empty_buffer_records_nothing():
+    buf = inc()
+    buf.clear()
+    assert buf.drain_new_commits() == []
 
 
 def test_display_lines_are_capped_and_keep_the_newest():
@@ -665,6 +705,74 @@ def test_the_mode_can_be_switched_at_runtime():
     assert buf.display_lines() == []
     buf.complete_phrases_only = False
     assert buf.display_lines() == [("Half a thought", False)]
+
+
+# --- invariants under a randomised session --------------------------------
+
+
+@pytest.mark.parametrize("complete_phrases", [False, True])
+def test_the_invariants_survive_a_long_randomised_session(complete_phrases):
+    """Fuzz every entry point together and check the invariants at each step.
+
+    The interesting bugs in this module have all come from two operations
+    meeting — a reconnect during a paced drain, a clear with text still pending,
+    max_lines shrinking with a queue. Driving them at random covers the
+    combinations no hand-written case thinks to try.
+    """
+    import random
+
+    fragments = [
+        " Good morning.", " Revenue", " is up", " fourteen percent.", " Dr.",
+        " Smith agrees.", " 영업이익률", " 입니다.", " the", " the", "",
+    ]
+    rng = random.Random(20260805)
+    buf = CaptionBuffer(
+        policy=Policy.INCREMENTAL,
+        clear_after_seconds=2.0,
+        max_lines=2,
+        complete_phrases_only=complete_phrases,
+    )
+    now = 0.0
+    for step in range(4000):
+        now += rng.choice([0.02, 0.1, 0.4, 1.0, 3.0])
+        roll = rng.random()
+        if roll < 0.55:
+            buf.feed(rng.choice(fragments), now)
+        elif roll < 0.60:
+            buf.note_turn_complete(now)
+        elif roll < 0.63:
+            buf.note_reconnect()
+        elif roll < 0.65:
+            buf.clear()
+        elif roll < 0.67:
+            buf.set_max_lines(rng.choice([1, 2, 3, 4]))
+        else:
+            buf.tick(now, speaking=rng.choice([True, False, None]))
+        buf.drain_new_commits()
+
+        assert len(buf.committed_lines) <= buf.max_lines, step
+        assert len(buf.display_lines()) <= buf.max_lines, step
+        assert not (buf.is_empty and buf.display_lines()), step
+        if complete_phrases:
+            assert all(settled for _t, settled in buf.display_lines()), step
+        # Shrinking max_lines leaves the queue briefly over the bound; the tick
+        # that always follows in the application is what brings it back.
+        buf.tick(now)
+        assert len(buf.queued_lines) <= buf.max_lines, step
+
+
+def test_nothing_accumulates_when_the_commits_are_never_drained():
+    """The caller may have no transcript open, but the buffer still has to be
+    bounded — it outlives a session."""
+    buf = inc()
+    for i in range(500):
+        buf.feed(f"Sentence {i} here.", i * 0.5)
+        buf.tick(i * 0.5)
+    assert len(buf.committed_lines) <= buf.max_lines
+    assert len(buf.queued_lines) <= buf.max_lines
+    # _new_commits is the one thing that legitimately grows until drained —
+    # which is exactly why the window drains it whether or not it records.
+    assert len(buf.drain_new_commits()) == 500
 
 
 # --- switching policy at runtime ------------------------------------------

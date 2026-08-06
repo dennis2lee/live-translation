@@ -684,7 +684,10 @@ class CaptionWindow(QMainWindow):
             except Exception:  # noqa: BLE001
                 _log.exception("error finishing the transcript")
         else:
+            # No transcript to write to, but the lines still have to be taken
+            # off the buffer — it outlives the session.
             self._buffer.flush()
+            self._buffer.drain_new_commits()
 
         self._state = State.IDLE
         self._error_detail = ""
@@ -695,6 +698,9 @@ class CaptionWindow(QMainWindow):
 
     def _clear_captions(self) -> None:
         self._buffer.clear()
+        # clear() settles whatever was half-written; hand it to the transcript
+        # now rather than leaving it for the next tick to find.
+        self._record_new_lines()
         self._view.clear()
         self._refresh_overlay()
 
@@ -709,11 +715,17 @@ class CaptionWindow(QMainWindow):
         self._record_new_lines()
 
     def _record_new_lines(self) -> None:
-        """Feed settled lines to the transcript, independent of what is displayed."""
+        """Feed settled lines to the transcript, independent of what is displayed.
+
+        Drained even with no transcript open. The buffer holds settled lines
+        until somebody takes them, and it outlives a session, so returning early
+        here would let them pile up for as long as the application runs.
+        """
+        lines = self._buffer.drain_new_commits()
         if self._writer is None:
-            return
+            return  # taken and discarded, so nothing accumulates
         elapsed = time.monotonic() - self._started_at
-        for line in self._buffer.drain_new_commits():
+        for line in lines:
             self._writer.append_line(line, elapsed)
 
     def _on_reconnected(self) -> None:
