@@ -6,6 +6,7 @@
 /r1_resample
 /livecap
 
-# The assembled bundle, and the icon copied in from ../packaging.
+# The assembled bundle and the Windows artefacts, and the icon copied in
+# from ../packaging.
 /dist/
 /packaging/AppIcon.icns

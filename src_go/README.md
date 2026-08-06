@@ -1,4 +1,9 @@
-# LiveCap — Go
+# LiveCapGo
+
+The Go port of LiveCap. It is called **LiveCapGo** while the Python build is
+still the one that ships: both install as an application with the same name and
+the same caption window, and they were mistaken for each other more than once
+during the port. The name goes back to LiveCap at the cutover.
 
 Real-time speech translation captions. Korean → English by default, English →
 Korean on demand. The engine is the Google Gemini Live API,
@@ -11,12 +16,17 @@ actually measured on this machine is in [spikes/RESULTS.md](spikes/RESULTS.md).
 ## Running it
 
 ```bash
-./run.sh                 # run from source
-go test ./...            # tests
-go test -race ./...      # the same, with the race detector
+./run.sh                     # run from source
+go test ./...                # tests
+go test -race ./...          # the same, with the race detector
 go vet ./... && gofmt -l .
-./packaging/build_app.sh # assemble dist/LiveCap.app
+./packaging/build_app.sh     # assemble dist/LiveCapGo.app
+./packaging/build_windows.sh # cross-build the .exe and the .msi
 ```
+
+The Windows build is produced from macOS and needs
+`brew install mingw-w64 msitools`. It cross-builds and the MSI is structurally
+correct, but nothing here can run it — see `spikes/RESULTS.md`.
 
 `--selftest` checks everything the application needs — settings path, key,
 resampler, capture devices, reachability of the API — and exits:
@@ -62,9 +72,10 @@ spikes/               the G0 measurements, kept runnable
 ## Requirements
 
 - Go 1.26+, macOS 12+.
-- `libsoxr` from Homebrew (`brew install libsoxr`). The build script copies it
-  into the bundle and repoints the binary at the copy, so an installed
-  application does not need Homebrew.
+- `libsoxr` from Homebrew (`brew install libsoxr`), for the macOS build only.
+  The build script copies it into the bundle and repoints the binary at the
+  copy, so an installed application does not need Homebrew. The Windows build
+  uses the pure-Go filter and needs nothing.
 - A Gemini API key, entered in Preferences. It is never written to the settings
   file and never logged.
 

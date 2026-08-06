@@ -12,7 +12,7 @@ Stack under test: Fyne v2.8.0, malgo v0.11.25 (miniaudio), libsoxr 0.1.3
 | F1 Korean text | **pass** — renders with no font work at all |
 | F2 menus, keys, full screen | **pass**, with three defects to design around |
 | A1 malgo capture | **pass on mechanics**, level and X3 blocked (see below) |
-| R1 resampler | **decided: libsoxr**, pure-Go fallback measured and viable |
+| R1 resampler | **libsoxr on macOS, pure-Go elsewhere** — see the correction below |
 | L1 live smoke | **pass** — real KO→EN fragments through the Go SDK |
 
 ---
@@ -340,3 +340,55 @@ launches, stays up across a rebuild-and-relaunch cycle, and its own
   ok    audio input              4 device(s)
   ok    live api reachable       generativelanguage.googleapis.com, 18 ms median
 ```
+
+
+---
+
+## R1 revisited, and the Windows build (2026-08-06)
+
+Building for Windows forced the resampler question open again, and the answer
+changed.
+
+**The pure-Go filter was never 17.8 dB down at 7.6 kHz. The rolloff constant
+was.** R1 measured it at `firRolloff = 0.92`, which is where the transition band
+starts. Raising it to 0.97 — the same place libsoxr puts it — gives, measured by
+`TestFrequencyResponseOfEveryImplementation` against both filters in the same
+run:
+
+| 48 kHz → 16 kHz | libsoxr HQ | pure-Go Kaiser sinc |
+|---|---|---|
+| 200 Hz – 7 kHz | flat within 0.5 dB | flat within 0.5 dB |
+| **7.6 kHz** | **−2.88 dB** | **−2.40 dB** |
+| 9 / 12 / 20 kHz folding back | below −60 dB | below −60 dB |
+
+The pure-Go filter is now *slightly ahead* in the fricative band. R1's
+conclusion — "libsoxr, because the pure-Go filter loses the fricatives" — rested
+on a constant, not on the method, and R1 said so at the time without following
+it up.
+
+**So the two ship side by side**, chosen by build tag: libsoxr on macOS, because
+it keeps the numeric path identical to the Python build for the parity gate; the
+pure-Go filter everywhere else, because it makes the Windows application a
+single file.
+
+### The Windows artefacts
+
+`./packaging/build_windows.sh`, run from macOS with `mingw-w64` and `msitools`:
+
+- **`LiveCapGo.exe`, 30 MB**, PE32+ GUI, built with `CGO_ENABLED=1
+  GOOS=windows CC=x86_64-w64-mingw32-gcc`. Every one of Fyne's GLFW, miniaudio
+  and the genai SDK cross-compiled without a change.
+- **Imports Windows system DLLs only** — kernel32, user32, gdi32, shell32,
+  opengl32 and the UCRT. No libgcc, no libwinpthread, no libsoxr. The build
+  script fails if that ever stops being true, because the first machine missing
+  a stray DLL would fail at launch with a dialog naming the DLL rather than the
+  application.
+- **`LiveCapGo-1.0.0-x64.msi`, 14 MB**, built with `wixl`. Verified with
+  `msiinfo`: correct ProductName, ProductVersion, Manufacturer and UpgradeCode,
+  a Start-menu and a desktop shortcut, and one payload file.
+
+**None of it has been run.** There is no Windows machine here. "It cross-builds,
+it imports nothing unusual, and the MSI is structurally correct" is the
+strongest claim available; the build script prints the five things to check on
+real hardware, starting with the one that chose the toolkit — whether full
+screen covers the taskbar.

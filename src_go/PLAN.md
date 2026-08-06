@@ -109,7 +109,7 @@ see `src_go/spikes/RESULTS.md`.
 | Live API | `google-genai` | `google.golang.org/genai` v1.67.0, pinned | Raw WebSocket (escape hatch only) |
 | GUI | PyQt6 | **Fyne v2** (decided — see §3.1) | DarwinKit (rejected: macOS-only, and Windows full-screen is a requirement), Gio (last resort: no menu system) |
 | Audio capture | sounddevice/PortAudio | **`github.com/gen2brain/malgo`** (miniaudio; cgo but vendors its own C — no external install) | `gordonklaus/portaudio` (needs brew portaudio + dylib bundling) |
-| Resampling | soxr | **libsoxr via cgo** (decided by R1 — `spikes/RESULTS.md`) | Pure-Go windowed-sinc FIR — **measured and viable** (−91 dB stopband, 0.6% realtime), kept as the fallback if dylib bundling turns painful |
+| Resampling | soxr | **libsoxr via cgo on macOS, pure-Go windowed sinc elsewhere**, chosen by build tag. Both measured in one test run; with the rolloff corrected the pure-Go filter matches libsoxr (`spikes/RESULTS.md`) | Shipping a cross-built libsoxr DLL on Windows — rejected, it would turn a one-file installer into two |
 | Keychain | `keyring` | `github.com/zalando/go-keyring` (shells to `/usr/bin/security`, no cgo) | `keybase/go-keychain` (cgo) |
 | Encrypted store | `cryptography` Fernet | `github.com/fernet/fernet-go` + `golang.org/x/crypto/pbkdf2` — **must decrypt the existing file** | — |
 | Settings | QSettings plist | JSON at `~/Library/Application Support/LiveCap/settings.json`, one-time import from the plist | Writing the plist (rejected: ties us to CFPreferences quirks) |

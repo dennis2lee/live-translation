@@ -26,7 +26,7 @@ type Capture struct {
 
 	mu         sync.Mutex
 	device     *malgo.Device
-	resampler  *resample.Stream
+	resampler  resample.Stream
 	channels   int
 	nativeRate int
 	running    bool
@@ -116,7 +116,7 @@ func (c *Capture) Start() (InputDevice, error) {
 
 	// The streaming resampler carries filter state across chunk boundaries.
 	// A one-shot resample per chunk clicks at every seam.
-	resampler, err := resample.NewStream(float64(c.nativeRate), TargetRate, resample.QualityHigh)
+	resampler, err := resample.NewStream(float64(c.nativeRate), TargetRate)
 	if err != nil {
 		return InputDevice{}, err
 	}

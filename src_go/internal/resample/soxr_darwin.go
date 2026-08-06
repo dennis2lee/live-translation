@@ -1,13 +1,13 @@
-// Package resample converts audio between sample rates with libsoxr.
+//go:build darwin
+
+// libsoxr, used on macOS. Chosen over the pure-Go filter by spike R1
+// (src_go/spikes/RESULTS.md), and it keeps the numeric path identical to the
+// Python build, so transcripts from the two can be compared at the parity gate
+// without the resampler as a variable.
 //
-// Chosen over a pure-Go filter by spike R1 (src_go/spikes/RESULTS.md): flat to
-// 7 kHz where the pure-Go filter is already rolling off, −87 dB stopband, and a
-// twentieth of the cost. It also keeps the numeric path identical to the Python
-// build, so transcripts from the two implementations can be compared at the
-// parity gate without the resampler as a variable.
-//
-// The streaming API is what matters here. Calling a one-shot resample per chunk
-// clicks at every seam, because the filter state does not carry across.
+// Windows and Linux use the pure-Go filter in fir.go instead: cross-building
+// and shipping a libsoxr DLL would cost more than the difference is worth, and
+// a single self-contained executable is a far better installer.
 package resample
 
 /*
@@ -29,51 +29,41 @@ import (
 	"unsafe"
 )
 
-// Quality recipes, from soxr.h. HQ is what python-soxr uses by default and what
-// the Python build runs with.
-const (
-	QualityQuick = uint32(C.SOXR_QQ)
-	QualityLow   = uint32(C.SOXR_LQ)
-	QualityMed   = uint32(C.SOXR_MQ)
-	QualityHigh  = uint32(C.SOXR_HQ)
-	QualityVery  = uint32(C.SOXR_VHQ)
-)
+func init() {
+	newNativeStream = newSoxrStream
+	nativeName = "libsoxr " + C.GoString(C.soxr_version())
+}
 
-// Version is the libsoxr build in use.
-func Version() string { return C.GoString(C.soxr_version()) }
+// soxrQuality is the recipe used. SOXR_HQ is what python-soxr defaults to and
+// what the Python build runs with.
+const soxrQuality = C.SOXR_HQ
 
-// Stream converts mono float32 blocks from one rate to another, keeping the
+// soxrStream converts mono float32 blocks from one rate to another, keeping the
 // filter state across calls so block boundaries are seamless.
-//
-// A Stream is used from the audio callback goroutine only.
-type Stream struct {
+type soxrStream struct {
 	handle C.soxr_t
 	ratio  float64
 	out    []float32 // reused across calls; the callback must not allocate
 }
 
-// NewStream opens a mono float32 converter.
-func NewStream(inRate, outRate float64, quality uint32) (*Stream, error) {
-	if inRate <= 0 || outRate <= 0 {
-		return nil, fmt.Errorf("resample: bad rates %v -> %v", inRate, outRate)
-	}
+func newSoxrStream(inRate, outRate float64) (Stream, error) {
 	var cerr C.soxr_error_t
 	ioSpec := C.soxr_io_spec(C.SOXR_FLOAT32_I, C.SOXR_FLOAT32_I)
-	qSpec := C.soxr_quality_spec(C.ulong(quality), 0)
+	qSpec := C.soxr_quality_spec(C.ulong(soxrQuality), 0)
 
 	h := C.soxr_create(C.double(inRate), C.double(outRate), 1, &cerr, &ioSpec, &qSpec, nil)
 	if cerr != nil {
 		return nil, errors.New(C.GoString(cerr))
 	}
-	return &Stream{handle: h, ratio: outRate / inRate}, nil
+	return &soxrStream{handle: h, ratio: outRate / inRate}, nil
 }
 
 // Process converts one block. The returned slice is only valid until the next
 // call — the caller copies what it needs, which the capture path does when it
 // converts to PCM16.
-func (s *Stream) Process(in []float32) ([]float32, error) {
+func (s *soxrStream) Process(in []float32) ([]float32, error) {
 	if s.handle == nil {
-		return nil, errors.New("resample: stream is closed")
+		return nil, errClosed
 	}
 	// Headroom for the ratio plus the filter's own delay.
 	want := int(float64(len(in))*s.ratio) + 64
@@ -102,9 +92,9 @@ func (s *Stream) Process(in []float32) ([]float32, error) {
 }
 
 // Drain flushes the filter's remaining delay — the last=True call.
-func (s *Stream) Drain() ([]float32, error) {
+func (s *soxrStream) Drain() ([]float32, error) {
 	if s.handle == nil {
-		return nil, errors.New("resample: stream is closed")
+		return nil, errClosed
 	}
 	out := make([]float32, 4096)
 	var odone C.size_t
@@ -117,7 +107,7 @@ func (s *Stream) Drain() ([]float32, error) {
 }
 
 // Close releases the converter. Safe to call twice.
-func (s *Stream) Close() {
+func (s *soxrStream) Close() {
 	if s.handle != nil {
 		C.soxr_delete(s.handle)
 		s.handle = nil

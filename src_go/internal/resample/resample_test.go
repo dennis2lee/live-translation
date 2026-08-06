@@ -31,17 +31,30 @@ func power(x []float32, freq, rate float64) float64 {
 	return 2 * (re*re + im*im) / (n * n)
 }
 
+// implementations returns every filter compiled into this build, so the same
+// checks run against both on macOS and against the pure-Go one everywhere else.
+func implementations() map[string]func(in, out float64) (Stream, error) {
+	out := map[string]func(in, out float64) (Stream, error){
+		"pure-Go": func(in, o float64) (Stream, error) { return newFIRStream(in, o), nil },
+	}
+	if newNativeStream != nil {
+		out["native"] = newNativeStream
+	}
+	return out
+}
+
 func TestVersionIsReported(t *testing.T) {
 	if Version() == "" {
-		t.Error("no libsoxr version — is the library linked?")
+		t.Error("no filter name reported")
 	}
+	t.Logf("resampler in use: %s", Version())
 }
 
 func TestRatesAreValidated(t *testing.T) {
-	if _, err := NewStream(0, 16000, QualityHigh); err == nil {
+	if _, err := NewStream(0, 16000); err == nil {
 		t.Error("a zero input rate was accepted")
 	}
-	if _, err := NewStream(48000, -1, QualityHigh); err == nil {
+	if _, err := NewStream(48000, -1); err == nil {
 		t.Error("a negative output rate was accepted")
 	}
 }
@@ -49,7 +62,7 @@ func TestRatesAreValidated(t *testing.T) {
 // The whole point of the streaming API: a 48 kHz block comes out at 16 kHz with
 // its content intact.
 func TestResamplesATone(t *testing.T) {
-	s, err := NewStream(48000, 16000, QualityHigh)
+	s, err := NewStream(48000, 16000)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -86,7 +99,7 @@ func TestResamplesATone(t *testing.T) {
 // Content above the 8 kHz Nyquist must be filtered out, not folded back into
 // the band as an audible alias.
 func TestRejectsContentAboveNyquist(t *testing.T) {
-	s, err := NewStream(48000, 16000, QualityHigh)
+	s, err := NewStream(48000, 16000)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -112,12 +125,12 @@ func TestRejectsContentAboveNyquist(t *testing.T) {
 
 // Block boundaries must be seamless — that is why the filter state is kept.
 func TestBlockBoundariesAreSeamless(t *testing.T) {
-	whole, err := NewStream(48000, 16000, QualityHigh)
+	whole, err := NewStream(48000, 16000)
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer whole.Close()
-	split, err := NewStream(48000, 16000, QualityHigh)
+	split, err := NewStream(48000, 16000)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -154,7 +167,7 @@ func TestBlockBoundariesAreSeamless(t *testing.T) {
 // The returned slice is reused, so the caller must copy. This pins the
 // contract rather than leaving it to a comment.
 func TestOutputBufferIsReused(t *testing.T) {
-	s, err := NewStream(48000, 16000, QualityHigh)
+	s, err := NewStream(48000, 16000)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -177,7 +190,7 @@ func TestOutputBufferIsReused(t *testing.T) {
 }
 
 func TestUseAfterCloseIsAnError(t *testing.T) {
-	s, err := NewStream(48000, 16000, QualityHigh)
+	s, err := NewStream(48000, 16000)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -188,5 +201,76 @@ func TestUseAfterCloseIsAnError(t *testing.T) {
 	}
 	if _, err := s.Drain(); err == nil {
 		t.Error("Drain after Close was accepted")
+	}
+}
+
+// The response of every filter in this build, so the Windows one is measured
+// rather than assumed. Spike R1 found the pure-Go filter 17.8 dB down at
+// 7.6 kHz with a 0.92 rolloff; this is what pins the corrected constant.
+func TestFrequencyResponseOfEveryImplementation(t *testing.T) {
+	const fullScale = 0.125 // a 0.5-amplitude sine
+
+	for name, open := range implementations() {
+		t.Run(name, func(t *testing.T) {
+			measure := func(freq float64) float64 {
+				s, err := open(48000, 16000)
+				if err != nil {
+					t.Fatal(err)
+				}
+				defer s.Close()
+				var out []float32
+				src := tone(freq, 48000, 4800*20)
+				for i := 0; i+4800 <= len(src); i += 4800 {
+					got, err := s.Process(src[i : i+4800])
+					if err != nil {
+						t.Fatal(err)
+					}
+					out = append(out, got...)
+				}
+				if len(out) < 3000 {
+					t.Fatalf("only %d samples came out", len(out))
+				}
+				return power(out[2000:], freq, 16000)
+			}
+
+			// Passband: flat through the speech band.
+			for _, freq := range []float64{200, 1000, 3000, 6000, 7000} {
+				db := 10 * math.Log10(measure(freq)/fullScale)
+				if math.Abs(db) > 0.5 {
+					t.Errorf("%.0f Hz came through at %+.2f dB, want flat", freq, db)
+				}
+			}
+
+			// 7.6 kHz is the fricative band — the difference between "s" and
+			// "sh" for the recogniser, and what a lazy rolloff throws away.
+			db := 10 * math.Log10(measure(7600)/fullScale)
+			t.Logf("7.6 kHz: %+.2f dB", db)
+			if db < -4 {
+				t.Errorf("7.6 kHz is %.1f dB down — the fricative band is being lost", db)
+			}
+
+			// Stopband: nothing above the 8 kHz Nyquist may fold back.
+			for _, freq := range []float64{9000, 12000, 20000} {
+				s, err := open(48000, 16000)
+				if err != nil {
+					t.Fatal(err)
+				}
+				var out []float32
+				src := tone(freq, 48000, 4800*20)
+				for i := 0; i+4800 <= len(src); i += 4800 {
+					got, _ := s.Process(src[i : i+4800])
+					out = append(out, got...)
+				}
+				s.Close()
+				var total float64
+				for _, v := range out[2000:] {
+					total += float64(v) * float64(v)
+				}
+				total /= float64(len(out) - 2000)
+				if db := 10 * math.Log10(total/fullScale); db > -60 {
+					t.Errorf("a %.0f Hz tone folded back at %.1f dB", freq, db)
+				}
+			}
+		})
 	}
 }
