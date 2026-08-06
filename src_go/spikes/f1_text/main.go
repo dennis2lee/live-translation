@@ -20,6 +20,7 @@ import (
 	"fyne.io/fyne/v2/canvas"
 	"fyne.io/fyne/v2/container"
 	"fyne.io/fyne/v2/test"
+	"fyne.io/fyne/v2/widget"
 )
 
 // The line that has to work: Korean, Latin, a number and a full stop, all on
@@ -30,6 +31,18 @@ const (
 	sampleEN    = "Revenue is up fourteen percent."
 	captionSize = 44
 )
+
+// The symbols the UI actually uses. F2 caught widget.Label rendering U+2192
+// as an arrow followed by a replacement glyph; this row establishes whether
+// canvas.Text — which paints the captions — has the same fault.
+var symbols = []struct {
+	label string
+	text  string
+}{
+	{"U+2192 arrow (direction labels)", "KO → EN    EN → KO"},
+	{"U+2192 with no spaces", "KO→EN"},
+	{"other punctuation in use", "· … — ⏎ ✓ ⚠"},
+}
 
 // Candidate faces, in the order the plan prefers them.
 var faces = []struct {
@@ -82,6 +95,18 @@ func main() {
 			line(sampleMixed, src),
 			line(sampleEN, src),
 		)
+	}
+
+	// Symbols, at caption size and at label size, through canvas.Text.
+	for _, s := range symbols {
+		big := line(s.text, nil)
+		small := line(s.text, nil)
+		small.TextSize = 16
+		rows = append(rows, label("canvas.Text — "+s.label), big, small)
+	}
+	// The same strings through widget.Label, which is what F2 saw break.
+	for _, s := range symbols {
+		rows = append(rows, label("widget.Label — "+s.label), widget.NewLabel(s.text))
 	}
 
 	content := container.NewStack(

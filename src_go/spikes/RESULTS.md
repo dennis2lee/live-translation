@@ -10,7 +10,7 @@ Stack under test: Fyne v2.8.0, malgo v0.11.25 (miniaudio), libsoxr 0.1.3
 | Spike | Verdict |
 |---|---|
 | F1 Korean text | **pass** — renders with no font work at all |
-| F2 menus, keys, full screen | **needs a human** — the macOS menu bar is outside the window |
+| F2 menus, keys, full screen | **pass**, with three defects to design around |
 | A1 malgo capture | **pass on mechanics**, level and X3 blocked (see below) |
 | R1 resampler | **decided: libsoxr**, pure-Go fallback measured and viable |
 | L1 live smoke | **pass** — real KO→EN fragments through the Go SDK |
@@ -48,17 +48,64 @@ Noto Sans KR is no longer a fix for a defect — it stays on the list only as a
 
 ## F2 — menu bar, digit keys, full screen
 
-Not automatable: the macOS menu bar is painted outside the window, so no
-screenshot the program can take would contain it.
+The program cannot screenshot the macOS menu bar, because it is painted outside
+the window. Driving the desktop from outside the app can, so this was checked by
+launching the spike and reading the screen.
+
+**One thing had to be fixed before the spike meant anything**: a bare Go binary
+is not an application to macOS, and the app menu takes its name from
+`CFBundleName`. Run unbundled, the check "does the app menu say LiveCap" cannot
+be answered at all — which is exactly the bug the Python build had, where the
+menu said "Python". The spike therefore runs from a minimal `.app` (the
+`packaging/` work of G6, in miniature).
 
 ```bash
-cd src_go && go run ./spikes/f2_menus
+cd src_go && go run ./spikes/f2_menus     # unbundled: everything but the app-menu name
 ```
 
-The window lists what to check. The six items are the app menu's identity and
-contents, four menus, a check mark that toggles from both the menu and the `9`
-key, bare digits arriving with no modifier, `F` for full screen, and the Korean
-caption through the **OpenGL** painter rather than the software one F1 used.
+**Passes:**
+
+- **App menu takes the bundle name**, with About and Quit — no "Python"-style
+  wrong name.
+- **Custom menus work**: File, Translate, Captions, Help, each opening with the
+  right items and separators.
+- **Checkable items work at runtime.** Choosing "Complete phrases only (9)" put
+  a tick next to it and flipped the state; `MainMenu.Refresh()` is what makes
+  the tick appear.
+- **Bare digits arrive with no modifier.** `0 1 2 9` all registered through
+  `Canvas().SetOnTypedRune`, and each drove its action — translating on,
+  direction to EN → KO, complete-phrases off.
+- **Full screen is real full screen.** `SetFullScreen(true)` removed the title
+  bar, the menu bar *and* the Dock, and the window covered the whole display.
+  This is the macOS half of the requirement that settled the toolkit choice;
+  the Windows taskbar half still cannot be tested from here.
+- **Korean renders through the OpenGL painter**, not just the software one F1
+  measured — confirmed on two different strings at 44 px.
+
+**Three defects, none fatal, all needing a decision in G4:**
+
+1. **U+2192 breaks when it has spaces around it.** `"KO → EN"` renders as an
+   arrow followed by U+FFFD, the replacement glyph. `"KO→EN"` renders
+   perfectly. It is **not** a widget problem — `canvas.Text` and `widget.Label`
+   fail identically, so it is Fyne's shaping, and the trigger is the space
+   adjacent to a glyph that came from a fallback face. The Python UI uses
+   `"→"` with spaces throughout (`config.DIRECTION_LABEL`), so the port must
+   either drop the spaces or use a different separator. `·` `…` `—` `✓` all
+   render correctly; `⚠` comes out as a colour emoji.
+2. **No Preferences item in the app menu.** Fyne 2.8 builds the app menu itself
+   — About, Services, Hide, Show All, Quit — and offers no hook to add the
+   conventional Preferences (⌘,) slot. The Python build has one. Options for
+   G4: put Preferences in a regular menu, or reach into the native menu after
+   Fyne has built it.
+3. **Escape did not leave full screen.** With `SetOnTypedRune` and
+   `SetOnTypedKey` both set, the rune handler fired for every key tested but
+   `KeyEscape` never reached the key handler while full screen. `F` toggled
+   both ways, so the window itself is fine. Needs pinning down in G4 — the
+   Python app leaves full screen on Escape.
+
+Fyne also inserts a **Window** menu of its own between the last custom menu and
+Help. Cosmetic, but it means the menu bar will never be exactly the Python
+app's.
 
 ## A1 — malgo capture
 
@@ -185,5 +232,8 @@ keep reading until either a transcription or a hang-up.
   surface is now proven working, not just proven present.
 - §3 "Resampling" — **decided: libsoxr**; the pure-Go row moves from
   "spike compares" to "measured fallback".
-- §10 G0 — F1, R1, L1 done; F2 awaits a look; A1 awaits the X3 and a process
-  with microphone permission.
+- §10 G0 — F1, F2, R1, L1 done; A1 awaits the X3 and a process with microphone
+  permission.
+- §6.9 UI — three F2 defects to design around: no spaces around `→`, no
+  Preferences slot in the app menu, and Escape not reaching the key handler in
+  full screen.

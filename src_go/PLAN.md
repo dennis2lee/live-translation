@@ -615,6 +615,21 @@ assertions`, same as before.
 
 The layer with the least mechanical port and the most judgment. Structure:
 
+**Three things F2 measured that this layer has to work around** — details and
+evidence in `src_go/spikes/RESULTS.md`:
+
+- **Never put spaces around `→`.** Fyne 2.8 renders `"KO → EN"` as an arrow
+  followed by U+FFFD; `"KO→EN"` is perfect. It is a shaping fault, not a widget
+  one — `canvas.Text` and `widget.Label` fail identically — so it reaches the
+  captions as well as the labels. `DIRECTION_LABEL` and the hint text must drop
+  the spaces or change separator. `·` `…` `—` `✓` are safe.
+- **The app menu has no Preferences slot.** Fyne builds About/Services/Hide/
+  Show All/Quit itself and offers no hook. Preferences goes in a regular menu
+  unless a native reach-in proves cheap.
+- **Escape did not leave full screen** in the spike, though the rune handler
+  fired for every other key. Pin this down before the caption window relies on
+  it; `F`-style rune toggling works either way.
+
 - **`captionview.go`** — a custom Fyne widget owning exactly the state the
   Python `CaptionView` owns: lines `[]Line`, status, box alpha, hint
   text/alpha, dot state/alpha. Rendered with `canvas.Rectangle` (corner
@@ -746,9 +761,13 @@ in `src_go/spikes/RESULTS.md`.
 - ~~**F1 Fyne text**~~ — **done, pass.** Fyne 2.8 renders Hangul with its own
   bundled theme font, no font work at all. Embedding Noto Sans KR is now a
   deliberate choice for cross-platform determinism (G4), not a fix.
-- **F2 Fyne menus** — **awaiting a look.** `go run ./spikes/f2_menus` builds and
-  lists the six things to check; the macOS menu bar is painted outside the
-  window, so no screenshot the program takes can contain it.
+- ~~**F2 Fyne menus**~~ — **done, pass.** Native menu bar, custom menus,
+  a check mark toggled at runtime, bare digits `0 1 2 9`, and full screen that
+  removes the title bar, the menu bar *and* the Dock. Three defects to design
+  around in G4: `→` needs no spaces around it, the app menu has no Preferences
+  slot, and Escape did not reach the key handler in full screen. Checked from a
+  minimal `.app` — a bare Go binary has no `CFBundleName`, so the app-menu name
+  cannot be judged without one.
 - **A1 malgo capture** — **mechanics pass** (native 48 kHz honoured, 99.6% of
   nominal, callbacks exactly 100 ms). Outstanding: the X3 at 96 kHz/2ch, which
   was not connected, and the peak level, which reads −Inf because the
