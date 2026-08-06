@@ -2,7 +2,14 @@
 
 A feature-equivalent rewrite of LiveCap in Go, living in `src_go/`, leaving the
 Python implementation in `src/` untouched and shipping until the port passes
-the parity gate (§12). This document is the plan only; no port code exists yet.
+the parity gate (§12).
+
+**Status, 2026-08-06.** This started as a plan and is now also a record. G0 to
+G6 are written and green — `go vet`, `gofmt` and `go test -race ./...` all pass,
+and `dist/LiveCap.app` runs its own `--selftest`. Where the code and this
+document disagree, the code won and the paragraph was corrected; the reasoning
+is kept so the choices can be argued with. What remains is measurement, not
+construction: see §10 and the parity gate in §12.
 
 Facts marked **[verified]** were checked on this machine on 2026-08-05, not
 assumed. Everything else that could gate a decision is assigned to a spike in
