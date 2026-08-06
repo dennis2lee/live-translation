@@ -439,3 +439,26 @@ scorer** grades the Go build — no ported scorer to drift:
 
 The first run predates the source capture, so its counters stand but its
 sentence-loss question is unanswered; the rerun below answers it.
+
+### Rerun with source capture: the sentence-loss question answered
+
+Same shape as the first run — 3 reconnects at the 9-minute marks, gaps
+**367 / 439 / 453 ms**, backlog flat at 300 ms, 18 000 chunks, 1 578 fragments,
+488 transcript lines — plus 1 777 Korean source fragments collected.
+
+Scored by the Python build's own scorer, unmodified:
+
+```
+script comparison: 360 sentences
+similarity worst 0.78 / mean 0.96
+✅ no sentence lost (all above 0.5)
+```
+
+**360/360, worst 0.78, mean 0.96 — the same numbers the Python build's
+30-minute run recorded**, to the second decimal place. Same fixture, same
+scorer, same model; the port sits exactly on the bar the Python build set.
+The G3 endurance line of the parity gate is closed.
+
+The thinner English around the swaps in the first run is thereby explained:
+nothing was lost from the audio or the recognition — the model simply phrases
+each pass differently, and the English is the wrong place to measure.

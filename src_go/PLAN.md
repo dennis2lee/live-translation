@@ -875,7 +875,12 @@ Ticked lines were checked on 2026-08-05/06 and are recorded in
 - [x] Preferences opens with all six tabs and the three buttons.
 - [ ] Live: EN→KO as well as KO→EN, and a direction switch mid-session that
       keeps the audio and the transcript (same file, switch noted).
-- [ ] 30-minute endurance: ≥ 3 seamless reconnects, no lost sentences.
+- [x] 30-minute endurance: 3 reconnects at the 9-minute marks, gaps
+      367–471 ms across two runs, backlog flat at 300 ms — and sentence loss
+      scored by the Python build's own scorer on the collected Korean source
+      transcription: **360/360, worst 0.78, mean 0.96**, the same numbers the
+      Python run recorded. Headless by decision; the microphone path was
+      proved separately on 2026-08-06.
 - [ ] Keys `0` `1` `2` `9` and every menu item behave identically.
 - [ ] Complete-phrases mode: nothing unsettled ever drawn; turn-complete,
       sentence-end (with 20-char guard), idle settle all observed live.
