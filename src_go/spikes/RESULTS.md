@@ -237,3 +237,28 @@ keep reading until either a transcription or a hang-up.
 - §6.9 UI — three F2 defects to design around: no spaces around `→`, no
   Preferences slot in the app menu, and Escape not reaching the key handler in
   full screen.
+
+---
+
+## G6 — the bundle, and one crash worth recording
+
+`packaging/build_app.sh` assembles `dist/LiveCap.app`: **28 MB**, against the
+Python build's 110.
+
+**The first bundle was killed on launch**, with
+`SIGKILL (Code Signature Invalid)` raised by dyld while loading a dependent
+library. The cause is worth keeping: `install_name_tool` rewrites the copied
+`libsoxr.0.dylib` to fix its rpath, and that invalidates whatever signature the
+library arrived with. On Apple silicon dyld does not report an invalidly-signed
+library — it kills the process. Signing the bundle alone does not help, because
+that does not reach a nested dylib; the library has to be signed first and by
+name. With that in place the bundle passes `codesign --verify --deep --strict`,
+launches, stays up across a rebuild-and-relaunch cycle, and its own
+`--selftest` passes from inside the bundle:
+
+```
+  ok    api key                  from encrypted store
+  ok    resampler                libsoxr libsoxr-0.1.3
+  ok    audio input              4 device(s)
+  ok    live api reachable       generativelanguage.googleapis.com, 18 ms median
+```
