@@ -679,6 +679,40 @@ replacement.** `f` now toggles full screen from the keyboard. Escape stays
 wired but is not relied on: spike F2 measured it not arriving in full screen.
 Never hide the menu without leaving a key that brings it back.
 
+## The caption buffer, re-verified against the Python reference (2026-08-06)
+
+Asked to re-check the translation-caption buffering, and the port's strongest
+available check is the one the project was set up for: `src/` is an executable
+specification, so drive both implementations with identical inputs and demand
+byte equality. `spikes/bufdiff` does that — a seeded generator produces op
+scripts (feeds with duplicates, Korean, abbreviations, missing leading spaces
+and long utterances; ticks at deltas that straddle every timing window;
+turn_complete, reconnect, clear, flush; live changes to max_lines,
+complete-phrases and the policy), and the full observable state — display
+lines with settled flags, pending, queue, committed, drained commits — is
+compared after every single op.
+
+**100 seeds × 800 ops plus 50 × 400 (160,000 ops): byte-identical.**
+
+A line-by-line review alongside it found only representational differences,
+each already correct: character counts are runes rather than bytes
+(`MinSentenceChars`, the auto-policy sample), the prefix slice in `commit`
+uses byte indexing against a byte-verified prefix, and `deque(maxlen=…)`
+becomes an explicit tail slice in `drain` and `SetMaxLines`.
+
+The harness itself tripped over one real difference on its first run:
+`captions.Options` treats a zero `ClearAfterSeconds` as *disabled*, while the
+Python dataclass defaults it to 2.0. The application always passes the
+configured value, so this cannot bite in production — but any future test or
+tool that builds a bare `Options{}` silently gets a buffer that never clears.
+Recorded in `spikes/bufdiff/README.md`.
+
+The integration invariants were re-checked at the same time: every
+`DrainNewCommits` call site drains before deciding what to do with the lines
+(`recordNewLines` discards when there is no writer; shutdown flushes and
+drains before closing the transcript), so the one unbounded structure cannot
+grow while the app idles.
+
 ## The Preferences level meter
 
 Reported as "audio input level testing does not work". It did not, for three

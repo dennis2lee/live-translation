@@ -10,3 +10,4 @@
 # from ../packaging.
 /dist/
 /packaging/AppIcon.icns
+/bufdiff
