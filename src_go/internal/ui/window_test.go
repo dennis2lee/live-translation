@@ -254,3 +254,32 @@ func TestWindowContentReachesTheEdge(t *testing.T) {
 		}
 	}
 }
+
+// Every full-screen entry point funnels through applyFullScreen, and the
+// setting and the window state must move together whichever way it is reached.
+func TestFullScreenFunnel(t *testing.T) {
+	w := newTestWindow(t)
+
+	w.setFullScreen(true) // the f key
+	if !w.settings.Fullscreen || !w.win.FullScreen() {
+		t.Fatalf("after the key: setting=%v window=%v",
+			w.settings.Fullscreen, w.win.FullScreen())
+	}
+
+	// Preferences Apply flips it through applySettings.
+	next := w.settings
+	next.Fullscreen = false
+	w.applySettings(next)
+	if w.settings.Fullscreen || w.win.FullScreen() {
+		t.Fatalf("after Apply: setting=%v window=%v",
+			w.settings.Fullscreen, w.win.FullScreen())
+	}
+
+	// Divergence — the setting already says on but the window is not — must
+	// still switch the window, or the key does nothing.
+	w.settings.Fullscreen = true
+	w.setFullScreen(true)
+	if !w.win.FullScreen() {
+		t.Error("a diverged window state was not forced back to the setting")
+	}
+}

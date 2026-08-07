@@ -131,8 +131,7 @@ func NewWindow(app fyne.App, settings config.Settings) *Window {
 	w.refreshOverlay()
 
 	if settings.Fullscreen {
-		w.win.SetFullScreen(true)
-		w.syncMenuVisibility(true)
+		w.applyFullScreen(true)
 	}
 
 	// The tick starts with the event loop, not before it. A fyne.Do issued
@@ -220,7 +219,7 @@ func (w *Window) applySettings(next config.Settings) {
 	w.pushLines()
 	w.syncActions()
 	if next.Fullscreen != old.Fullscreen {
-		w.win.SetFullScreen(next.Fullscreen)
+		w.applyFullScreen(next.Fullscreen)
 	}
 	w.applySessionChanges(old)
 }
@@ -660,8 +659,31 @@ func (w *Window) refreshOverlay() {
 
 func (w *Window) setFullScreen(on bool) {
 	w.update(func(s *config.Settings) { s.Fullscreen = on })
-	w.win.SetFullScreen(on)
-	w.syncMenuVisibility(on)
+	// applySettings switches the window when the setting changed. When it did
+	// not — the setting and the window state have somehow diverged — force the
+	// window to match anyway, or the key would do nothing.
+	if w.win.FullScreen() != on {
+		w.applyFullScreen(on)
+	}
+}
+
+// applyFullScreen switches the window and keeps the in-window menu in step.
+// Every full-screen entry point funnels through here: the `f` and Escape keys,
+// the menu item, Preferences Apply, and start-up all reached SetFullScreen
+// separately once, and the path that skipped the menu sync shipped the strip.
+//
+// The order is the second Windows finding (see spikes/RESULTS.md). On the way
+// in the menu comes off *before* the mode switch, so the full-screen layout is
+// computed without it; on the way out the menu goes back *after*, and Fyne's
+// non-nil menu path re-lays the content out itself.
+func (w *Window) applyFullScreen(on bool) {
+	if on {
+		w.syncMenuVisibility(true)
+		w.win.SetFullScreen(true)
+		return
+	}
+	w.win.SetFullScreen(false)
+	w.syncMenuVisibility(false)
 }
 
 // syncMenuVisibility takes the menu off the window in full screen, on the
@@ -681,6 +703,16 @@ func (w *Window) syncMenuVisibility(fullScreen bool) {
 	}
 	if fullScreen {
 		w.win.SetMainMenu(nil)
+		// Fyne's setMenuOverlay(nil) clears the menu but skips the content
+		// re-layout — the re-layout sits behind an `if c.menu != nil` guard
+		// (glfw/canvas.go). Left alone, the content stays shifted down by the
+		// old menu height and the canvas background shows as a strip across
+		// the top: the second white bar in the Windows photographs. Reclaim
+		// the space explicitly; a later resize recomputes from scratch and
+		// agrees, since the menu really is gone.
+		c := w.win.Canvas()
+		c.Content().Resize(c.Size())
+		c.Content().Move(fyne.NewPos(0, 0))
 		return
 	}
 	w.win.SetMainMenu(w.menus.menu)

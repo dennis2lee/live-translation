@@ -632,6 +632,41 @@ The lesson is the same one the menu strip taught: **a caption window has to be
 checked against both theme variants, not just both platforms.** Neither defect
 was reachable from a dark-mode Mac.
 
+### A third pass: the bar across the top (2026-08-06, IMG_2372)
+
+`SetPadded(false)` held — the left, right and bottom edges came back clean. A
+white bar remained across the top only. That is not padding; it is the menu's
+reserved height, and the mechanism is in Fyne's `glfw/canvas.go`:
+`setMenuOverlay(nil)` sets `c.menu = nil` **but the content re-layout sits
+behind an `if c.menu != nil` guard**, so removing the menu never gives its
+space back. The full-screen resize had already laid the content out below a
+menu that was then removed, and the exposed strip is painted with the canvas
+background — white in a light theme, again.
+
+macOS cannot reach this either way: with a native menu the overlay is never
+built and `menuHeight` is always 0.
+
+Three changes, one funnel:
+
+- `applyFullScreen` is now the only path that switches the window. The `f` and
+  Escape keys, the menu item, Preferences Apply and start-up all reached
+  `SetFullScreen` separately, and one of them (Preferences Apply) skipped the
+  menu sync entirely — a strip that would have come back through that door
+  after this fix went out the other.
+- On the way in, the menu comes off **before** the mode switch, so the
+  full-screen layout is computed without it. On the way out the menu goes back
+  after, and Fyne's non-nil path re-lays out by itself.
+- After `SetMainMenu(nil)` the content is explicitly resized and moved to fill
+  the canvas, compensating for the skipped re-layout whatever the event
+  ordering turns out to be on the real machine.
+
+`TestFullScreenFunnel` pins the funnel on the test driver — key, Apply, and a
+diverged setting/window state all keep the two in step. The strip itself cannot
+be reproduced from this machine: the reclaim runs behind
+`platform.MenuIsDrawnInWindow()`, false on darwin, and the test driver has no
+menu overlay. The mechanism is established by reading the Fyne source; whether
+a second cause hides behind it is for the Windows machine to say.
+
 **The menu is the mouse route out of full screen, so removing it needs a
 replacement.** `f` now toggles full screen from the keyboard. Escape stays
 wired but is not relied on: spike F2 measured it not arriving in full screen.
