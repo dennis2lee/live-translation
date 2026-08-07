@@ -350,3 +350,30 @@ func TestCloseReleasesTheMeter(t *testing.T) {
 		t.Error("close() left the meter running")
 	}
 }
+
+// The session can start or stop underneath a running level test at any tick,
+// and both directions matter: missing the first holds two streams open on one
+// device, missing the second leaves the dialog claiming to listen to a session
+// that has ended, reading "no signal" off a working microphone.
+func TestMeterFollowsTheSessionBothWays(t *testing.T) {
+	cases := []struct {
+		ownMeter, observing, sessionRunning bool
+		want                                meterAction
+	}{
+		{false, false, false, meterKeep},              // idle, no session
+		{false, false, true, meterKeep},               // test not running; session is none of our business
+		{true, false, false, meterKeep},               // our own device, quiet session: steady state
+		{true, false, true, meterHandToSession},       // session started under us
+		{false, true, true, meterKeep},                // observing a live session: steady state
+		{false, true, false, meterReclaimFromSession}, // session ended under us
+		{true, true, true, meterHandToSession},        // contradictory state resolves toward the session
+		{true, true, false, meterKeep},                // own meter wins once the session is gone
+	}
+	for _, c := range cases {
+		got := meterTransition(c.ownMeter, c.observing, c.sessionRunning)
+		if got != c.want {
+			t.Errorf("meterTransition(own=%v, observing=%v, session=%v) = %v, want %v",
+				c.ownMeter, c.observing, c.sessionRunning, got, c.want)
+		}
+	}
+}

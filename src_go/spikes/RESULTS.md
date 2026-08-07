@@ -679,6 +679,18 @@ then logged an overflow on every callback — five warnings a second.
 `NewMeterCapture` stops after publishing the peak, before the resampler and the
 ring write. Confirmed `dropped_bytes=0` afterwards.
 
+**A review pass found the state machine had one direction missing.** The meter
+handled the session starting underneath a running test (hand the device over,
+observe) but not the session *ending* underneath an observing test — `observing`
+stayed true, the switch fell through to zero, and the dialog sat claiming to
+listen to a session that had ended while reading "no signal" off a working
+microphone. The transition is now a pure function, `meterTransition`, with all
+eight states pinned in a table test — which promptly caught its own first draft:
+reclaiming while an own-meter capture was somehow still open would have opened a
+second stream on the device and leaked the first, so the `!ownMeter` guard is
+load-bearing. A failed reopen also resets the button label, and drops
+`observing` first so it cannot retry on every tick.
+
 **A Fyne behaviour worth knowing.** `progressbar.go` fills an empty bar with
 `progressBlendColor(primary)` — a dimmed version of the fill colour, not a
 neutral groove. Empty and full differ in brightness, not in shape, so an idle

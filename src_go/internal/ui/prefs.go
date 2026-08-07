@@ -552,6 +552,9 @@ func (p *prefsDialog) startMeter() {
 	dev, err := capture.Start()
 	if err != nil {
 		p.levelStatus.SetText("Could not open the device: " + err.Error())
+		// The handover paths reach here with the button reading "Stop", so a
+		// failure has to put the label back where the state is.
+		p.levelButton.SetText("Start Level Test")
 		return
 	}
 	p.meter = capture
@@ -592,17 +595,53 @@ func (p *prefsDialog) startLevelMeter() {
 	}()
 }
 
+// meterAction is what a poll tick has to do about the session before it reads
+// a level. Factored out because the session can start or stop underneath a
+// running test at any tick, and both directions were missable: the first held
+// two streams open on one device, and the second left the dialog claiming to
+// listen to a session that had ended.
+type meterAction int
+
+const (
+	meterKeep meterAction = iota
+	// The session started under our own meter: release the device to it and
+	// observe its capture instead.
+	meterHandToSession
+	// The session ended while we were observing it: it released the device,
+	// so open it ourselves and carry on.
+	meterReclaimFromSession
+)
+
+func meterTransition(ownMeter, observing, sessionRunning bool) meterAction {
+	switch {
+	case ownMeter && sessionRunning:
+		return meterHandToSession
+	case !ownMeter && observing && !sessionRunning:
+		// The !ownMeter guard is load-bearing: startMeter does not check for
+		// an existing capture, so reclaiming while one is open would open a
+		// second stream on the device and leak the first.
+		return meterReclaimFromSession
+	default:
+		return meterKeep
+	}
+}
+
 func (p *prefsDialog) pollMeter() {
 	live := p.win.capture
+	sessionRunning := live != nil && live.IsRunning()
 
-	// Translation started underneath a running test: hand the device back
-	// rather than holding a second stream open on it.
-	if p.meter != nil && live != nil && live.IsRunning() {
+	switch meterTransition(p.meter != nil, p.observing, sessionRunning) {
+	case meterHandToSession:
 		p.meter.Stop()
 		p.meter = nil
 		p.observing = true
 		p.levelStatus.SetText("Listening to the running session — " +
 			live.Device().Name)
+	case meterReclaimFromSession:
+		// observing drops before the reopen, so a failed reopen cannot retry
+		// on every tick.
+		p.observing = false
+		p.startMeter()
 	}
 
 	switch {
@@ -616,8 +655,9 @@ func (p *prefsDialog) pollMeter() {
 	default:
 		p.lastPeak = 0
 	}
+	// SetValue refreshes unconditionally, and the refresh re-runs the
+	// TextFormatter, so the verdict follows lastPeak with no extra call.
 	p.level.SetValue(peakToFraction(p.lastPeak))
-	p.level.Refresh()
 }
 
 // --- other window commands -----------------------------------------------
