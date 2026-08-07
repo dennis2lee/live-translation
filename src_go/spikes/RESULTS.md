@@ -667,6 +667,13 @@ be reproduced from this machine: the reclaim runs behind
 menu overlay. The mechanism is established by reading the Fyne source; whether
 a second cause hides behind it is for the Windows machine to say.
 
+**Confirmed on the Windows machine, 2026-08-06, with the 1.0.3 MSI: full
+screen is clean.** No bar at the top, no border on any edge, taskbar covered.
+That closes all three layers the photographs peeled back — the menu overlay
+(1.0.1), the theme-coloured padding (1.0.2), and the menu's unreclaimed height
+(1.0.3). Each was invisible from a dark-mode Mac; each took one photograph to
+localise.
+
 **The menu is the mouse route out of full screen, so removing it needs a
 replacement.** `f` now toggles full screen from the keyboard. Escape stays
 wired but is not relied on: spike F2 measured it not arriving in full screen.
