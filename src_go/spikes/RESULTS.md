@@ -610,6 +610,28 @@ the window, full screen clears the main menu and leaving it puts the menu back.
 `SetMainMenu(nil)` removes the overlay outright rather than leaving an empty
 strip — checked against Fyne's `buildMenu`, which returns early on nil.
 
+### A second pass, and a white frame that was not the menu (2026-08-06)
+
+The menu strip was gone in the next photo, and a **white border still framed the
+whole display** — Windows only, macOS clean. It was not a window decoration.
+
+Fyne insets window content by `theme.Padding()` on all four sides unless the
+window is told otherwise (`glfw/canvas.go` — `contentPos`, `contentSize`), and
+paints the exposed strip with the canvas background, which follows the OS
+light/dark setting. **That is why it looked like a macOS/Windows difference and
+was really a light/dark one**: the Mac runs dark, so the strip is black and
+lands invisibly on the caption view's own black background; the Windows laptop
+runs light, so the strip is white and outlines the screen.
+
+`Window.SetPadded(false)` at construction. `TestWindowContentReachesTheEdge`
+pins it by capturing the canvas under the light theme and reading the four
+corner pixels — with the fix reverted all four are (255,255,255), which is the
+photograph.
+
+The lesson is the same one the menu strip taught: **a caption window has to be
+checked against both theme variants, not just both platforms.** Neither defect
+was reachable from a dark-mode Mac.
+
 **The menu is the mouse route out of full screen, so removing it needs a
 replacement.** `f` now toggles full screen from the keyboard. Escape stays
 wired but is not relied on: spike F2 measured it not arriving in full screen.

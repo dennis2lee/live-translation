@@ -110,6 +110,13 @@ func NewWindow(app fyne.App, settings config.Settings) *Window {
 	w.view = NewCaptionView(settings)
 
 	w.win = app.NewWindow(AppName)
+	// No inner padding. Fyne insets the content by theme.Padding() on all four
+	// sides by default and paints the exposed strip with the canvas background,
+	// which follows the OS light/dark setting. On a Mac in dark mode that strip
+	// is black and lands invisibly on the caption view's own black background;
+	// on Windows in light mode it is white, and it framed the whole screen in
+	// full screen. The caption background has to reach the edge of the display.
+	w.win.SetPadded(false)
 	w.win.SetContent(w.view)
 	w.win.Resize(fyne.NewSize(1280, 800))
 	w.win.SetCloseIntercept(func() {

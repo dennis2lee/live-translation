@@ -2,11 +2,14 @@ package ui
 
 import (
 	"errors"
+	"image"
 	"strings"
 	"testing"
 	"time"
 
+	"fyne.io/fyne/v2"
 	"fyne.io/fyne/v2/test"
+	"fyne.io/fyne/v2/theme"
 
 	"github.com/dennis2lee/live-translation/src_go/internal/captions"
 	"github.com/dennis2lee/live-translation/src_go/internal/config"
@@ -214,6 +217,40 @@ func TestDisplayLinesReachTheView(t *testing.T) {
 	for i := range want {
 		if got[i] != (captions.Line{Text: want[i].Text, Settled: want[i].Settled}) {
 			t.Errorf("line %d = %+v, want %+v", i, got[i], want[i])
+		}
+	}
+}
+
+// The caption background must reach the edge of the window, in every theme.
+//
+// Fyne insets window content by theme.Padding() on all four sides by default
+// and paints the exposed strip with the canvas background, which follows the
+// OS light/dark setting. On a Mac in dark mode that strip is black and hides
+// inside the caption view's own black background; on Windows in light mode it
+// is white, and it drew a frame around the whole display in full screen.
+func TestWindowContentReachesTheEdge(t *testing.T) {
+	w := newTestWindow(t)
+
+	if w.win.Padded() {
+		t.Error("the window is padded, so the canvas background shows as a frame")
+	}
+
+	// The pixel that proves it: the very corner of the canvas has to be the
+	// caption background, not the theme's.
+	test.ApplyTheme(t, theme.LightTheme())
+	w.win.Resize(fyne.NewSize(300, 200))
+	img := w.win.Canvas().Capture()
+	b := img.Bounds()
+	for _, p := range []image.Point{
+		{X: b.Min.X, Y: b.Min.Y},
+		{X: b.Max.X - 1, Y: b.Min.Y},
+		{X: b.Min.X, Y: b.Max.Y - 1},
+		{X: b.Max.X - 1, Y: b.Max.Y - 1},
+	} {
+		r, g, bl, _ := img.At(p.X, p.Y).RGBA()
+		if r > 0x4000 || g > 0x4000 || bl > 0x4000 {
+			t.Errorf("corner %v is (%d,%d,%d) in the light theme — the caption "+
+				"background does not reach it", p, r>>8, g>>8, bl>>8)
 		}
 	}
 }
