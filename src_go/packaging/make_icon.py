@@ -4,12 +4,11 @@
 Minecraft theme, so the icon is genuinely pixel art: a 32x32 grid scaled with
 nearest-neighbour sampling, never a smooth vector shrunk down.
 
-The subject is a **world** — which is both what translation reaches across and
-what Minecraft calls a save. It is drawn as a blocky planet: ocean, grass-block
-coastlines with their dirt underside, lit from the top left. One shape, filling
-the frame, which is what survives at 16 px.
+The subject is Minecraft's **filled map** — a parchment sheet with the world
+drawn on it. It is an item you can hold, and it is literally a picture of the
+world, which is what translation reaches across.
 
-Four attempts got here, and the first three are worth remembering:
+Six attempts got here. The first four never shipped:
 
   * two small speech bubbles facing each other — at icon size they read as a
     pair of eyes;
@@ -19,6 +18,18 @@ Four attempts got here, and the first three are worth remembering:
     hand-plotted bitmaps and looked it;
   * a Minecraft sign with caption bars — clean, but it said "text", not
     "across languages".
+
+The fifth, a blocky planet, shipped in 1.0.0 and was replaced by this one.
+
+Every one of those died the same death: fine at 1024 px, gone at 16. So the map
+is drawn to survive small, and the two decisions that make it are both about
+area:
+
+  * the border is two rings, not three. The draft's third ring ate the field.
+  * four landmasses, not seven, each built from overlapping rectangles. Seven
+    thin ones vanish when the 16 px pass samples every other pixel; four tidy
+    rectangles survive but read as a window pane. Overlapping them buys a
+    ragged coastline at full size without costing area at small size.
 
     python3 packaging/make_icon.py
 
@@ -36,8 +47,10 @@ import zlib
 
 N = 32  # the art grid; every coordinate below is in these units
 
-# Minecraft palette: ocean, grass block, and the light that falls top-left.
-SEA_LIT = (0x4E, 0x9B, 0xD9)
+# Minecraft palette: parchment, ocean, grass block, and the light from top-left.
+PARCH = (0xE2, 0xD1, 0xA8)
+PARCH_SH = (0xC3, 0xAE, 0x7C)
+PARCH_EDGE = (0x8A, 0x74, 0x4C)
 SEA = (0x3A, 0x7C, 0xBC)
 SEA_DEEP = (0x2B, 0x5E, 0x94)
 GRASS_LIT = (0x8B, 0xC3, 0x4A)
@@ -46,13 +59,17 @@ GRASS_DARK = (0x4F, 0x81, 0x25)
 DIRT = (0x87, 0x5A, 0x38)
 DIRT_DARK = (0x6B, 0x44, 0x23)
 
-# Three continents, each built from overlapping rectangles so its outline is
-# irregular rather than a bar. Deliberately rectangular at the pixel level —
-# this is a Minecraft world, so the coastlines are made of blocks.
+BORDER = (1, 1, 30, 30)   # the parchment sheet, filling the frame
+FIELD = (3, 3, 28, 28)    # the drawn part of it
+
+# Four continents, each from overlapping rectangles so the outline is irregular
+# rather than a bar. Rectangular at the pixel level on purpose — this is a
+# Minecraft map, so the coastlines are made of blocks.
 LANDMASSES = (
-    (7, 6, 14, 8), (5, 9, 13, 11), (9, 12, 15, 13),
-    (18, 8, 25, 10), (20, 11, 26, 14), (17, 15, 22, 16),
-    (6, 18, 12, 20), (8, 21, 14, 23),
+    (4, 6, 14, 9), (4, 10, 11, 13), (8, 10, 13, 12),
+    (18, 5, 27, 9), (20, 10, 27, 13),
+    (4, 17, 12, 21), (7, 22, 15, 25),
+    (19, 18, 27, 22), (22, 23, 27, 25),
 )
 
 
@@ -67,41 +84,36 @@ def rect(px, x0, y0, x1, y1, colour) -> None:
             px[y][x] = colour
 
 
-def inside(x: int, y: int, radius: float) -> bool:
-    """Circle test on pixel centres, so the edge steps like Minecraft."""
-    dx, dy = x - 15.5, y - 15.5
-    return dx * dx + dy * dy <= radius * radius
+def draw_sheet(px) -> None:
+    """The parchment and the ocean drawn on it, shaded away from the light."""
+    bx0, by0, bx1, by1 = BORDER
+    rect(px, bx0, by0, bx1, by1, PARCH_EDGE)
+    rect(px, bx0 + 1, by0 + 1, bx1 - 1, by1 - 1, PARCH)
 
-
-def draw_planet(px) -> None:
-    """The ocean sphere, lit from the top left and darker at the rim."""
-    for y in range(N):
-        for x in range(N):
-            if not inside(x, y, 15.4):
-                continue
-            if not inside(x, y, 13.6):
-                px[y][x] = SEA_DEEP          # the rim, turning away from us
-                continue
-            # A round highlight where the light strikes, rather than a
-            # half-plane: a diagonal cut reads as a wedge, not as a sphere.
-            hx, hy = x - 10.0, y - 10.5
-            px[y][x] = SEA_LIT if hx * hx + hy * hy <= 30 else SEA
+    fx0, fy0, fx1, fy1 = FIELD
+    rect(px, fx0, fy0, fx1, fy1, PARCH_SH)   # a hairline where the ink starts
+    rect(px, fx0, fy0 + 1, fx1, fy1, SEA)
+    for x in range(fx0, fx1 + 1):            # deep water along the far edges
+        px[fy0 + 1][x] = SEA_DEEP
+        px[fy1][x] = SEA_DEEP
+    for y in range(fy0 + 1, fy1 + 1):
+        px[y][fx1] = SEA_DEEP
 
 
 def draw_land(px) -> None:
-    """Grass-block continents, clipped to the sphere.
+    """Grass-block continents, clipped to the drawn field.
 
     The colour of a land pixel comes from its neighbours, not from which
     rectangle drew it: exposed at the top means grass, exposed at the bottom
     means the dirt underside. That is what makes overlapping rectangles read as
     one continent with a coastline instead of a stack of bars.
     """
+    fx0, fy0, fx1, fy1 = FIELD
     land = [[False] * N for _ in range(N)]
     for x0, y0, x1, y1 in LANDMASSES:
-        for y in range(y0, y1 + 1):
-            for x in range(x0, x1 + 1):
-                if inside(x, y, 14.2):
-                    land[y][x] = True
+        for y in range(max(y0, fy0 + 2), min(y1, fy1 - 1) + 1):
+            for x in range(max(x0, fx0 + 1), min(x1, fx1 - 1) + 1):
+                land[y][x] = True
 
     def is_land(x: int, y: int) -> bool:
         return 0 <= x < N and 0 <= y < N and land[y][x]
@@ -121,7 +133,7 @@ def draw_land(px) -> None:
 
 def grid():
     px = blank()
-    draw_planet(px)
+    draw_sheet(px)
     draw_land(px)
     return px
 

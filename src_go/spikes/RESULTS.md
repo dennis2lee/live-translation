@@ -618,12 +618,12 @@ Never hide the menu without leaving a key that brings it back.
 ## The icon
 
 Minecraft theme, drawn by `packaging/make_icon.py` as real pixel art on a 32x32
-grid — a blocky world, ocean and grass-block continents, lit from the top left.
-A world is what translation reaches across, and it is also what Minecraft calls
-a save.
+grid — Minecraft's **filled map**: a parchment sheet with the world drawn on it.
+An item you can hold, and literally a picture of the world, which is what
+translation reaches across.
 
-Four earlier drafts were thrown away rather than tweaked, and the reasons are
-worth keeping because they are all the same reason:
+Six drafts. Four never shipped, and the reasons are worth keeping because they
+are all the same reason:
 
 | draft | why it failed |
 |---|---|
@@ -632,9 +632,27 @@ worth keeping because they are all the same reason:
 | one bubble with 가 and A | right meaning, but hand-plotted glyph bitmaps look hand-plotted |
 | a Minecraft sign with caption bars | clean, but it says "text", not "across languages" |
 
+The fifth, a blocky planet, shipped in 1.0.0 and was replaced by the map on
+2026-08-06.
+
 Every draft was judged by rendering it at 16, 24, 32, 48, 64 and 128 px and
 looking at the small end first, because that is where an icon either works or
-does not.
+does not. Five further concepts were drawn as a set — nether portal, grass
+block, filled map, world-as-speech-bubble, world with a caption bar — and three
+of them died at 16 px: the portal loses its obsidian frame and becomes a purple
+rectangle, the caption bar becomes a grey smear beside a shrunken globe, and the
+map as first drawn became a tan square with one green speck.
+
+**The map only survives small because of two area decisions, and both were
+measured, not guessed.** The border is two rings, not three — the third ring ate
+the field. And there are four landmasses, not seven: at 16 px the scaler samples
+every other pixel, so seven thin masses vanish. Four *tidy* rectangles survive
+but then read as a window pane at 128 px, so each mass is built from overlapping
+rectangles — a ragged coastline at full size, no cost in area at small size.
+
+On macOS 26 the system insets an app icon into a rounded tile of its own, so the
+art is drawn slightly smaller than the slot and gains a light surround. That is
+the OS, not the `.icns`, and it is why a full-bleed square subject still reads.
 
 It reaches three places: the `.icns` in the `.app`, the `.ico` embedded in the
 Windows binary as a resource (so Explorer, the taskbar and the window all draw
