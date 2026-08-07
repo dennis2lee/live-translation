@@ -615,6 +615,56 @@ replacement.** `f` now toggles full screen from the keyboard. Escape stays
 wired but is not relied on: spike F2 measured it not arriving in full screen.
 Never hide the menu without leaving a key that brings it back.
 
+## The Preferences level meter
+
+Reported as "audio input level testing does not work". It did not, for three
+separate reasons that all trace back to the same one: the port copied the widget
+and not the behaviour.
+
+**1. There was no test to run.** The meter only mirrored `Window.capture`, which
+is nil unless a translation is running, so the control was dead in the state
+people actually use it — before a session, to find out which device carries the
+sound. The Python build opens the selected device itself behind a Start/Stop
+button. Ported.
+
+**2. The bar was linear, and hearing is not.** `TakePeak` returns a 0–1 sample
+peak and it went straight into a `ProgressBar`. Measured on the built-in
+microphone with speech played into the room:
+
+| dBFS | linear bar | dBFS bar | what it is |
+|---:|---:|---:|---|
+| −88 | 0.004% | 0% | nothing routed in |
+| −54 | 0.20% | 10% | `SilentInputPeak` |
+| −36 | 1.6% | 40% | live mic, quiet room |
+| −26 | 5.0% | 56% | `SpeechPeak` |
+| −12 | 25% | 80% | the target |
+
+So speaking into the microphone moved the bar from 0.004% to 1.6% — visually
+identical to a dead input, which is the one distinction the meter exists to
+make. Live capture on 2026-08-06 read −32.7 to −38.4 dBFS during speech and
+−53 to −73 in the quiet room; `spikes/meter_check` prints both columns.
+
+**3. It stole the peaks the window needs.** `TakePeak` resets. `window.go` says
+"one reader per tick" and the meter was a second reader on the same capture, ten
+times a second, for as long as the dialog was open — so speech detection and the
+"no signal" warning both under-read while Preferences was open. `Capture.Peak`
+now reads without resetting, and the meter uses it whenever it is observing a
+session rather than driving its own device.
+
+A fourth defect surfaced while measuring rather than from the report: a
+meter-only capture has nothing draining its ring, so it filled in a second and
+then logged an overflow on every callback — five warnings a second.
+`NewMeterCapture` stops after publishing the peak, before the resampler and the
+ring write. Confirmed `dropped_bytes=0` afterwards.
+
+**A Fyne behaviour worth knowing.** `progressbar.go` fills an empty bar with
+`progressBlendColor(primary)` — a dimmed version of the fill colour, not a
+neutral groove. Empty and full differ in brightness, not in shape, so an idle
+meter reads as a full one at a glance. The number and verdict inside the bar are
+what carry the reading; do not remove them. The floor verdict says "silent;
+speak, or check the input" for the same reason — a quiet room and a dead input
+both land below −60 dBFS, and only one of them is a fault.
+
 ## The icon
 
 Minecraft theme, drawn by `packaging/make_icon.py` as real pixel art on a 32x32

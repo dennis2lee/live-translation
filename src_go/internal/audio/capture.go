@@ -24,6 +24,10 @@ type Capture struct {
 	deviceName string
 	Ring       *Ring
 
+	// meterOnly is set before Start and never changed, so the callback reads it
+	// without synchronisation, the same way it reads channels.
+	meterOnly bool
+
 	mu         sync.Mutex
 	device     *malgo.Device
 	resampler  resample.Stream
@@ -52,6 +56,18 @@ func NewCapture(deviceName string, ringSeconds int) *Capture {
 		deviceName: deviceName,
 		Ring:       NewRing(TargetRate * BytesPerSample * ringSeconds),
 	}
+}
+
+// NewMeterCapture opens a device for its level only — the Preferences level
+// test, which has to work when no session is running.
+//
+// It shares the peak path with a real capture, and stops there: no resampling,
+// nothing written to the ring. The ring exists to be drained by the translator,
+// and a level test has no translator behind it.
+func NewMeterCapture(deviceName string) *Capture {
+	c := NewCapture(deviceName, 1)
+	c.meterOnly = true
+	return c
 }
 
 // NativeRate is the rate the device was opened at.
@@ -87,6 +103,17 @@ func (c *Capture) Device() InputDevice {
 // −36 dBFS, an input with nothing routed into it −88 dBFS.
 func (c *Capture) TakePeak() float64 {
 	return math.Float64frombits(c.peak.Swap(0))
+}
+
+// Peak reads the same value without resetting it.
+//
+// TakePeak has exactly one caller per capture, because whoever calls it takes
+// the peak away from everyone else. The Preferences level meter is a second
+// observer of the session's capture, so it reads through here: sharing TakePeak
+// made the window miss the peaks that hold captions on screen and drive the
+// "no signal" warning, for as long as the dialog was open.
+func (c *Capture) Peak() float64 {
+	return math.Float64frombits(c.peak.Load())
 }
 
 // Start opens the stream. It returns the device it settled on.
@@ -223,6 +250,14 @@ func (c *Capture) onAudio(_, in []byte, frames uint32) {
 		if next <= old || c.peak.CompareAndSwap(math.Float64bits(old), math.Float64bits(next)) {
 			break
 		}
+	}
+
+	// A level test wants the peak and nothing else. Stopping here matters: the
+	// ring is drained by the translator, so with no session running it fills in
+	// a second and then logs an overflow on every callback — five warnings a
+	// second for as long as the meter is open.
+	if c.meterOnly {
+		return
 	}
 
 	out, err := resampler.Process(c.mono)

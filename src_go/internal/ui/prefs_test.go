@@ -1,6 +1,7 @@
 package ui
 
 import (
+	"math"
 	"strconv"
 	"strings"
 	"testing"
@@ -254,5 +255,98 @@ func TestKeyStatusNamesTheSourceNotTheKey(t *testing.T) {
 	}
 	if strings.Contains(p.keyStatus.Text, secret) {
 		t.Error("the key status shows the key itself")
+	}
+}
+
+// --- the level meter ------------------------------------------------------
+
+// The bar is dBFS, not linear. A linear bar was the bug: a normal speaking peak
+// of -36 dBFS is 0.016 of full scale, so it sat at 1.6% and looked identical to
+// a dead input, which is exactly the distinction the meter exists to make.
+func TestMeterScaleIsDBFS(t *testing.T) {
+	cases := []struct {
+		db      float64
+		wantPct int
+		what    string
+	}{
+		{-88, 0, "nothing routed in"},
+		{-60, 0, "the floor"},
+		{-54, 10, "SilentInputPeak"},
+		{-36, 40, "built-in mic in a quiet room"},
+		{-26, 56, "SpeechPeak"},
+		{-12, 80, "the target"},
+		{0, 100, "clipping"},
+	}
+	for _, c := range cases {
+		peak := math.Pow(10, c.db/20)
+		got := int(peakToFraction(peak) * 100)
+		if got != c.wantPct {
+			t.Errorf("%.0f dBFS (%s): bar at %d%%, want %d%%",
+				c.db, c.what, got, c.wantPct)
+		}
+	}
+	if got := peakToFraction(0); got != 0 {
+		t.Errorf("silence: bar at %v, want 0", got)
+	}
+	// Nothing may leave the bar's range, whatever arrives.
+	for _, peak := range []float64{-1, 0, 1e-12, 1, 4} {
+		if f := peakToFraction(peak); f < 0 || f > 1 {
+			t.Errorf("peak %v mapped outside 0..1: %v", peak, f)
+		}
+	}
+}
+
+// The verdict has to be actionable — a number alone does not say turn it up.
+func TestMeterVerdictSaysWhatToDo(t *testing.T) {
+	cases := []struct {
+		db   float64
+		want string
+	}{
+		{-88, "silent"},
+		{-40, "quiet"},
+		{-20, "good"},
+		{-1, "too loud"},
+	}
+	for _, c := range cases {
+		got := peakVerdict(math.Pow(10, c.db/20))
+		if !strings.Contains(got, c.want) {
+			t.Errorf("%.0f dBFS: %q does not say %q", c.db, got, c.want)
+		}
+		if !strings.Contains(got, "dBFS") {
+			t.Errorf("%.0f dBFS: %q omits the number", c.db, got)
+		}
+	}
+	if got := peakVerdict(0); got != "no signal" {
+		t.Errorf("silence: %q, want %q", got, "no signal")
+	}
+}
+
+// The button is a toggle, and it was not one: the session-observing path left
+// meter nil, so pressing Stop started the test again instead of stopping it.
+func TestLevelTestButtonTogglesWhenObserving(t *testing.T) {
+	w := newTestWindow(t)
+	p := openPrefs(t, w)
+
+	if p.meterRunning() {
+		t.Fatal("the meter is running before the button is pressed")
+	}
+	p.observing = true // as startMeter leaves it with a session running
+	p.levelButton.OnTapped()
+	if p.meterRunning() {
+		t.Error("pressing Stop left the meter running")
+	}
+	if p.levelButton.Text != "Start Level Test" {
+		t.Errorf("button says %q after stopping", p.levelButton.Text)
+	}
+}
+
+// A dismissed dialog must not leave the device open for the life of the process.
+func TestCloseReleasesTheMeter(t *testing.T) {
+	w := newTestWindow(t)
+	p := openPrefs(t, w)
+	p.observing = true
+	p.close()
+	if p.meterRunning() {
+		t.Error("close() left the meter running")
 	}
 }

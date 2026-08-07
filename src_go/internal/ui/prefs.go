@@ -3,6 +3,7 @@ package ui
 import (
 	"fmt"
 	"log/slog"
+	"math"
 	"strconv"
 	"time"
 
@@ -49,6 +50,8 @@ type prefsDialog struct {
 	deviceSelect *widget.Select
 	deviceNames  []string
 	level        *widget.ProgressBar
+	levelStatus  *widget.Label
+	levelButton  *widget.Button
 	netResult    *widget.Label
 	netDetail    *widget.Label
 	runTest      *widget.Button
@@ -73,9 +76,19 @@ type prefsDialog struct {
 	transcriptDir *widget.Entry
 	debugLogging  *widget.Check
 
+	// meter is the dialog's own capture, opened only when there is no session
+	// to observe; observing says the meter is watching the session's capture
+	// instead. Exactly one of them is set while the test runs — a bool rather
+	// than the button's label, so the state is not stored in a UI string.
+	meter     *audio.Capture
+	observing bool
+	lastPeak  float64
 	levelStop chan struct{}
 	netBusy   bool
 }
+
+// running reports whether the level test is on, either way round.
+func (p *prefsDialog) meterRunning() bool { return p.meter != nil || p.observing }
 
 // OpenPreferences shows the dialog.
 func (w *Window) OpenPreferences() {
@@ -120,13 +133,15 @@ func (p *prefsDialog) show() {
 }
 
 // close settles the background workers, so a dialog that is dismissed mid-test
-// does not leave a goroutine writing into freed widgets.
+// does not leave a goroutine writing into freed widgets — and releases the
+// meter's device, which would otherwise stay open for the life of the process.
 func (p *prefsDialog) close() {
 	select {
 	case <-p.levelStop:
 	default:
 		close(p.levelStop)
 	}
+	p.stopMeter()
 }
 
 // --- tabs -----------------------------------------------------------------
@@ -173,9 +188,35 @@ func (p *prefsDialog) audioTab() fyne.CanvasObject {
 		}
 	}
 
+	// Restarting on a device change is the whole point of the control: the
+	// reason to run it is to find out which device actually carries the sound.
+	p.deviceSelect.OnChanged = func(string) {
+		if p.meter != nil {
+			p.stopMeter()
+			p.startMeter()
+		}
+	}
+
 	// The meter tells "nobody is speaking" from "this device delivers nothing".
 	p.level = widget.NewProgressBar()
-	p.level.TextFormatter = func() string { return "Input level" }
+	p.level.TextFormatter = func() string { return peakVerdict(p.lastPeak) }
+
+	p.levelStatus = widget.NewLabel("Not running.")
+	p.levelStatus.Wrapping = fyne.TextWrapWord
+	p.levelButton = widget.NewButton("Start Level Test", func() {
+		if p.meterRunning() {
+			p.stopMeter()
+		} else {
+			p.startMeter()
+		}
+	})
+
+	// The numbers are measured, not guessed — see spikes/RESULTS.md.
+	hint := widget.NewLabel(
+		"Aim for peaks around −12 dBFS. A device with nothing routed into it " +
+			"sits near −88 dBFS, while a live microphone in a quiet room reads " +
+			"about −36.")
+	hint.Wrapping = fyne.TextWrapWord
 
 	p.silenceGate = widget.NewCheck("Skip sending silence (saves cost)", nil)
 	p.silenceGate.SetChecked(p.working.SilenceGate)
@@ -183,8 +224,11 @@ func (p *prefsDialog) audioTab() fyne.CanvasObject {
 	return container.NewVBox(
 		widget.NewLabel("Input device"),
 		p.deviceSelect,
-		widget.NewLabel("Level (only while translating)"),
+		widget.NewLabel("Input level"),
 		p.level,
+		p.levelStatus,
+		container.NewHBox(p.levelButton),
+		hint,
 		p.silenceGate,
 	)
 }
@@ -441,7 +485,98 @@ func (p *prefsDialog) runNetworkTest() {
 	}()
 }
 
-// startLevelMeter polls the capture peak while the dialog is open.
+// Meter scale. A progress bar is linear and hearing is not: a normal speaking
+// peak is −36 dBFS, which is 0.016 of full scale, so a linear bar sits at 1.6%
+// while somebody talks into the microphone and looks identical to a dead input
+// at 0.004%. Mapping dBFS across this span puts the same voice at 40% and the
+// dead input at 0.
+const (
+	meterFloorDB   = -60.0
+	meterCeilingDB = 0.0
+	meterGoodDB    = -24.0 // comfortably above the noise floor of a live mic
+	meterLoudDB    = -3.0  // about to clip
+)
+
+// peakToFraction maps a 0–1 sample peak onto the bar's 0–1 range in dBFS.
+func peakToFraction(peak float64) float64 {
+	if peak <= 0 {
+		return 0
+	}
+	db := 20 * math.Log10(peak)
+	return math.Max(0, math.Min(1, (db-meterFloorDB)/(meterCeilingDB-meterFloorDB)))
+}
+
+// peakVerdict is the plain-language reading printed on the bar. A number alone
+// does not tell somebody whether to turn the source up.
+func peakVerdict(peak float64) string {
+	if peak <= 0 {
+		return "no signal"
+	}
+	db := 20 * math.Log10(peak)
+	switch {
+	case db < meterFloorDB:
+		// Both readings land here and they mean opposite things: a working
+		// microphone in a quiet room measured −53 to −73 dBFS on this machine,
+		// and an input with nothing routed into it sits at −88. "Check the
+		// input" alone accuses a working device, so the prompt comes first.
+		return fmt.Sprintf("%.0f dBFS — silent; speak, or check the input", db)
+	case db > meterLoudDB:
+		return fmt.Sprintf("%.0f dBFS — too loud, turn the source down", db)
+	case db >= meterGoodDB:
+		return fmt.Sprintf("%.0f dBFS — good", db)
+	default:
+		return fmt.Sprintf("%.0f dBFS — quiet, turn the source up", db)
+	}
+}
+
+// startMeter opens the selected device so the level can be tested without
+// starting a translation — which is the point, since the reason to look at the
+// meter is to find out whether this device carries the sound at all.
+//
+// While a session is running the meter observes that capture instead of opening
+// the device a second time.
+func (p *prefsDialog) startMeter() {
+	if live := p.win.capture; live != nil && live.IsRunning() {
+		p.observing = true
+		p.levelButton.SetText("Stop Level Test")
+		p.levelStatus.SetText("Listening to the running session — " +
+			live.Device().Name)
+		return
+	}
+
+	name := ""
+	if i := p.deviceSelect.SelectedIndex(); i >= 0 && i < len(p.deviceNames) {
+		name = p.deviceNames[i]
+	}
+	capture := audio.NewMeterCapture(name)
+	dev, err := capture.Start()
+	if err != nil {
+		p.levelStatus.SetText("Could not open the device: " + err.Error())
+		return
+	}
+	p.meter = capture
+	p.levelButton.SetText("Stop Level Test")
+	p.levelStatus.SetText("Listening to " + dev.Name + "…")
+}
+
+// stopMeter releases the device. It is safe to call when nothing is running,
+// because close() calls it on every dismissal.
+func (p *prefsDialog) stopMeter() {
+	if p.meter != nil {
+		p.meter.Stop()
+		p.meter = nil
+	}
+	p.observing = false
+	p.lastPeak = 0
+	if p.levelButton != nil {
+		p.levelButton.SetText("Start Level Test")
+		p.levelStatus.SetText("Not running.")
+		p.level.SetValue(0)
+	}
+}
+
+// startLevelMeter polls whichever capture is being observed, while the dialog
+// is open.
 func (p *prefsDialog) startLevelMeter() {
 	go func() {
 		ticker := time.NewTicker(100 * time.Millisecond)
@@ -449,19 +584,40 @@ func (p *prefsDialog) startLevelMeter() {
 		for {
 			select {
 			case <-ticker.C:
-				fyne.Do(func() {
-					capture := p.win.capture
-					if capture == nil {
-						p.level.SetValue(0)
-						return
-					}
-					p.level.SetValue(capture.TakePeak())
-				})
+				fyne.Do(p.pollMeter)
 			case <-p.levelStop:
 				return
 			}
 		}
 	}()
+}
+
+func (p *prefsDialog) pollMeter() {
+	live := p.win.capture
+
+	// Translation started underneath a running test: hand the device back
+	// rather than holding a second stream open on it.
+	if p.meter != nil && live != nil && live.IsRunning() {
+		p.meter.Stop()
+		p.meter = nil
+		p.observing = true
+		p.levelStatus.SetText("Listening to the running session — " +
+			live.Device().Name)
+	}
+
+	switch {
+	case p.meter != nil:
+		// Our own device: we are the only reader, so take and reset.
+		p.lastPeak = p.meter.TakePeak()
+	case p.observing && live != nil && live.IsRunning():
+		// The session's device: read without resetting. TakePeak here would
+		// steal the peaks the window needs for speech detection.
+		p.lastPeak = live.Peak()
+	default:
+		p.lastPeak = 0
+	}
+	p.level.SetValue(peakToFraction(p.lastPeak))
+	p.level.Refresh()
 }
 
 // --- other window commands -----------------------------------------------
