@@ -125,6 +125,7 @@ func NewWindow(app fyne.App, settings config.Settings) *Window {
 
 	if settings.Fullscreen {
 		w.win.SetFullScreen(true)
+		w.syncMenuVisibility(true)
 	}
 
 	// The tick starts with the event loop, not before it. A fyne.Do issued
@@ -172,12 +173,18 @@ func (w *Window) bindKeys() {
 			w.SetDirection(config.EnglishToKorean)
 		case '9':
 			w.update(func(s *config.Settings) { s.CompletePhrasesOnly = !s.CompletePhrasesOnly })
+		case 'f', 'F':
+			// Full screen hides the menu on the platforms that draw it in the
+			// window, so this is the way back out — and the only reliable one,
+			// since Escape was measured not to arrive in full screen. Never
+			// hide the menu without leaving a key that shows it again.
+			w.setFullScreen(!w.win.FullScreen())
 		}
 	})
 	w.win.Canvas().SetOnTypedKey(func(ev *fyne.KeyEvent) {
-		// Spike F2 measured Escape not reaching this handler while full screen,
-		// so full screen is also reachable from the menu. This stays because it
-		// works in a window, which is where it is most often wanted.
+		// Spike F2 measured Escape not reaching this handler while full screen
+		// on macOS. It works in a window, which is where it is most often
+		// wanted, so it stays — but `f` above is the binding that is relied on.
 		if ev.Name == fyne.KeyEscape && w.win.FullScreen() {
 			w.setFullScreen(false)
 		}
@@ -647,6 +654,29 @@ func (w *Window) refreshOverlay() {
 func (w *Window) setFullScreen(on bool) {
 	w.update(func(s *config.Settings) { s.Fullscreen = on })
 	w.win.SetFullScreen(on)
+	w.syncMenuVisibility(on)
+}
+
+// syncMenuVisibility takes the menu off the window in full screen, on the
+// platforms that draw it there.
+//
+// Measured on Windows on 2026-08-06: full screen covered the taskbar and the
+// title bar, but Fyne's in-window menu strip stayed on top of the captions.
+// On macOS the menu lives in the system bar, which full screen hides by
+// itself, and clearing it there would remove the application menu — so this
+// does nothing on macOS.
+//
+// The menu is the mouse route out of full screen, so the `f` key exists to
+// replace it. Do not remove one without the other.
+func (w *Window) syncMenuVisibility(fullScreen bool) {
+	if !platform.MenuIsDrawnInWindow() {
+		return
+	}
+	if fullScreen {
+		w.win.SetMainMenu(nil)
+		return
+	}
+	w.win.SetMainMenu(w.menus.menu)
 }
 
 // OpenTranscriptDir reveals the transcript folder in the file manager.

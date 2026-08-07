@@ -589,3 +589,54 @@ never the key.
 What was checked on screen instead, and passed: the `9`, `2` and `1` keys drove
 their settings and persisted them, and the `EN→KO` direction hint rendered
 correctly — no tofu, because the label carries no spaces around the arrow.
+
+
+---
+
+## Windows, on real hardware (2026-08-06)
+
+Dennis installed the MSI and went full screen. Two findings, one good:
+
+- **Full screen covers the taskbar.** The requirement that chose Fyne over
+  DarwinKit holds on real Windows, and it is no longer resting on documented
+  GLFW behaviour.
+- **Fyne's in-window menu strip stayed on top of the captions.** On macOS the
+  menu lives in the system bar, which full screen hides by itself; on Windows
+  it is an overlay on the window, so it survived. PLAN §3.1 anticipated exactly
+  this and it went unhandled until the screenshot came back.
+
+Fixed by `Window.syncMenuVisibility`: on the platforms that draw the menu in
+the window, full screen clears the main menu and leaving it puts the menu back.
+`SetMainMenu(nil)` removes the overlay outright rather than leaving an empty
+strip — checked against Fyne's `buildMenu`, which returns early on nil.
+
+**The menu is the mouse route out of full screen, so removing it needs a
+replacement.** `f` now toggles full screen from the keyboard. Escape stays
+wired but is not relied on: spike F2 measured it not arriving in full screen.
+Never hide the menu without leaving a key that brings it back.
+
+## The icon
+
+Minecraft theme, drawn by `packaging/make_icon.py` as real pixel art on a 32x32
+grid — a blocky world, ocean and grass-block continents, lit from the top left.
+A world is what translation reaches across, and it is also what Minecraft calls
+a save.
+
+Four earlier drafts were thrown away rather than tweaked, and the reasons are
+worth keeping because they are all the same reason:
+
+| draft | why it failed |
+|---|---|
+| two speech bubbles facing each other | at icon size they read as a pair of eyes |
+| one bubble with a thick arrow | legible, but an arrow means convert / next / export / play |
+| one bubble with 가 and A | right meaning, but hand-plotted glyph bitmaps look hand-plotted |
+| a Minecraft sign with caption bars | clean, but it says "text", not "across languages" |
+
+Every draft was judged by rendering it at 16, 24, 32, 48, 64 and 128 px and
+looking at the small end first, because that is where an icon either works or
+does not.
+
+It reaches three places: the `.icns` in the `.app`, the `.ico` embedded in the
+Windows binary as a resource (so Explorer, the taskbar and the window all draw
+it), and the MSI's `Icon` table, which is what the desktop and Start-menu
+shortcuts and the Add/Remove Programs entry use.

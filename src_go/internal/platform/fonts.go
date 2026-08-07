@@ -38,3 +38,12 @@ func revealCommandFor(goos, path string) []string {
 		return []string{"xdg-open", path}
 	}
 }
+
+// MenuIsDrawnInWindow reports whether the toolkit paints the menu inside the
+// window rather than in a system menu bar.
+//
+// It decides one real behaviour: going full screen. macOS puts the menu in the
+// system bar, which full screen hides by itself. Windows and Linux draw it as
+// an overlay on the window, so full screen keeps it on screen — measured on
+// Windows on 2026-08-06, where the strip stayed over the captions.
+func MenuIsDrawnInWindow() bool { return runtimeGOOS() != "darwin" }

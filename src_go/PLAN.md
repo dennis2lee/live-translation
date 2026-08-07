@@ -917,14 +917,11 @@ Ticked lines were checked on 2026-08-05/06 and are recorded in
       rate and a second channel, neither of which is untested code — but it is
       the device that bit the Python build, so this stays named rather than
       ticked.
-- [~] **Windows, on real hardware — waived by Dennis, 2026-08-06.** No Windows
-      machine was available. The MSI ships in the 1.0.0 release **labelled
-      untested**, and the release notes say so. What is verified: it
-      cross-builds, imports Windows system DLLs only (the build fails if that
-      changes), and the MSI is structurally correct by `msiinfo`. What is not:
-      that it runs at all, and in particular whether **full screen covers the
-      taskbar** — the requirement that chose Fyne, still resting on documented
-      GLFW behaviour rather than on a measurement.
+- [x] **Windows, on real hardware — done 2026-08-06**, after the waiver, when
+      Dennis installed the MSI. **Full screen covers the taskbar**, so the
+      requirement that chose Fyne is measured rather than assumed. It also
+      exposed one defect: Fyne's in-window menu strip stayed over the captions,
+      now cleared while full screen with `f` as the way back out.
 - [x] `spikes/RESULTS.md` updated with Go measurements alongside Python's.
 
 At cutover: `CLAUDE.md` gains a Go section (SDK name, commands, layout),

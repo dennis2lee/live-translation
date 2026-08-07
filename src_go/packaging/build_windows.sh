@@ -39,9 +39,22 @@ for tool in x86_64-w64-mingw32-gcc wixl; do
   }
 done
 
+# The icon has to exist before the resource is compiled into the binary.
+python3 packaging/make_icon.py >/dev/null
+
 echo "building $APP_NAME $VERSION for windows/amd64"
 rm -rf "$DIST"
 mkdir -p "$STAGE"
+
+# Embed the icon in the executable itself, so Windows draws it on the window,
+# in the taskbar and in Explorer — the MSI's Icon element only reaches the
+# shortcuts. The .syso is picked up by the Go toolchain purely by living next
+# to the main package, and is removed again afterwards so it cannot leak into
+# a macOS build.
+SYSO="cmd/livecap/rsrc_windows_amd64.syso"
+trap 'rm -f "$SYSO"' EXIT
+go run github.com/akavel/rsrc@v0.10.2 \
+  -ico packaging/AppIcon.ico -arch amd64 -o "$SYSO"
 
 # -H=windowsgui keeps a console window from opening behind the app.
 CGO_ENABLED=1 GOOS=windows GOARCH=amd64 \
@@ -67,6 +80,7 @@ echo "  imports: Windows system DLLs only"
 
 # --- the MSI ---------------------------------------------------------------
 sed -e "s/@APP_NAME@/$APP_NAME/g" \
+    -e "s#@ICON@#$PWD/packaging/AppIcon.ico#g" \
     -e "s/@VERSION@/$VERSION/g" \
     -e "s/@MANUFACTURER@/$MANUFACTURER/g" \
     -e "s/@MANUFACTURER_KEY@/$MANUFACTURER_KEY/g" \
