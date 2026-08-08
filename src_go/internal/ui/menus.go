@@ -144,7 +144,7 @@ func newMenuBar(w *Window) *menuBar {
 	})
 
 	m.completeOnly = fyne.NewMenuItem("Complete Phrases Only (9)", func() {
-		w.update(func(s *config.Settings) { s.CompletePhrasesOnly = !s.CompletePhrasesOnly })
+		w.ToggleCompletePhrases()
 	})
 	m.fixedBox = fyne.NewMenuItem("Always Show Caption Box", func() {
 		w.update(func(s *config.Settings) { s.FixedBox = !s.FixedBox })

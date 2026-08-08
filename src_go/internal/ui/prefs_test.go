@@ -1,6 +1,7 @@
 package ui
 
 import (
+	"image/color"
 	"math"
 	"strconv"
 	"strings"
@@ -149,6 +150,9 @@ func TestApplyCollectsEveryTab(t *testing.T) {
 	p.vocabCaption.SetText("Pyeongwoo Lee")
 	p.fontSize.SetValue(56)
 	p.maxLines.SetSelected("2")
+	p.bgColour.set(color.NRGBA{R: 0x10, G: 0x20, B: 0x30, A: 0xFF})
+	p.boxColour.set(color.NRGBA{R: 0x2B, G: 0x5E, B: 0x94, A: 0xFF})
+	p.textColour.set(color.NRGBA{R: 0xFF, G: 0xE0, B: 0x00, A: 0xFF})
 	p.boxOpacity.SetValue(0.8)
 	p.cornerRadius.SetValue(12)
 	p.boxWidth.SetValue(80)
@@ -176,6 +180,9 @@ func TestApplyCollectsEveryTab(t *testing.T) {
 		{"VocabularyCaptions", s.VocabularyCaptions, "Pyeongwoo Lee"},
 		{"FontSize", s.FontSize, 56},
 		{"MaxLines", s.MaxLines, 2},
+		{"BgColor", s.BgColor, "#102030"},
+		{"BoxColor", s.BoxColor, "#2B5E94"},
+		{"TextColor", s.TextColor, "#FFE000"},
 		{"BoxOpacity", s.BoxOpacity, 0.8},
 		{"CornerRadius", s.CornerRadius, 12},
 		{"BoxMaxWidthPct", s.BoxMaxWidthPct, 80},
@@ -375,5 +382,19 @@ func TestMeterFollowsTheSessionBothWays(t *testing.T) {
 			t.Errorf("meterTransition(own=%v, observing=%v, session=%v) = %v, want %v",
 				c.ownMeter, c.observing, c.sessionRunning, got, c.want)
 		}
+	}
+}
+
+// The picker's alpha never reaches the stored colour: transparency belongs to
+// the Box opacity slider, exactly as in the Python dialog.
+func TestColourPickDropsAlpha(t *testing.T) {
+	w := newTestWindow(t)
+	p := openPrefs(t, w)
+	p.boxColour.set(color.NRGBA{R: 0x80, G: 0x40, B: 0x20, A: 0x30})
+	if p.boxColour.value != "#804020" {
+		t.Errorf("value = %q, want #804020", p.boxColour.value)
+	}
+	if p.boxColour.button.Text != "#804020" {
+		t.Errorf("button text = %q", p.boxColour.button.Text)
 	}
 }

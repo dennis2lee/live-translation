@@ -283,3 +283,30 @@ func TestFullScreenFunnel(t *testing.T) {
 		t.Error("a diverged window state was not forced back to the setting")
 	}
 }
+
+// The 9 key's only feedback is the hint under the caption box — the same style
+// the direction announcement uses. It must say which way the toggle went, and
+// it must show even with the direction hint turned off.
+func TestToggleCompletePhrasesShowsTheHint(t *testing.T) {
+	w := newTestWindow(t)
+	w.settings.ShowDirectionHint = false
+
+	w.ToggleCompletePhrases()
+	if !w.settings.CompletePhrasesOnly {
+		t.Fatal("the setting did not turn on")
+	}
+	if !strings.Contains(w.view.hintText, "on") {
+		t.Errorf("hint %q does not say the mode turned on", w.view.hintText)
+	}
+
+	w.ToggleCompletePhrases()
+	if w.settings.CompletePhrasesOnly {
+		t.Fatal("the setting did not turn back off")
+	}
+	if !strings.Contains(w.view.hintText, "off") {
+		t.Errorf("hint %q does not say the mode turned off", w.view.hintText)
+	}
+	if w.buffer.CompletePhrasesOnly() {
+		t.Error("the buffer did not follow the toggle")
+	}
+}

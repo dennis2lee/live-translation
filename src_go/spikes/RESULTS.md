@@ -818,3 +818,32 @@ It reaches three places: the `.icns` in the `.app`, the `.ico` embedded in the
 Windows binary as a resource (so Explorer, the taskbar and the window all draw
 it), and the MSI's `Icon` table, which is what the desktop and Start-menu
 shortcuts and the Add/Remove Programs entry use.
+
+## Colours in Preferences, and a hint for the 9 key (2026-08-08)
+
+Two gaps against the Python build, closed:
+
+**The colour controls did not survive the port.** `Settings` carried
+`bg_color`, `box_color` and `text_color` the whole time — validated, persisted,
+applied by the caption view — but the Appearance tab never grew the buttons, so
+the only way to change them was editing settings.json. `colourPick` is the Fyne
+counterpart of the Python `_ColorButton`: a swatch plus a button showing the
+hex value, opening `dialog.NewColorPicker` in advanced mode seeded with the
+current colour. As in the Python dialog, the picker's alpha is dropped — the
+box's transparency belongs to the Box opacity slider, and letting the picker
+smuggle in a second alpha would give two controls over one value.
+
+**The 9 key toggled complete-phrases mode silently.** Now
+`ToggleCompletePhrases` announces "Complete phrases only: on/off" under the
+caption box in the same style as the direction hint. Unlike the direction hint
+it is not gated on ShowDirectionHint: that setting quiets an announcement that
+repeats a menu click, while this is the only confirmation a bare keypress gets.
+The menu item routes through the same method.
+
+Verified in the running app, not only in tests: the hint appears and fades for
+both directions of the toggle; the three colour rows show their swatches; the
+picker opens titled and seeded; choosing a colour updates swatch and hex;
+Apply recolours the live caption box; Cancel puts the original colour back.
+The screen-driving lesson from this pass: a 2-second hint cannot be caught by
+type-then-screenshot across two tool calls — batch the keypress and the
+capture, or conclude falsely that the hint never showed.

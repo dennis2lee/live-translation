@@ -178,7 +178,7 @@ func (w *Window) bindKeys() {
 		case '2':
 			w.SetDirection(config.EnglishToKorean)
 		case '9':
-			w.update(func(s *config.Settings) { s.CompletePhrasesOnly = !s.CompletePhrasesOnly })
+			w.ToggleCompletePhrases()
 		case 'f', 'F':
 			// Full screen hides the menu on the platforms that draw it in the
 			// window, so this is the way back out — and the only reliable one,
@@ -265,6 +265,23 @@ func (w *Window) SetDirection(direction config.Direction) {
 func (w *Window) announceDirection() {
 	if w.settings.ShowDirectionHint {
 		w.view.ShowHint(config.DirectionLabelFor(w.settings.TargetLanguageCode), 0)
+	}
+}
+
+// ToggleCompletePhrases flips the mode and says so under the caption box, in
+// the same style as the direction hint. The 9 key gives no other feedback, and
+// a mode that silently changes what the captions withhold looks like a caption
+// bug when the key is hit by accident.
+//
+// Unlike the direction hint this is not gated on ShowDirectionHint: that
+// setting quiets an announcement that repeats what was just clicked in a menu,
+// while this one is the only confirmation a bare keypress gets.
+func (w *Window) ToggleCompletePhrases() {
+	w.update(func(s *config.Settings) { s.CompletePhrasesOnly = !s.CompletePhrasesOnly })
+	if w.settings.CompletePhrasesOnly {
+		w.view.ShowHint("Complete phrases only: on", 0)
+	} else {
+		w.view.ShowHint("Complete phrases only: off", 0)
 	}
 }
 

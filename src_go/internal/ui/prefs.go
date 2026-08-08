@@ -2,12 +2,14 @@ package ui
 
 import (
 	"fmt"
+	"image/color"
 	"log/slog"
 	"math"
 	"strconv"
 	"time"
 
 	"fyne.io/fyne/v2"
+	"fyne.io/fyne/v2/canvas"
 	"fyne.io/fyne/v2/container"
 	"fyne.io/fyne/v2/dialog"
 	"fyne.io/fyne/v2/widget"
@@ -57,6 +59,10 @@ type prefsDialog struct {
 	runTest      *widget.Button
 	vocabSource  *widget.Entry
 	vocabCaption *widget.Entry
+
+	bgColour   *colourPick
+	boxColour  *colourPick
+	textColour *colourPick
 
 	fontSize      *widget.Slider
 	maxLines      *widget.Select
@@ -278,7 +284,47 @@ func (p *prefsDialog) vocabularyTab() fyne.CanvasObject {
 	)
 }
 
+// colourPick is a swatch and a button that opens the colour picker — the Fyne
+// counterpart of the Python build's _ColorButton. The alpha channel is not
+// collected: the box's transparency is the Box opacity slider, exactly as in
+// the Python dialog, where the picker's alpha only fed the preview.
+type colourPick struct {
+	value  string // #RRGGBB, uppercase
+	swatch *canvas.Rectangle
+	button *widget.Button
+	root   fyne.CanvasObject
+}
+
+func (p *prefsDialog) newColourPick(title, initial string) *colourPick {
+	c := &colourPick{value: initial}
+	c.swatch = canvas.NewRectangle(parseHex(initial, color.NRGBA{A: 0xFF}))
+	c.swatch.SetMinSize(fyne.NewSize(36, 0))
+	c.swatch.CornerRadius = 4
+	c.button = widget.NewButton(initial, func() {
+		d := dialog.NewColorPicker(title, "", func(chosen color.Color) {
+			c.set(chosen)
+		}, p.win.win)
+		d.Advanced = true
+		d.SetColor(parseHex(c.value, color.NRGBA{A: 0xFF}))
+		d.Show()
+	})
+	c.root = container.NewBorder(nil, nil, c.swatch, nil, c.button)
+	return c
+}
+
+func (c *colourPick) set(chosen color.Color) {
+	nrgba := color.NRGBAModel.Convert(chosen).(color.NRGBA)
+	c.value = fmt.Sprintf("#%02X%02X%02X", nrgba.R, nrgba.G, nrgba.B)
+	c.swatch.FillColor = parseHex(c.value, color.NRGBA{A: 0xFF})
+	c.swatch.Refresh()
+	c.button.SetText(c.value)
+}
+
 func (p *prefsDialog) appearanceTab() fyne.CanvasObject {
+	p.bgColour = p.newColourPick("Background colour", p.working.BgColor)
+	p.boxColour = p.newColourPick("Caption box colour", p.working.BoxColor)
+	p.textColour = p.newColourPick("Text colour", p.working.TextColor)
+
 	p.fontSize = widget.NewSlider(24, 96)
 	p.fontSize.Step = 2
 	p.fontSize.SetValue(float64(p.working.FontSize))
@@ -315,6 +361,9 @@ func (p *prefsDialog) appearanceTab() fyne.CanvasObject {
 	form := widget.NewForm(
 		widget.NewFormItem("Font size", container.NewBorder(nil, nil, nil, fontLabel, p.fontSize)),
 		widget.NewFormItem("Caption lines", p.maxLines),
+		widget.NewFormItem("Background colour", p.bgColour.root),
+		widget.NewFormItem("Caption box colour", p.boxColour.root),
+		widget.NewFormItem("Text colour", p.textColour.root),
 		widget.NewFormItem("Box opacity", p.boxOpacity),
 		widget.NewFormItem("Corner radius", p.cornerRadius),
 		widget.NewFormItem("Box width %", p.boxWidth),
@@ -377,6 +426,9 @@ func (p *prefsDialog) collect() config.Settings {
 	if n, err := strconv.Atoi(p.maxLines.Selected); err == nil {
 		s.MaxLines = n
 	}
+	s.BgColor = p.bgColour.value
+	s.BoxColor = p.boxColour.value
+	s.TextColor = p.textColour.value
 	s.BoxOpacity = p.boxOpacity.Value
 	s.CornerRadius = int(p.cornerRadius.Value)
 	s.BoxMaxWidthPct = int(p.boxWidth.Value)
