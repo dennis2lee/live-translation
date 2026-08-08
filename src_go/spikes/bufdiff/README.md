@@ -28,4 +28,12 @@ One trap, found the first time this ran: `captions.Options` treats a zero
 builds a bare `Options{}` hits the difference — pass
 `captions.ClearAfterSeconds` explicitly.
 
+**Deliberate deviations.** Since 2026-08-08 the Go buffer departs from the
+frozen reference in three named ways, listed and applied at runtime in
+`deviations.py` — a full stop settles by abbreviation rather than by length, a
+backlog is paced in two tiers instead of dumped, and complete-phrases mode shows
+the text in progress rather than an empty box. `ref.py` applies them by default
+so the harness still reports only the divergences nobody intended; pass
+`--no-deviations` to compare against untouched 0.5.1 behaviour.
+
 Result recorded in spikes/RESULTS.md.

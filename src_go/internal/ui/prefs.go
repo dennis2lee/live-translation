@@ -6,6 +6,7 @@ import (
 	"log/slog"
 	"math"
 	"strconv"
+	"strings"
 	"time"
 
 	"fyne.io/fyne/v2"
@@ -284,23 +285,117 @@ func (p *prefsDialog) vocabularyTab() fyne.CanvasObject {
 	)
 }
 
-// colourPick is a swatch and a button that opens the colour picker — the Fyne
-// counterpart of the Python build's _ColorButton. The alpha channel is not
-// collected: the box's transparency is the Box opacity slider, exactly as in
-// the Python dialog, where the picker's alpha only fed the preview.
-type colourPick struct {
-	value  string // #RRGGBB, uppercase
-	swatch *canvas.Rectangle
-	button *widget.Button
-	root   fyne.CanvasObject
+// Named colour presets, so choosing a caption colour is picking from a row of
+// swatches rather than driving RGB sliders. The full picker is still one click
+// away for anyone who wants an exact value.
+//
+// The palettes are per role because the useful choices differ: a background is
+// dark or it competes with the captions, and caption text has to stay legible
+// on the box.
+type preset struct {
+	name string
+	hex  string
 }
 
-func (p *prefsDialog) newColourPick(title, initial string) *colourPick {
-	c := &colourPick{value: initial}
-	c.swatch = canvas.NewRectangle(parseHex(initial, color.NRGBA{A: 0xFF}))
-	c.swatch.SetMinSize(fyne.NewSize(36, 0))
-	c.swatch.CornerRadius = 4
-	c.button = widget.NewButton(initial, func() {
+var (
+	bgPresets = []preset{
+		{"Black", "#000000"}, {"Charcoal", "#1C1C1E"}, {"Navy", "#0B1D33"},
+		{"Deep green", "#0C2018"}, {"Deep plum", "#1A0F1F"}, {"White", "#FFFFFF"},
+	}
+	boxPresets = []preset{
+		{"Ocean", "#1B4965"}, {"Black", "#000000"}, {"Slate", "#2C3440"},
+		{"Forest", "#1E3A2F"}, {"Wine", "#4A1220"}, {"Indigo", "#2A2A5A"},
+	}
+	textPresets = []preset{
+		{"White", "#FFFFFF"}, {"Soft white", "#EDEDED"}, {"Warm", "#FFE9C7"},
+		{"Yellow", "#FFD34D"}, {"Mint", "#B9F5D0"}, {"Black", "#000000"},
+	}
+)
+
+// swatch is a tappable block of colour. Fyne has no colour-well widget and a
+// Button paints its own background over anything stacked behind it, so this is
+// the smallest thing that can show a colour and be clicked.
+type swatch struct {
+	widget.BaseWidget
+	fill     color.NRGBA
+	selected bool
+	tooltip  string
+	onTap    func()
+}
+
+func newSwatch(hex, tooltip string, onTap func()) *swatch {
+	s := &swatch{
+		fill:    parseHex(hex, color.NRGBA{A: 0xFF}),
+		tooltip: tooltip,
+		onTap:   onTap,
+	}
+	s.ExtendBaseWidget(s)
+	return s
+}
+
+func (s *swatch) Tapped(*fyne.PointEvent) {
+	if s.onTap != nil {
+		s.onTap()
+	}
+}
+
+func (s *swatch) CreateRenderer() fyne.WidgetRenderer {
+	block := canvas.NewRectangle(s.fill)
+	block.CornerRadius = 5
+	block.StrokeWidth = 3
+	return &swatchRenderer{sw: s, block: block}
+}
+
+type swatchRenderer struct {
+	sw    *swatch
+	block *canvas.Rectangle
+}
+
+func (r *swatchRenderer) Layout(size fyne.Size)        { r.block.Resize(size) }
+func (r *swatchRenderer) MinSize() fyne.Size           { return fyne.NewSize(40, 28) }
+func (r *swatchRenderer) Objects() []fyne.CanvasObject { return []fyne.CanvasObject{r.block} }
+func (r *swatchRenderer) Destroy()                     {}
+
+func (r *swatchRenderer) Refresh() {
+	r.block.FillColor = r.sw.fill
+	// The tick a checkbox would use is not readable at this size, so selection
+	// is a ring — visible against a swatch of any colour.
+	if r.sw.selected {
+		r.block.StrokeColor = color.NRGBA{R: 0x4D, G: 0x9E, B: 0xFF, A: 0xFF}
+	} else {
+		r.block.StrokeColor = color.NRGBA{R: 0x80, G: 0x80, B: 0x80, A: 0x60}
+	}
+	r.block.Refresh()
+}
+
+// colourPick is a row of presets, a live preview of the value in force, and a
+// Custom… button for the full picker.
+type colourPick struct {
+	value    string // #RRGGBB, uppercase
+	presets  []preset
+	swatches []*swatch
+	current  *canvas.Rectangle
+	label    *widget.Label
+	root     fyne.CanvasObject
+}
+
+func (p *prefsDialog) newColourPick(title, initial string, presets []preset) *colourPick {
+	c := &colourPick{value: normaliseHex(initial), presets: presets}
+
+	row := container.NewHBox()
+	for _, pre := range presets {
+		hex := pre.hex
+		sw := newSwatch(hex, pre.name, func() { c.setHex(hex) })
+		c.swatches = append(c.swatches, sw)
+		row.Add(sw)
+	}
+
+	c.current = canvas.NewRectangle(parseHex(c.value, color.NRGBA{A: 0xFF}))
+	c.current.SetMinSize(fyne.NewSize(28, 28))
+	c.current.CornerRadius = 5
+	c.label = widget.NewLabel(c.value)
+
+	custom := widget.NewButton("Custom…", func() {
 		d := dialog.NewColorPicker(title, "", func(chosen color.Color) {
 			c.set(chosen)
 		}, p.win.win)
@@ -308,22 +403,42 @@ func (p *prefsDialog) newColourPick(title, initial string) *colourPick {
 		d.SetColor(parseHex(c.value, color.NRGBA{A: 0xFF}))
 		d.Show()
 	})
-	c.root = container.NewBorder(nil, nil, c.swatch, nil, c.button)
+
+	// The hex label sits between the presets and the preview: with the preview
+	// butted straight against the row it read as a seventh preset.
+	c.root = container.NewHBox(row, c.label, c.current, custom)
+	c.refresh()
 	return c
 }
 
 func (c *colourPick) set(chosen color.Color) {
 	nrgba := color.NRGBAModel.Convert(chosen).(color.NRGBA)
-	c.value = fmt.Sprintf("#%02X%02X%02X", nrgba.R, nrgba.G, nrgba.B)
-	c.swatch.FillColor = parseHex(c.value, color.NRGBA{A: 0xFF})
-	c.swatch.Refresh()
-	c.button.SetText(c.value)
+	c.setHex(fmt.Sprintf("#%02X%02X%02X", nrgba.R, nrgba.G, nrgba.B))
 }
 
+func (c *colourPick) setHex(hex string) {
+	c.value = normaliseHex(hex)
+	c.refresh()
+}
+
+// refresh repaints the preview and rings whichever preset is in force. A
+// custom value simply rings nothing, which is the honest thing to show.
+func (c *colourPick) refresh() {
+	c.current.FillColor = parseHex(c.value, color.NRGBA{A: 0xFF})
+	c.current.Refresh()
+	c.label.SetText(c.value)
+	for i, sw := range c.swatches {
+		sw.selected = c.presets[i].hex == c.value
+		sw.Refresh()
+	}
+}
+
+func normaliseHex(v string) string { return strings.ToUpper(strings.TrimSpace(v)) }
+
 func (p *prefsDialog) appearanceTab() fyne.CanvasObject {
-	p.bgColour = p.newColourPick("Background colour", p.working.BgColor)
-	p.boxColour = p.newColourPick("Caption box colour", p.working.BoxColor)
-	p.textColour = p.newColourPick("Text colour", p.working.TextColor)
+	p.bgColour = p.newColourPick("Background colour", p.working.BgColor, bgPresets)
+	p.boxColour = p.newColourPick("Caption box colour", p.working.BoxColor, boxPresets)
+	p.textColour = p.newColourPick("Text colour", p.working.TextColor, textPresets)
 
 	p.fontSize = widget.NewSlider(24, 96)
 	p.fontSize.Step = 2

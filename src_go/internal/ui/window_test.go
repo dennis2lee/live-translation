@@ -3,6 +3,7 @@ package ui
 import (
 	"errors"
 	"image"
+	"math"
 	"strings"
 	"testing"
 	"time"
@@ -308,5 +309,35 @@ func TestToggleCompletePhrasesShowsTheHint(t *testing.T) {
 	}
 	if w.buffer.CompletePhrasesOnly() {
 		t.Error("the buffer did not follow the toggle")
+	}
+}
+
+// SpeechPeak decides whether the buffer believes anybody is talking, and that
+// decision is what keeps captions on screen between sentences. It was set at
+// -26 dBFS, above the level people actually speak at, so the guard never fired
+// and the captions cleared under a talking speaker. Pin it against the
+// measurements that set it (spikes/RESULTS.md, the level meter, 2026-08-06).
+func TestSpeechPeakSitsBetweenSpeechAndAQuietRoom(t *testing.T) {
+	dbfs := func(v float64) float64 { return 20 * math.Log10(v) }
+
+	const (
+		quietestSpeech = -38.4 // speech into the built-in mic
+		loudestQuiet   = -53.0 // the same room with nobody talking
+	)
+	got := dbfs(SpeechPeak)
+	if got >= quietestSpeech {
+		t.Errorf("SpeechPeak is %.1f dBFS, at or above the quietest measured "+
+			"speech (%.1f) — speech would read as silence", got, quietestSpeech)
+	}
+	if got <= loudestQuiet {
+		t.Errorf("SpeechPeak is %.1f dBFS, at or below a quiet room (%.1f) — "+
+			"room tone would read as speech and captions would never clear",
+			got, loudestQuiet)
+	}
+	// And it must stay above the dead-input threshold, or the two checks
+	// disagree about what silence is.
+	if SpeechPeak <= SilentInputPeak {
+		t.Errorf("SpeechPeak %.4f is not above SilentInputPeak %.4f",
+			SpeechPeak, SilentInputPeak)
 	}
 }

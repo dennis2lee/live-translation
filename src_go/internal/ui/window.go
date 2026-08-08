@@ -34,9 +34,19 @@ const (
 
 	// SpeechPeak: above this the input counts as somebody speaking, which holds
 	// the captions on screen even while the model has stopped sending
-	// fragments. Well clear of the −36 dBFS a quiet room reads, so room noise
-	// does not keep stale captions up for ever.
-	SpeechPeak = 0.05 // about −26 dBFS
+	// fragments.
+	//
+	// This was 0.05 (−26 dBFS) in both builds and it was **above the level
+	// people actually speak at**, so the guard never fired: measured with the
+	// Preferences level meter on 2026-08-06, speech into the built-in
+	// microphone peaked −32.7 to −38.4 dBFS, and CLAUDE.md records −36. The
+	// buffer therefore believed the room was silent throughout a sermon and
+	// wiped the captions on the 2 s timer between sentences — the reported
+	// "captions go blank while I am still talking".
+	//
+	// −45 dBFS sits in the measured gap: about 7 dB below the quietest speech
+	// and 8 dB above the loudest reading from a quiet room (−53 to −73).
+	SpeechPeak = 0.0056 // about −45 dBFS
 )
 
 // FontSizeChoices and LineCountChoices are the menu presets.

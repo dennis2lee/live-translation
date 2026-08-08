@@ -847,3 +847,70 @@ Apply recolours the live caption box; Cancel puts the original colour back.
 The screen-driving lesson from this pass: a 2-second hint cannot be caught by
 type-then-screenshot across two tool calls — batch the keypress and the
 capture, or conclude falsely that the hint never showed.
+
+## Seven caption observations from a 67-minute session (2026-08-08)
+
+Reported after a real sermon in complete-phrases mode. `spikes/capscenario`
+replays sessions against the real buffer on the same 100 ms tick the window
+uses, with audio peaks at measured speech levels, and reports what the reader
+would have seen. Five of the seven reproduced; one was already correct; one was
+not a defect at all.
+
+| # | Observation | Verdict |
+|---|---|---|
+| 1 | clear 2 s after the backlog drains in silence | **already correct** — measured 2.0 s |
+| 2 | a full stop sometimes shows at once, sometimes not | **reproduced** — 13-rune sentence +1.2 s, 69-rune +0.1 s |
+| 3 | settled sentences arrive in a batch | **reproduced** — 2 of 5 never displayed |
+| 4 | the box width is not used | **reproduced** — rows filled 57–87%, one at 12% |
+| 5 | the previous sentence is wiped mid-talk | **reproduced** |
+| 6 | captions vanish while a long sentence arrives | **reproduced** |
+| 7 | reconnects in the transcript | **not a defect** — see below |
+
+**The root cause of 5 and 6 was a threshold, and the level-meter work is what
+made it visible.** `SpeechPeak` was 0.05 — **−26 dBFS, above the level people
+actually speak at.** Measured speech into the built-in microphone peaks −32.7
+to −38.4 dBFS, and CLAUDE.md has recorded −36 since the Python build. So
+`peak >= SpeechPeak` was essentially never true, the buffer believed the room
+was silent throughout a sermon, and the "somebody is talking, do not clear"
+guard never once engaged. Both builds shipped this. Now 0.0056 (−45 dBFS),
+which sits in the measured gap: 7 dB below the quietest speech, 8 dB above the
+loudest reading from a quiet room. `TestSpeechPeakSitsBetweenSpeechAndAQuietRoom`
+pins it to those measurements rather than to a number somebody liked.
+
+**2 — a full stop that worked only sometimes.** In complete-phrases mode a full
+stop needed 20 runes behind it (`MinSentenceChars`), so "Yes, I agree." waited
+out the 1.2 s idle timer while a long sentence appeared immediately. The length
+rule was a proxy for "is this an abbreviation"; `endsWithAbbreviation` asks that
+question directly, from a deliberately short list plus the single-letter initial
+case. Applied in both modes now — the transcript was getting "Dr." on a line of
+its own.
+
+**3 — a burst skipped lines.** Past `max_lines` behind, the release stopped
+pacing entirely and drained the whole queue in one pass, so intermediate lines
+entered `committed` and left it inside a single repaint. They reached the
+transcript, which is what made it hard to see. Pacing is now two-tier: half the
+hold up to `CatchUpFactor*max_lines` behind, and only beyond that the old
+dump. **The latency bound is unchanged** — the queue is still bounded after
+every tick, at `CatchUpFactor*max_lines` instead of `max_lines`, and the fuzz
+invariant was updated to state that rather than quietly dropped.
+
+**4 — every sentence wasted a row.** The view wrapped each committed sentence
+as its own block, so each one's tail sat on a part-empty row. Reflowing the
+settled sentences as one paragraph: 6 rows → 5 for the same three sentences,
+mean fill 78.5%. A real gain, not a dramatic one — the remaining slack is
+ordinary greedy word wrap at 44 px.
+
+**6 — an empty box says nothing.** Complete-phrases mode withheld unsettled
+text unconditionally, so a long sentence left the box blank for as long as it
+took to translate. It now shows the text in progress **when there is no settled
+line on screen**: there is nothing to protect from rewriting, and blank is
+strictly worse. The moment a settled line exists it withholds again.
+
+**7 — the reconnects are the API, not the app.** Seven in 67 minutes, at 09:00,
+18:01, 27:01, 36:01, 45:03, 54:04 and 01:03:04 — one every nine minutes, which
+is exactly the `go_away` cadence CLAUDE.md records from the Python spikes. Gaps
+373–870 ms, against 370–459 ms measured then. Nothing in the transcript is lost
+across them. This is the server ending a session on schedule and the client
+swapping in a new one, which is what the resumption handling is for.
+
+Scenario verdicts after the fixes: all five green.

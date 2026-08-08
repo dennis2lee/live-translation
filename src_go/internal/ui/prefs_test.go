@@ -394,7 +394,63 @@ func TestColourPickDropsAlpha(t *testing.T) {
 	if p.boxColour.value != "#804020" {
 		t.Errorf("value = %q, want #804020", p.boxColour.value)
 	}
-	if p.boxColour.button.Text != "#804020" {
-		t.Errorf("button text = %q", p.boxColour.button.Text)
+	if p.boxColour.label.Text != "#804020" {
+		t.Errorf("label = %q", p.boxColour.label.Text)
+	}
+}
+
+// Choosing a colour must be one click on a swatch, not a trip through RGB
+// sliders — and the swatch in force has to be the one that reads as chosen.
+func TestColourPresetsAreOneClick(t *testing.T) {
+	w := newTestWindow(t)
+	p := openPrefs(t, w)
+
+	if len(p.boxColour.swatches) != len(boxPresets) {
+		t.Fatalf("%d swatches for %d presets", len(p.boxColour.swatches), len(boxPresets))
+	}
+	// The default is the first box preset, so it starts ringed.
+	if !p.boxColour.swatches[0].selected {
+		t.Errorf("the preset in force is not marked selected (value %q)", p.boxColour.value)
+	}
+
+	p.boxColour.swatches[3].Tapped(nil)
+	if p.boxColour.value != boxPresets[3].hex {
+		t.Errorf("tapping a swatch set %q, want %q", p.boxColour.value, boxPresets[3].hex)
+	}
+	if p.boxColour.swatches[0].selected || !p.boxColour.swatches[3].selected {
+		t.Error("the ring did not move to the swatch that was tapped")
+	}
+
+	// A custom value rings nothing rather than lying about which preset is on.
+	p.boxColour.setHex("#123456")
+	for i, sw := range p.boxColour.swatches {
+		if sw.selected {
+			t.Errorf("swatch %d still ringed for a custom value", i)
+		}
+	}
+
+	// And it still survives Apply.
+	p.apply()
+	if w.settings.BoxColor != "#123456" {
+		t.Errorf("BoxColor = %q", w.settings.BoxColor)
+	}
+}
+
+// Every preset must be a colour the settings layer will accept, or a click
+// would silently fall back to the default.
+func TestPresetsAreValidHex(t *testing.T) {
+	for _, set := range [][]preset{bgPresets, boxPresets, textPresets} {
+		for _, pre := range set {
+			if got := config.Default().Clamped(); got.BgColor == "" {
+				t.Fatal("unexpected")
+			}
+			s := config.Default()
+			s.BgColor, s.BoxColor, s.TextColor = pre.hex, pre.hex, pre.hex
+			c := s.Clamped()
+			if c.BgColor != pre.hex || c.BoxColor != pre.hex || c.TextColor != pre.hex {
+				t.Errorf("preset %q (%s) did not survive Clamped: %q",
+					pre.name, pre.hex, c.BgColor)
+			}
+		}
 	}
 }

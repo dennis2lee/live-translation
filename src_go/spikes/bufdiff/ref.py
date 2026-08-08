@@ -8,12 +8,22 @@ against the Go harness's output.
 
 import importlib.util
 import json
+import pathlib
 import sys
 
 spec = importlib.util.spec_from_file_location("caption_buffer", sys.argv[1])
 cb = importlib.util.module_from_spec(spec)
 sys.modules["caption_buffer"] = cb  # dataclasses resolve types via sys.modules
 spec.loader.exec_module(cb)
+
+# The Go buffer deliberately departs from the frozen reference in three ways
+# (spikes/bufdiff/deviations.py). Apply them here so bufdiff keeps reporting
+# only the divergences nobody intended. Pass --no-deviations to compare against
+# the untouched 0.5.1 behaviour.
+if "--no-deviations" not in sys.argv:
+    sys.path.insert(0, str(pathlib.Path(__file__).parent))
+    import deviations
+    deviations.apply(cb)
 
 buf = cb.CaptionBuffer()
 SPEECH = {"unknown": None, "quiet": False, "active": True}

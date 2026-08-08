@@ -1,6 +1,7 @@
 package captions
 
 import (
+	"fmt"
 	"math/rand"
 	"reflect"
 	"strings"
@@ -117,14 +118,15 @@ func TestBurstIsReleasedOneLineAtATime(t *testing.T) {
 		b.Feed(s, 0.01)
 	}
 	// Two go straight on screen because there was room; the rest are paced.
-	// The queue holds two rather than three: once it runs more than max_lines
-	// behind it releases one immediately, since pacing a backlog that deep
-	// would put the display further behind the audio than it can recover from.
+	// The queue holds three: past max_lines the hold halves so every line is
+	// still drawn, and only past CatchUpFactor*max_lines is the backlog
+	// released in one pass. Five sentences into a two-line box sits inside
+	// that band, which is the case the reader actually hit.
 	if got := len(b.DisplayLines()); got != 2 {
 		t.Fatalf("display holds %d lines, want 2", got)
 	}
-	if got := len(b.QueuedLines()); got != 2 {
-		t.Fatalf("queue holds %d lines, want 2", got)
+	if got := len(b.QueuedLines()); got != 3 {
+		t.Fatalf("queue holds %d lines, want 3", got)
 	}
 
 	// Every one of them still reaches the transcript.
@@ -154,13 +156,23 @@ func TestLineIsHeldForItsFullHoldTime(t *testing.T) {
 
 func TestCompletePhrasesWithholdsUnsettledText(t *testing.T) {
 	b := incremental(Options{CompletePhrasesOnly: true, ClearAfterSeconds: 0})
+	// With nothing settled yet the text in progress is shown rather than an
+	// empty box — withholding it there protects nothing and tells the reader
+	// nothing. See TestPendingShowsRatherThanABlankBox.
 	b.Feed("Revenue is up", 0)
-	if got := b.DisplayLines(); len(got) != 0 {
-		t.Errorf("display = %v, want nothing while the phrase is unsettled", got)
+	if got := b.DisplayLines(); len(got) != 1 || got[0].Settled {
+		t.Errorf("display = %v, want the unsettled text on an empty screen", got)
 	}
 	b.Feed(" fourteen percent this quarter.", 0.5)
 	if got := texts(b.DisplayLines()); len(got) != 1 {
 		t.Errorf("display = %q, want the settled sentence", got)
+	}
+	// Now that a settled line is on screen, the mode withholds again.
+	b.Feed(" And the next sentence begins", 1.0)
+	for _, l := range b.DisplayLines() {
+		if !l.Settled {
+			t.Errorf("unsettled text %q shown alongside a settled line", l.Text)
+		}
 	}
 }
 
@@ -172,11 +184,15 @@ func TestAbbreviationDoesNotSettleInCompletePhrasesMode(t *testing.T) {
 	if len(b.QueuedLines())+len(b.CommittedLines()) != 0 {
 		t.Error("an abbreviation settled a fragment as a sentence")
 	}
-	// Outside the mode the same fragment settles, as it always did.
+	// This used to assert the opposite outside complete-phrases mode, because
+	// the guard was a blanket 20-rune minimum that only that mode consulted.
+	// The guard is now abbreviation detection, and an abbreviation is not a
+	// sentence in either mode — the transcript was getting "Dr." on a line of
+	// its own, which no reader asked for.
 	plain := incremental(Options{ClearAfterSeconds: 0})
 	plain.Feed("Dr.", 0)
-	if len(plain.CommittedLines()) != 1 {
-		t.Error("default mode should still settle on a full stop")
+	if len(plain.QueuedLines())+len(plain.CommittedLines()) != 0 {
+		t.Error("an abbreviation settled outside complete-phrases mode")
 	}
 }
 
@@ -325,19 +341,23 @@ func TestFuzzInvariantsHold(t *testing.T) {
 				if b.IsEmpty() && len(b.DisplayLines()) > 0 {
 					t.Fatalf("step %d: IsEmpty but display is %v", step, b.DisplayLines())
 				}
+				// Complete-phrases mode withholds unsettled text whenever
+				// there is a settled line to protect. On an otherwise empty
+				// screen it shows it instead of nothing.
 				if mode {
-					for _, l := range b.DisplayLines() {
-						if !l.Settled {
-							t.Fatalf("step %d: unsettled text shown in complete-phrases mode", step)
+					lines := b.DisplayLines()
+					for _, l := range lines {
+						if !l.Settled && len(lines) != 1 {
+							t.Fatalf("step %d: unsettled text shown beside settled lines", step)
 						}
 					}
 				}
 
-				// The queue is bounded by max_lines once the display has caught
-				// up. Shrinking max_lines exceeds it until the next tick, which
-				// is why this ticks before asserting.
+				// The queue is bounded by CatchUpFactor*max_lines once the
+				// display has caught up. Shrinking max_lines exceeds it until
+				// the next tick, which is why this ticks before asserting.
 				b.Tick(now, SpeechUnknown)
-				if got := len(b.QueuedLines()); got > b.MaxLines() {
+				if got := len(b.QueuedLines()); got > b.MaxLines()*CatchUpFactor {
 					t.Fatalf("step %d: queue still holds %d after a tick", step, got)
 				}
 				// newCommits is drained every step above, so it must never grow.
@@ -349,5 +369,96 @@ func TestFuzzInvariantsHold(t *testing.T) {
 				t.Error("20000 steps recorded nothing — the fuzz is not exercising anything")
 			}
 		})
+	}
+}
+
+// A full stop settles the sentence whatever its length. The old rule needed 20
+// runes behind the stop, so a short sentence waited out the idle timer while a
+// long one appeared at once — a full stop that worked only sometimes.
+func TestShortSentenceSettlesOnItsFullStop(t *testing.T) {
+	b := New(Options{MaxLines: 3, Policy: PolicyIncremental, CompletePhrasesOnly: true})
+	b.Feed("Yes, I agree.", 1.0)
+	if got := b.PendingText(); got != "" {
+		t.Errorf("pending = %q — the full stop did not settle it", got)
+	}
+	if lines := b.DisplayLines(); len(lines) != 1 || !lines[0].Settled {
+		t.Errorf("display = %+v, want one settled line", lines)
+	}
+}
+
+// …but an abbreviation still must not, or "Dr." settles two words as a
+// sentence with nothing on screen to hint that more is coming.
+func TestAbbreviationDoesNotSettle(t *testing.T) {
+	cases := []struct {
+		text   string
+		settle bool
+	}{
+		{"Thank you, Dr.", false},
+		{"He asked Mr.", false},
+		{"Signed, J.", false}, // an initial
+		{"Chapter 3 vs.", false},
+		{"Yes.", true},
+		{"It is ready.", true},
+		{"Is it ready?", true},
+		{"Stop!", true},
+		{"The doctor arrived.", true}, // "doctor" spelled out is not "Dr."
+	}
+	for _, c := range cases {
+		b := New(Options{MaxLines: 3, Policy: PolicyIncremental, CompletePhrasesOnly: true})
+		b.Feed(c.text, 1.0)
+		settled := b.PendingText() == ""
+		if settled != c.settle {
+			t.Errorf("%q settled=%v, want %v", c.text, settled, c.settle)
+		}
+	}
+}
+
+// A burst must not skip lines. Releasing the whole backlog at once put the
+// middle sentences into committed and straight back out inside one repaint —
+// they reached the transcript and never reached the reader.
+func TestBurstShowsEveryLine(t *testing.T) {
+	b := New(Options{MaxLines: 2, Policy: PolicyIncremental,
+		LineHoldSeconds: LineHoldSeconds, ClearAfterSeconds: 0})
+	seen := map[string]bool{}
+	record := func() {
+		for _, l := range b.DisplayLines() {
+			seen[l.Text] = true
+		}
+	}
+	for i := 1; i <= 5; i++ {
+		b.Feed(fmt.Sprintf(" Sentence number %d here.", i), 1.0)
+		record()
+	}
+	for now := 1.0; now < 8.0; now += 0.1 {
+		b.Tick(now, SpeechQuiet)
+		record()
+	}
+	for i := 1; i <= 5; i++ {
+		if want := fmt.Sprintf("Sentence number %d here.", i); !seen[want] {
+			t.Errorf("%q was never displayed", want)
+		}
+	}
+}
+
+// Complete-phrases mode withholds unsettled text — except when withholding it
+// would leave the box empty, which tells the reader nothing and was the
+// reported "captions disappear while a long sentence is translated".
+func TestPendingShowsRatherThanABlankBox(t *testing.T) {
+	b := New(Options{MaxLines: 3, Policy: PolicyIncremental, CompletePhrasesOnly: true})
+
+	b.Feed(" A long sentence that is still being", 1.0)
+	lines := b.DisplayLines()
+	if len(lines) != 1 || lines[0].Settled {
+		t.Fatalf("display = %+v, want the unsettled text rather than nothing", lines)
+	}
+
+	// Once a settled line exists there is something to protect, so the
+	// unsettled text is withheld again.
+	b.Feed(" translated right now.", 2.0)
+	b.Feed(" And more text arriving", 3.0)
+	for _, l := range b.DisplayLines() {
+		if !l.Settled {
+			t.Errorf("unsettled text %q was shown alongside a settled line", l.Text)
+		}
 	}
 }

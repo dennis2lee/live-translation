@@ -38,12 +38,15 @@ const (
 	// would keep resetting the clear countdown for ever.
 	MaxClearWaitSeconds = 15.0
 
-	// MinSentenceChars is how much text a full stop needs behind it before it
-	// ends a sentence. Abbreviations — "Dr.", "vs.", "Mr." — otherwise settle
-	// a two-word fragment as though it were a whole sentence. Only consulted
-	// in complete-phrases mode, where a premature commit is what the reader
-	// actually sees. Counted in runes, not bytes: Korean would otherwise clear
-	// the bar in seven characters.
+	// MinSentenceChars is retained for the transcript's own use and for the
+	// Python reference's behaviour; it no longer gates a full stop.
+	//
+	// It used to: in complete-phrases mode a full stop only ended a sentence
+	// with 20 runes behind it, so "Yes, I agree." could not settle on its full
+	// stop and waited out the 1.2 s idle timer instead. That is the reported
+	// "sometimes the full stop shows, sometimes it does not" — the difference
+	// was the length of the sentence, which is not something a reader can see.
+	// endsASentence now looks at the word before the stop instead.
 	MinSentenceChars = 20
 
 	// DuplicateWindowSeconds is how soon an identical fragment counts as the
@@ -52,6 +55,13 @@ const (
 	// (spikes/RESULTS.md), so this sits far below any real repeat — " the"
 	// twice in one sentence is ordinary English and must not be swallowed.
 	DuplicateWindowSeconds = 0.25
+
+	// CatchUpFactor bounds the backlog. Up to max_lines behind, settled lines
+	// are paced at the full hold; up to CatchUpFactor*max_lines behind, at half
+	// the hold, so each is still drawn; beyond that the backlog is released in
+	// one pass and the oldest lines are lost from the screen — never from the
+	// transcript, which DrainNewCommits keeps independent of the display.
+	CatchUpFactor = 2
 
 	autoSampleSize     = 8
 	autoUtteranceChars = 25
@@ -122,8 +132,8 @@ type Options struct {
 // A settled line does not go straight on screen. It joins a queue that is
 // released one line at a time, so a burst of sentences is read out at a
 // readable pace rather than scrolling past inside one repaint. Pacing never
-// accumulates: once the display has caught up, no more than MaxLines lines are
-// held back, so it trails the audio by at most MaxLines*LineHoldSeconds.
+// accumulates: the queue stays within CatchUpFactor*MaxLines once the display
+// has caught up, so it trails the audio by at most MaxLines*LineHoldSeconds.
 // (Shrinking MaxLines leaves the queue briefly over that bound; the next Tick
 // drains it.) A burst longer than that loses its oldest line from the screen —
 // the transcript still gets every one of them, since DrainNewCommits is
@@ -235,7 +245,15 @@ func (b *Buffer) DisplayLines() []Line {
 	for _, t := range b.committed {
 		lines = append(lines, Line{Text: t, Settled: true})
 	}
-	if b.pending != "" && len(b.queue) == 0 && !b.completePhrasesOnly {
+	// Complete-phrases mode withholds unsettled text so a line never rewrites
+	// itself under the reader — but when there is no settled line on screen
+	// there is nothing to rewrite, and an empty box tells the reader nothing
+	// at all. A long sentence takes seconds to translate, and the reported
+	// symptom was staring at a blank box for the whole of it. Show the text in
+	// progress in that case; withhold it again the moment a settled line
+	// exists to protect.
+	if b.pending != "" && len(b.queue) == 0 &&
+		(!b.completePhrasesOnly || len(b.committed) == 0) {
 		lines = append(lines, Line{Text: b.pending, Settled: false})
 	}
 	if len(lines) > b.maxLines {
@@ -351,7 +369,54 @@ func (b *Buffer) endsASentence() bool {
 	if !strings.ContainsRune(SentenceEnders, last) {
 		return false
 	}
-	return !(b.completePhrasesOnly && utf8.RuneCountInString(settled) < MinSentenceChars)
+	// "?" and "!" never end an abbreviation, so they always settle.
+	if last != '.' {
+		return true
+	}
+	return !endsWithAbbreviation(settled)
+}
+
+// abbreviations are the words whose trailing full stop does not end a sentence.
+// Kept deliberately short: every entry costs a real sentence that now waits for
+// the idle timer, and the only ones that matter are those the translation
+// actually produces.
+var abbreviations = map[string]bool{
+	"dr": true, "mr": true, "mrs": true, "ms": true, "prof": true, "rev": true,
+	"fr": true, "st": true, "jr": true, "sr": true, "vs": true, "etc": true,
+	"no": true, "vol": true, "approx": true, "inc": true, "ltd": true,
+}
+
+// endsWithAbbreviation reports whether the full stop at the end belongs to an
+// abbreviation rather than to a sentence.
+//
+// This replaced a blanket minimum length. The length rule made a short sentence
+// indistinguishable from an abbreviation, so "Yes, I agree." was held back for
+// the full idle timer while a long sentence appeared at once — from the
+// reader's side, a full stop that sometimes works.
+func endsWithAbbreviation(settled string) bool {
+	trimmed := strings.TrimSuffix(settled, ".")
+	if trimmed == "" {
+		return true // a lone "."
+	}
+	fields := strings.Fields(trimmed)
+	if len(fields) == 0 {
+		return true
+	}
+	word := fields[len(fields)-1]
+	// Strip anything that is not part of the word itself, so ("Dr. and (Dr.
+	// are recognised too.
+	word = strings.TrimFunc(word, func(r rune) bool {
+		return !unicode.IsLetter(r) && !unicode.IsDigit(r)
+	})
+	if word == "" {
+		return false
+	}
+	// A single letter is an initial — "J. Smith", not the end of a sentence.
+	if utf8.RuneCountInString(word) == 1 {
+		r, _ := utf8.DecodeRuneInString(word)
+		return unicode.IsLetter(r)
+	}
+	return abbreviations[strings.ToLower(word)]
 }
 
 // NoteTurnComplete settles whatever is buffered — the server says the turn
@@ -483,10 +548,26 @@ func (b *Buffer) releaseDue(now float64) bool {
 	if len(b.committed) < b.maxLines {
 		return true // room to spare — nothing readable is pushed off
 	}
-	if len(b.queue) > b.maxLines {
-		return true // too far behind to keep pacing; catch up in one go
+	// Falling behind shortens the hold before it abolishes it.
+	//
+	// This used to release the whole backlog the moment it passed max_lines,
+	// which put every intermediate line into `committed` and straight back out
+	// inside one repaint: a burst of five sentences showed three and silently
+	// skipped two. They still reached the transcript, which is what made it
+	// hard to notice.
+	//
+	// Pacing a backlog without limit is not the answer either — the display
+	// would fall arbitrarily far behind the speaker. So there are two tiers,
+	// and the queue stays bounded by CatchUpFactor*max_lines after any tick,
+	// which is the same latency ceiling as before, reached differently.
+	hold := b.lineHoldSeconds
+	switch {
+	case len(b.queue) > b.maxLines*CatchUpFactor:
+		return true // beyond recovery by pacing; take the loss and catch up
+	case len(b.queue) > b.maxLines:
+		hold /= 2 // behind, but every line still gets drawn
 	}
-	return now-b.releasedAt >= b.lineHoldSeconds
+	return now-b.releasedAt >= hold
 }
 
 func (b *Buffer) clearDue(now float64) bool {
