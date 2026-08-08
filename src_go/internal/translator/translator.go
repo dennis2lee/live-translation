@@ -539,6 +539,10 @@ func (t *Translator) sessionMain(ctx context.Context, holder *sessionHolder, han
 		}
 	}()
 
+	// Fragment inter-arrival, for the debug log below. Per session, which is
+	// what matters: the gap across a reconnect is the swap, not the speaker.
+	var lastFragmentAt time.Time
+
 	for {
 		if ctx.Err() != nil {
 			return
@@ -572,6 +576,25 @@ func (t *Translator) sessionMain(ctx context.Context, holder *sessionHolder, han
 		}
 		// 4) The translation — this is what goes on screen.
 		if msg.TargetText != "" {
+			// The gap since the previous fragment is what decides
+			// captions.IdleCommitSeconds, and until now nothing recorded it:
+			// the constant was 1.2 s against a fragment interval measured at
+			// "about one per second", which leaves 0.2 s of slack before a
+			// pause splits a sentence. A 67-minute session settled 30% of its
+			// lines on that timer in plain speech and 53% over singing. Run
+			// with debug logging on and this gives the real distribution, so
+			// the constant can be set from a measurement like every other one.
+			if slog.Default().Enabled(ctx, slog.LevelDebug) {
+				now := time.Now()
+				gap := time.Duration(0)
+				if !lastFragmentAt.IsZero() {
+					gap = now.Sub(lastFragmentAt)
+				}
+				lastFragmentAt = now
+				slog.Debug("target fragment",
+					"gap_ms", gap.Milliseconds(),
+					"runes", len([]rune(msg.TargetText)))
+			}
 			t.cb.targetText(msg.TargetText)
 		}
 		// 5) End of turn, the one boundary the API reports reliably. This

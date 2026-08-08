@@ -956,3 +956,66 @@ tests and by `spikes/capscenario` scenario 6.
 This was a caption defect, not a session defect: the audio and the transcript
 crossed the reconnect intact all along. It was the reader's line that was
 being corrupted.
+
+## Re-examining the reconnect claim, and what the transcript really says (2026-08-08)
+
+Dennis asked whether the reconnect merge was genuinely a problem. Checking it
+against the 67-minute transcript, none of the seven reconnects showed two
+sentences joined — which looked like a refutation and was not one.
+
+**The transcript cannot see the merge.** `commit` deliberately keeps it out:
+when a resumed line has already been handed over, `resumedPrefix` emits only
+the continuation, so the transcript records the two halves separately while the
+display shows them joined. Demonstrated directly — same buffer, same input:
+
+```
+display:    "So the staff translated into Chinese. Yes. It was only two days."
+transcript: ["Yes. It was only two days."]
+```
+
+So the transcript is not evidence either way, and the earlier check was the
+wrong instrument. What the timestamps do say is that at least two reconnects
+(27:01 and 01:03:04) landed mid-flow, with the previous line one second old, so
+a settled line was almost certainly on screen for the resume to swallow. The
+defect is real and reachable; the claim that it fired on all seven was not
+supported and should not have been made.
+
+**A regression of my own, found while re-checking.** The abbreviation list
+written the same day contained `no`, `etc`, `inc` and `ltd`. Each ends a
+sentence far more often than it abbreviates, so **"The answer is no." stopped
+settling on its full stop** and waited out the idle timer — reintroducing, for
+one very common word, exactly the defect the list was written to remove. The
+list is now titles plus `vs` only, and the test pins the three cases that
+caught it.
+
+### The largest remaining caption problem is the idle timer
+
+Counting the transcript rather than guessing:
+
+| section | lines | settled with no sentence punctuation |
+|---|---:|---:|
+| worship and singing (to 25:00) | 230 | **53%** |
+| spoken sermon (from 25:00) | 532 | **30%** |
+| whole session | 762 | 37% |
+
+Fifty-six lines are six characters or fewer — "Love", "Lord,", "My", "arise".
+These are not sentences; they are the 1.2 s idle timer firing between fragments
+and settling whatever had arrived. `IdleCommitSeconds` is 1.2 s against a
+fragment interval measured at "about one per second", which leaves **0.2 s of
+slack before an ordinary pause splits a sentence**. It is also capped in
+practice: `Tick` force-commits pending at `ClearAfterSeconds` (2.0 s) as well,
+so no idle value above 2.0 has any effect.
+
+**This is not being tuned by guesswork.** Nothing recorded fragment
+inter-arrival, so `slog.Debug("target fragment", "gap_ms", …)` now does, per
+session so a reconnect's swap is not counted as a speaker's pause. One real
+session with debug logging on gives the distribution, and the constant can be
+set from it the way every other constant here was.
+
+**The 318-second gap is unexplained.** After the 18:01 reconnect the next
+caption is at 22:47 — the largest gap in the session by a factor of eight (next
+largest 41 s). The session was healthy either side: no extra reconnect, and the
+next `go_away` arrived on schedule at 27:01. Most likely five minutes of
+singing that produced no translation worth emitting, but the transcript cannot
+distinguish that from output having stopped, and the fragment log above is what
+would settle it next time.

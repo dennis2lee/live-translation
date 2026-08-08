@@ -13,8 +13,7 @@ Each function mirrors the Go code it was ported to. Reported by Dennis from a
 import re
 
 ABBREVIATIONS = {
-    "dr", "mr", "mrs", "ms", "prof", "rev", "fr", "st", "jr", "sr",
-    "vs", "etc", "no", "vol", "approx", "inc", "ltd",
+    "dr", "mr", "mrs", "ms", "prof", "rev", "fr", "st", "jr", "sr", "vs",
 }
 CATCH_UP_FACTOR = 2
 

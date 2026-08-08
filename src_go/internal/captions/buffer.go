@@ -38,15 +38,16 @@ const (
 	// would keep resetting the clear countdown for ever.
 	MaxClearWaitSeconds = 15.0
 
-	// MinSentenceChars is retained for the transcript's own use and for the
-	// Python reference's behaviour; it no longer gates a full stop.
+	// MinSentenceChars is what a full stop used to need behind it before it
+	// ended a sentence, in complete-phrases mode. Nothing reads it now — it is
+	// kept as the record of a rule that was removed, because the number is
+	// referenced from spikes/RESULTS.md and from the Python reference, which
+	// still applies it.
 	//
-	// It used to: in complete-phrases mode a full stop only ended a sentence
-	// with 20 runes behind it, so "Yes, I agree." could not settle on its full
-	// stop and waited out the 1.2 s idle timer instead. That is the reported
-	// "sometimes the full stop shows, sometimes it does not" — the difference
-	// was the length of the sentence, which is not something a reader can see.
-	// endsASentence now looks at the word before the stop instead.
+	// It made "Yes, I agree." wait out the 1.2 s idle timer while a long
+	// sentence appeared at once: a full stop that worked only sometimes, and
+	// the difference was a length the reader cannot see. The length was a proxy
+	// for "is this an abbreviation", which endsASentence now asks directly.
 	MinSentenceChars = 20
 
 	// DuplicateWindowSeconds is how soon an identical fragment counts as the
@@ -377,13 +378,16 @@ func (b *Buffer) endsASentence() bool {
 }
 
 // abbreviations are the words whose trailing full stop does not end a sentence.
-// Kept deliberately short: every entry costs a real sentence that now waits for
-// the idle timer, and the only ones that matter are those the translation
-// actually produces.
+//
+// Only entries whose abbreviation reading dominates belong here, because every
+// one of them costs a real sentence its immediate display. The first draft of
+// this list included "no", "etc", "inc" and "ltd" and each was wrong for the
+// same reason: they end sentences far more often than they abbreviate.
+// "The answer is no." would not settle on its full stop, and waited out the
+// idle timer — which is precisely the defect the list was written to remove.
 var abbreviations = map[string]bool{
-	"dr": true, "mr": true, "mrs": true, "ms": true, "prof": true, "rev": true,
-	"fr": true, "st": true, "jr": true, "sr": true, "vs": true, "etc": true,
-	"no": true, "vol": true, "approx": true, "inc": true, "ltd": true,
+	"dr": true, "mr": true, "mrs": true, "ms": true, "prof": true,
+	"rev": true, "fr": true, "st": true, "jr": true, "sr": true, "vs": true,
 }
 
 // endsWithAbbreviation reports whether the full stop at the end belongs to an

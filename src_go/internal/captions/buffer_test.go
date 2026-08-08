@@ -397,6 +397,12 @@ func TestAbbreviationDoesNotSettle(t *testing.T) {
 		{"He asked Mr.", false},
 		{"Signed, J.", false}, // an initial
 		{"Chapter 3 vs.", false},
+		// Words that end sentences far more often than they abbreviate must
+		// NOT be on the list — "no" was, and "The answer is no." then waited
+		// out the idle timer, which is the defect the list exists to remove.
+		{"The answer is no.", true},
+		{"He works at Acme Inc.", true},
+		{"Apples, oranges, etc.", true},
 		{"Yes.", true},
 		{"It is ready.", true},
 		{"Is it ready?", true},
