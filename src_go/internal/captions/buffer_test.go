@@ -462,3 +462,71 @@ func TestPendingShowsRatherThanABlankBox(t *testing.T) {
 		}
 	}
 }
+
+// A reconnect resumes a line only if it was cut off mid-sentence.
+//
+// The server ends a session every nine minutes, so this runs seven times in an
+// hour. Resuming a line that had already reached a full stop glued two
+// unrelated sentences into one — most visible in complete-phrases mode, where
+// every settled line ends with punctuation by definition.
+func TestReconnectDoesNotJoinTwoFinishedSentences(t *testing.T) {
+	b := incremental(Options{CompletePhrasesOnly: true, ClearAfterSeconds: 0})
+	b.Feed("The reading is finished here.", 0)
+	b.DrainNewCommits()
+
+	b.NoteReconnect()
+	b.Feed(" And then the speaker carried on.", 1.0)
+
+	lines := texts(b.DisplayLines())
+	for _, l := range lines {
+		if strings.Contains(l, "here. And then") {
+			t.Errorf("two finished sentences were joined into %q", l)
+		}
+	}
+	if len(lines) != 2 {
+		t.Errorf("display = %q, want the two sentences on their own lines", lines)
+	}
+	// And the transcript records them separately too.
+	got := b.DrainNewCommits()
+	if len(got) != 1 || got[0] != "And then the speaker carried on." {
+		t.Errorf("transcript got %q, want the new sentence on its own", got)
+	}
+}
+
+// The half-sentence case is what the resume exists for, and it still works.
+func TestReconnectStillJoinsAnInterruptedSentence(t *testing.T) {
+	b := incremental(Options{CompletePhrasesOnly: true, ClearAfterSeconds: 0})
+	b.Feed("The reading was interrupted while", 0)
+	b.Tick(2.0, SpeechUnknown) // the idle timer settles it with no full stop
+	b.DrainNewCommits()
+
+	b.NoteReconnect()
+	b.Feed(" the speaker was still talking.", 3.0)
+
+	joined := strings.Join(texts(b.DisplayLines()), " | ")
+	if !strings.Contains(joined, "interrupted while the speaker was still talking.") {
+		t.Errorf("display = %q, want the halves rejoined", joined)
+	}
+}
+
+// looksFinished decides which of the two cases applies.
+func TestLooksFinished(t *testing.T) {
+	cases := []struct {
+		line string
+		want bool
+	}{
+		{"A whole sentence.", true},
+		{"A question?", true},
+		{"An exclamation!", true},
+		{"Cut off mid", false},
+		{"Thank you, Dr.", false}, // an abbreviation is not the end
+		{"", false},
+		{"끝났습니다.", true},
+		{"아직 말하는 중", false},
+	}
+	for _, c := range cases {
+		if got := looksFinished(c.line); got != c.want {
+			t.Errorf("looksFinished(%q) = %v, want %v", c.line, got, c.want)
+		}
+	}
+}

@@ -914,3 +914,45 @@ across them. This is the server ending a session on schedule and the client
 swapping in a new one, which is what the resumption handling is for.
 
 Scenario verdicts after the fixes: all five green.
+
+## What a reconnect costs, in complete-phrases mode (2026-08-08)
+
+Asked whether the nine-minute reconnect breaks the translation, with
+complete-phrases mode the worry. Three separate questions, and they have
+different answers.
+
+**Audio: nothing is lost, by construction.** The sender loop does not read the
+ring while there is no session — it polls and waits (`translator.go`, the
+`holder == nil || holder.isClosed()` branch). The ring keeps filling and drains
+into the new session once it opens. `RingSeconds` is 30, against a measured
+swap of 373–870 ms: **34× headroom on the worst swap seen.** The 30-minute
+endurance run scored 360/360 sentences against the Python scorer with no lost
+sentences, and `Stats.MaxBacklogMS` — the measurement that separates a
+client-side stall from the API answering in bursts — stayed near zero.
+
+**Ordering: the new session is opened before the old one is closed**, which is
+the third of the three mechanisms in the package doc. There is no window where
+audio has nowhere to go.
+
+**The display: there was a real defect, and complete-phrases mode is exactly
+where it showed.** `NoteReconnect` asks the buffer to treat the next fragment
+as a continuation of the last settled line — correct when the old session was
+cut off mid-sentence, wrong when the line was already a whole sentence. A line
+settles two ways: it reached sentence-final punctuation, or the idle timer gave
+up waiting. **Only the second kind was interrupted.** In complete-phrases mode
+every settled line is the first kind by definition, so every one of the seven
+reconnects in an hour glued two unrelated sentences together:
+
+```
+before: "… | The reading is finished here."
+after:  "… | The reading is finished here. and then the speaker carried on."
+```
+
+`looksFinished` now gates the resume. A finished sentence stays its own line and
+the new session starts a new one; a line the idle timer settled mid-sentence is
+still rejoined, which is what the resume exists for. Both cases are pinned by
+tests and by `spikes/capscenario` scenario 6.
+
+This was a caption defect, not a session defect: the audio and the transcript
+crossed the reconnect intact all along. It was the reader's line that was
+being corrupted.

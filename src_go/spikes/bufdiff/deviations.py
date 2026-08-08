@@ -1,6 +1,6 @@
 """The caption buffer's deliberate departures from the frozen Python reference.
 
-`src/` is the executable specification and nothing lands in it, so the four
+`src/` is the executable specification and nothing lands in it, so the
 2026-08-08 caption fixes would make every bufdiff run diverge and the harness
 would stop saying anything. Instead the deviations are applied to the reference
 *at runtime*, here, in one place. bufdiff then still holds: any divergence it
@@ -32,6 +32,15 @@ def _ends_with_abbreviation(settled: str) -> bool:
     if len(word) == 1:
         return word.isalpha()
     return word.lower() in ABBREVIATIONS
+
+
+def _looks_finished(line: str) -> bool:
+    trimmed = line.rstrip()
+    if not trimmed:
+        return False
+    if trimmed[-1] not in ".?!":
+        return False
+    return trimmed[-1] != "." or not _ends_with_abbreviation(trimmed)
 
 
 def apply(cb) -> None:
@@ -73,6 +82,24 @@ def apply(cb) -> None:
             lines.append((self._pending, False))
         return lines[-self.max_lines:]
 
+    # 4. A reconnect resumes the previous line only when it was cut off
+    #    mid-sentence. go_away arrives every nine minutes, so resuming a line
+    #    that had already reached a full stop glued two unrelated sentences
+    #    into one, seven times an hour.
+    original_feed = cb.CaptionBuffer.feed
+
+    def feed(self, text: str, now: float) -> bool:
+        if self._continue_next and not self._pending:
+            last = ""
+            if self._queue:
+                last = self._queue[-1]
+            elif self._committed:
+                last = self._committed[-1]
+            if _looks_finished(last):
+                self._continue_next = False
+        return original_feed(self, text, now)
+
+    cb.CaptionBuffer.feed = feed
     cb.CaptionBuffer._ends_a_sentence = ends_a_sentence
     cb.CaptionBuffer._release_due = release_due
     cb.CaptionBuffer.display_lines = display_lines

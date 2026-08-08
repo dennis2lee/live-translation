@@ -321,7 +321,7 @@ func (b *Buffer) Feed(text string, now float64) bool {
 	// It may still be queued rather than on screen, so check the queue first.
 	if b.continueNext {
 		b.continueNext = false
-		if b.pending == "" {
+		if b.pending == "" && !looksFinished(b.lastSettledLine()) {
 			resumed := ""
 			if n := len(b.queue); n > 0 {
 				resumed = b.queue[n-1]
@@ -500,10 +500,47 @@ func (b *Buffer) Flush() bool {
 }
 
 // NoteReconnect tells the buffer a reconnect happened, so the next fragment
-// continues the line.
+// may continue the line the old session was part-way through.
+//
+// "May", not "does": see looksFinished. The server ends a session every nine
+// minutes, so this runs seven times in an hour-long talk, and resuming a
+// sentence that was already complete glued two unrelated sentences into one
+// line every time.
 func (b *Buffer) NoteReconnect() {
 	b.continueNext = true
 	b.lastText = ""
+}
+
+// lastSettledLine is the line a reconnect would resume — the newest settled
+// line, whether it is queued or already on screen.
+func (b *Buffer) lastSettledLine() string {
+	if n := len(b.queue); n > 0 {
+		return b.queue[n-1]
+	}
+	if n := len(b.committed); n > 0 {
+		return b.committed[n-1]
+	}
+	return ""
+}
+
+// looksFinished reports whether a settled line was a whole sentence.
+//
+// A line settles two ways: it reached sentence-final punctuation, or the idle
+// timer gave up waiting. Only the second kind was cut off, and only that kind
+// should be resumed after a reconnect. In complete-phrases mode every line is
+// the first kind, which is why the merge was so visible there:
+//
+//	"The reading is finished here. and then the speaker carried on."
+func looksFinished(line string) bool {
+	trimmed := strings.TrimRightFunc(line, unicode.IsSpace)
+	if trimmed == "" {
+		return false
+	}
+	last, _ := utf8.DecodeLastRuneInString(trimmed)
+	if !strings.ContainsRune(SentenceEnders, last) {
+		return false
+	}
+	return last != '.' || !endsWithAbbreviation(trimmed)
 }
 
 // Clear wipes the display. What was already said still reaches the transcript.

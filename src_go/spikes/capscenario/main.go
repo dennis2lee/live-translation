@@ -149,6 +149,7 @@ func main() {
 	scenario3()
 	scenario4()
 	scenario5()
+	scenario6()
 }
 
 // 1. Silence clears the box two seconds after the backlog drains.
@@ -274,4 +275,37 @@ func trunc(s string) string {
 		return s
 	}
 	return string([]rune(s)[:57]) + "..."
+}
+
+// 6. What a reconnect does to the display in complete-phrases mode.
+//
+// go_away arrives every nine minutes, so this happens seven times in a
+// sermon. NoteReconnect asks the buffer to treat the next fragment as a
+// continuation of the last settled line, which means pulling that line back
+// off the screen into pending — and complete-phrases mode withholds pending.
+func scenario6() {
+	rule("6. a reconnect in complete-phrases mode")
+	for _, tail := range []struct{ what, text string }{
+		{"a finished sentence", "The reading is finished here."},
+		{"cut off mid-sentence", "The reading was interrupted while"},
+	} {
+		s := newSim(true, 3)
+		s.say("An earlier sentence that is already up.")
+		s.say(tail.text)
+		s.advance(1.5)
+		before := s.shown()
+
+		s.buf.NoteReconnect()
+		s.now += 0.5 // the measured swap, 373-870 ms
+		s.say("and then the speaker carried on.")
+		after := s.shown()
+
+		fmt.Printf("  last line %s:\n", tail.what)
+		fmt.Printf("    before: %q\n", before)
+		fmt.Printf("    after:  %q\n", after)
+		fmt.Printf("    transcript: %q\n", s.buf.DrainNewCommits())
+		lost := before != "" && after == ""
+		fmt.Printf("    VERDICT: %s\n", verdict(!lost,
+			"something stayed on screen", "the display went empty across the reconnect"))
+	}
 }
