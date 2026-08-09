@@ -38,6 +38,7 @@ type firStream struct {
 
 	history []float64 // the last 2*halfSpan input samples
 	pos     float64   // fractional read position inside history+incoming
+	buf     []float64 // history ++ this block; reused, see Process
 	out     []float32 // reused across calls; the callback must not allocate
 	closed  bool
 }
@@ -107,11 +108,17 @@ func (f *firStream) Process(in []float32) ([]float32, error) {
 		return nil, errClosed
 	}
 	// buf = history ++ in, so taps either side of pos are always available.
-	buf := make([]float64, 0, len(f.history)+len(in))
-	buf = append(buf, f.history...)
+	//
+	// Reused rather than freshly allocated: this runs on the device callback
+	// thread about fifty times a second, and the package's own rule is that the
+	// callback allocates nothing. It used to `make` here every call. The slice
+	// settles at its working size after the first block and never grows again,
+	// since every block is the same length.
+	buf := append(f.buf[:0], f.history...)
 	for _, v := range in {
 		buf = append(buf, float64(v))
 	}
+	f.buf = buf
 
 	// The last halfSpan samples cannot be centred on yet.
 	limit := float64(len(buf) - f.halfSpan)

@@ -35,6 +35,15 @@ type Ring struct {
 	writePos int64 // cumulative bytes written
 	readPos  int64 // cumulative bytes handed to the consumer
 	dropped  int64
+
+	// overflowing is true for as long as a stall lasts, so the log gets one
+	// line at the start and one at the end rather than one per write. The
+	// producer writes about fifty times a second, and a stall that lasted a
+	// minute used to put three thousand identical warnings in the log — which
+	// is how the meter path came to have its own guard.
+	overflowing bool
+	// runDropped is what this stall has cost so far.
+	runDropped int64
 }
 
 // ErrRingSize is returned for a read that can never be satisfied.
@@ -104,8 +113,24 @@ func (r *Ring) Write(data []byte) {
 		skipped := lag - int64(r.cap)
 		r.readPos += skipped
 		r.dropped += skipped
+		r.runDropped += skipped
+		started := !r.overflowing
+		r.overflowing = true
 		r.mu.Unlock()
-		slog.Warn("ring buffer overflow", "dropped_bytes", skipped)
+		if started {
+			slog.Warn("ring buffer overflow — the sender is not keeping up",
+				"dropped_bytes", skipped)
+		}
+		return
+	}
+	// This write fitted, so any stall is over. Report what it cost once.
+	if r.overflowing {
+		r.overflowing = false
+		run := r.runDropped
+		r.runDropped = 0
+		r.mu.Unlock()
+		slog.Warn("ring buffer recovered", "dropped_bytes", run,
+			"dropped_ms", run*1000/int64(TargetRate*BytesPerSample))
 		return
 	}
 	r.mu.Unlock()

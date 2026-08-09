@@ -26,6 +26,7 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"unicode/utf8"
 
 	"github.com/dennis2lee/live-translation/src_go/internal/audio"
 )
@@ -207,8 +208,6 @@ type Translator struct {
 
 // sessionHolder is one Live session bundled with its receive goroutine.
 type sessionHolder struct {
-	session liveSession
-
 	ready  chan struct{}
 	closed chan struct{}
 	goAway chan struct{}
@@ -217,8 +216,13 @@ type sessionHolder struct {
 	goAwayOnce sync.Once
 	readyOnce  sync.Once
 
-	mu  sync.Mutex
-	err error
+	mu      sync.Mutex
+	err     error
+	session liveSession
+	// abandoned is set when the supervisor gives up waiting for this holder.
+	// A session that opens afterwards has no owner and must not run — see
+	// adopt.
+	abandoned bool
 }
 
 func newSessionHolder() *sessionHolder {
@@ -243,6 +247,43 @@ func (h *sessionHolder) Err() error {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	return h.err
+}
+
+// live is the open session, or nil.
+func (h *sessionHolder) live() liveSession {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	return h.session
+}
+
+// adopt stores a freshly opened session and reports whether it may run.
+//
+// It returns false when the supervisor already gave up on this holder — the
+// open timed out, or the context was cancelled — in which case the caller owns
+// the session and must close it. Without this, a connect that completed in the
+// moment after the supervisor's timer fired produced a session belonging to
+// nobody: still receiving, still writing t.handle, and alive until the server
+// dropped it up to ten minutes later. Its stale resumption handle could then
+// overwrite the live session's newer one.
+func (h *sessionHolder) adopt(session liveSession) bool {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	if h.abandoned {
+		return false
+	}
+	h.session = session
+	return true
+}
+
+// abandon marks the holder unwanted and hands back any session already stored,
+// so exactly one side closes it: whichever of adopt and abandon ran second.
+func (h *sessionHolder) abandon() liveSession {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	h.abandoned = true
+	session := h.session
+	h.session = nil
+	return session
 }
 
 func (h *sessionHolder) isClosed() bool {
@@ -503,10 +544,15 @@ func (t *Translator) openSession(ctx context.Context) *sessionHolder {
 		return holder
 	case <-holder.closed:
 	case <-ctx.Done():
+		t.discard(holder)
 		return nil
 	case <-time.After(OpenTimeout):
 		slog.Warn("session open timed out", "timeout", OpenTimeout)
 	}
+
+	// Nothing owns this holder now. Mark it, so a session that opens a moment
+	// later closes itself instead of running unattended.
+	t.discard(holder)
 
 	err := holder.Err()
 	t.mu.Lock()
@@ -529,7 +575,14 @@ func (t *Translator) sessionMain(ctx context.Context, holder *sessionHolder, han
 		holder.setErr(err)
 		return
 	}
-	holder.session = session
+	if !holder.adopt(session) {
+		// The supervisor gave up while this was connecting and has moved on.
+		slog.Warn("session opened after the supervisor gave up — closing it")
+		if err := session.Close(); err != nil {
+			slog.Debug("error closing an abandoned session", "err", err)
+		}
+		return
+	}
 	holder.markReady()
 	slog.Info("live session open", "resumed", handle != "")
 
@@ -586,14 +639,19 @@ func (t *Translator) sessionMain(ctx context.Context, holder *sessionHolder, han
 			// the constant can be set from a measurement like every other one.
 			if slog.Default().Enabled(ctx, slog.LevelDebug) {
 				now := time.Now()
-				gap := time.Duration(0)
+				// The first fragment of a session has no gap to report. It used
+				// to log 0, which is indistinguishable from an instant
+				// redelivery — about eight false zeros an hour, in the very
+				// distribution the constant is to be read off.
 				if !lastFragmentAt.IsZero() {
-					gap = now.Sub(lastFragmentAt)
+					slog.Debug("target fragment",
+						"gap_ms", now.Sub(lastFragmentAt).Milliseconds(),
+						"runes", utf8.RuneCountInString(msg.TargetText))
+				} else {
+					slog.Debug("target fragment, first of the session",
+						"runes", utf8.RuneCountInString(msg.TargetText))
 				}
 				lastFragmentAt = now
-				slog.Debug("target fragment",
-					"gap_ms", gap.Milliseconds(),
-					"runes", len([]rune(msg.TargetText)))
 			}
 			t.cb.targetText(msg.TargetText)
 		}
@@ -609,8 +667,18 @@ func (t *Translator) sessionMain(ctx context.Context, holder *sessionHolder, han
 }
 
 func (t *Translator) closeSession(holder *sessionHolder) {
-	if holder.session != nil {
-		_ = holder.session.Close()
+	if session := holder.live(); session != nil {
+		_ = session.Close()
+	}
+	holder.markClosed()
+}
+
+// discard retires a holder the supervisor never adopted. A session that opens
+// after this closes itself; one that opened just before is closed here.
+func (t *Translator) discard(holder *sessionHolder) {
+	if session := holder.abandon(); session != nil {
+		slog.Warn("closing a session the supervisor had already given up on")
+		_ = session.Close()
 	}
 	holder.markClosed()
 }
@@ -622,6 +690,11 @@ func (t *Translator) closeSession(holder *sessionHolder) {
 func (t *Translator) sendLoop(ctx context.Context) {
 	var silentSince time.Time
 	warnedBacklog := false
+	// carried is the chunk a failed send was holding. It is kept rather than
+	// dropped: it had already left the ring, so letting it go lost 100 ms of
+	// speech every time a session ended uncleanly, while the log said the send
+	// would be retried.
+	var carried []byte
 
 	for ctx.Err() == nil {
 		t.mu.Lock()
@@ -629,7 +702,11 @@ func (t *Translator) sendLoop(ctx context.Context) {
 		started := t.stats.StartedAt
 		t.mu.Unlock()
 
-		if holder == nil || holder.session == nil || holder.isClosed() {
+		session := liveSession(nil)
+		if holder != nil {
+			session = holder.live()
+		}
+		if holder == nil || session == nil || holder.isClosed() {
 			// Reconnecting. The buffer keeps filling; it drains once a session
 			// opens.
 			if !sleepCtx(ctx, idlePoll) {
@@ -650,16 +727,21 @@ func (t *Translator) sendLoop(ctx context.Context) {
 				"backlog_ms", backlogMS)
 		}
 
-		chunk, err := t.ring.Read(audio.ChunkBytes)
-		if err != nil {
-			slog.Error("ring read failed", "err", err)
-			return
-		}
+		chunk := carried
+		carried = nil
 		if chunk == nil {
-			if !sleepCtx(ctx, idlePoll) {
+			var err error
+			chunk, err = t.ring.Read(audio.ChunkBytes)
+			if err != nil {
+				slog.Error("ring read failed", "err", err)
 				return
 			}
-			continue
+			if chunk == nil {
+				if !sleepCtx(ctx, idlePoll) {
+					return
+				}
+				continue
+			}
 		}
 
 		if t.silenceGate {
@@ -676,8 +758,9 @@ func (t *Translator) sendLoop(ctx context.Context) {
 			}
 		}
 
-		if err := holder.session.SendAudio(chunk); err != nil {
+		if err := session.SendAudio(chunk); err != nil {
 			slog.Warn("send failed, will retry on the next session", "err", err)
+			carried = chunk // the retry the message promises
 			holder.markClosed()
 			if !sleepCtx(ctx, idlePoll) {
 				return

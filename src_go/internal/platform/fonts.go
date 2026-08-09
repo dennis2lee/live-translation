@@ -1,26 +1,21 @@
 package platform
 
-// CaptionFontFamilies is the font stack for the captions, Latin first then a
-// CJK face.
+// There is no caption font stack here, and that is deliberate.
 //
-// Korean output needs an explicit Hangul family. Without one the toolkit falls
-// back per glyph and the weight and spacing drift away from the Latin text —
-// visible in spike F1, where the default stack put a differently-shaped full
-// stop after Hangul than after Latin.
-func CaptionFontFamilies() []string {
-	return captionFontFamiliesFor(runtimeGOOS())
-}
-
-func captionFontFamiliesFor(goos string) []string {
-	switch goos {
-	case "darwin":
-		return []string{"SF Pro Display", "Apple SD Gothic Neo", "Helvetica Neue", "Helvetica"}
-	case "windows":
-		return []string{"Segoe UI", "Malgun Gothic", "Arial"}
-	default:
-		return []string{"Noto Sans", "Noto Sans CJK KR", "DejaVu Sans"}
-	}
-}
+// The Python build named font *families* per platform, because that is what
+// QFont takes. Fyne does not have that API at all: a theme supplies a font
+// resource — an actual .ttf — and canvas.Text takes a FontSource. A list of
+// family names is not something any part of Fyne can be handed, so the ported
+// function decided nothing and was called by nothing.
+//
+// Spike F1 settled the question it existed to answer: Fyne 2.8 renders Hangul
+// correctly with its bundled theme font, with no font loading, no custom theme
+// and no embedded face. Latin and Hangul come from different faces, so their
+// metrics differ slightly — F1 recorded a full stop sitting differently after
+// Hangul than after Latin — and embedding one face (Noto Sans KR, ~5 MB) is
+// filed there as a deliberate choice for cross-platform determinism, not as a
+// fix for a defect. If that is ever taken up, it belongs in a Fyne theme with
+// the .ttf in the bundle, not in a list of names.
 
 // RevealCommand is the command that opens a directory in the system file
 // manager.

@@ -1019,3 +1019,91 @@ next `go_away` arrived on schedule at 27:01. Most likely five minutes of
 singing that produced no translation worth emitting, but the transcript cannot
 distinguish that from output having stopped, and the fragment log above is what
 would settle it next time.
+
+## Full-codebase review, and what it found (2026-08-08)
+
+A review-only pass over every non-spike Go file — about 4,800 lines — recorded
+in `code_review_2026-08-08.md`. Twelve findings, all fixed the same day. The
+three that mattered:
+
+### The key test displayed the API key on screen
+
+`TestAPIKey` sent the key in the query string. `net/http` wraps transport
+failures in a `*url.Error` whose `Error()` prints the whole URL, and
+Preferences prints that string verbatim in a label. Reproduced against an
+unresolvable host:
+
+```
+Get "https://…/v1beta/models?pageSize=1&key=AIzaSy…": dial tcp: no such host
+                                                 ^^^ the key, in clear
+```
+
+Measured before changing anything, because moving the key was only worth doing
+if the endpoint accepts it elsewhere:
+
+| how the key was sent | answer |
+|---|---|
+| nothing | 403 `PERMISSION_DENIED`, "unregistered callers" |
+| `x-goog-api-key` header | 400 `API_KEY_INVALID` |
+| `?key=` query string | 400 `API_KEY_INVALID` |
+
+Identical, so the header costs nothing. Two tests pin it: one drives a server
+that accepts and drops the connection and asserts the key is absent from the
+error, one asserts the header carries it and the URL does not. Both fail on the
+old code.
+
+### Debug logging did nothing, and an installed build had nowhere to log
+
+`setupLogging` ran once in `main`. The Preferences checkbox saved a setting
+that nothing read until the next launch, silently. Worse, the log went to
+stderr alone — an `.app` launched from Finder has no terminal, so **every line
+it wrote was discarded**. The fragment-gap measurement that `IdleCommitSeconds`
+is waiting on was uncollectable from the builds actually in use.
+
+`internal/logging` now holds the level in a `slog.LevelVar` (so Apply changes
+the running process) and writes to `~/Library/Application Support/LiveCap/
+livecap.log` at 0600, rolled at 8 MB. The path is shown in Preferences and in
+`-selftest`.
+
+### A data race between capture shutdown and the device callback
+
+`Stop` cleared `c.resampler` and only then called `device.Stop()` — and
+`device.Stop`/`Uninit` is what waits for in-flight callbacks, so the write and
+the callback's unsynchronised read genuinely overlap. An interface value is two
+words; a torn read is a real crash. `go test -race` could not see it because no
+test drives a device callback.
+
+The field is an `atomic.Pointer` now, and a test calls `onAudio` directly from
+a goroutine while retiring the resampler — which is the only way to put this
+concurrency in front of the race detector. Reverting the field to a plain
+`resample.Stream` makes the detector fire on `capture.go:229`.
+
+### The other nine
+
+- **An abandoned session could outlive its supervisor.** A connect completing
+  just after `OpenTimeout` produced a session owned by nobody, still receiving
+  and still writing `t.handle`, for up to ten minutes — its stale resumption
+  handle could overwrite the live session's newer one. `adopt`/`abandon` now
+  hand ownership to exactly one side, and the loser closes the session.
+- **A failed send dropped the chunk it was carrying**, while the log said it
+  would be retried. The chunk is kept and goes to the replacement session.
+- **A direction change with the key forgotten did nothing, in silence.** It
+  says so now.
+- **Forget Key was not undone by Cancel** — unless an unrelated Apply had also
+  happened. The dialog's `dirty` flag is set by both.
+- **The pure-Go resampler allocated once per callback**, against the package's
+  own rule. Pinned at zero with `testing.AllocsPerRun`.
+- **Ring overflow warned at callback rate** — 50 lines a second for as long as
+  a stall lasted. One line at the start, one at the end with the cost.
+- **`CaptionFontFamilies` was deleted.** It listed font *family names*, which
+  is a Qt API shape Fyne does not have — a theme takes a `.ttf` resource, not
+  names — so nothing could consume it and nothing called it. F1 had already
+  settled that Hangul renders correctly with the bundled font.
+- **The caption clock was wall time.** Every buffer deadline is a difference,
+  so an NTP step moved all of them at once. `time.Since` from process start is
+  monotonic.
+- Nits: a 2 MB copy in the netcheck upload, `truncate` splitting a UTF-8 rune,
+  the malgo context global now guarded, and Preferences limited to one window.
+
+`go test -race ./...` clean, `go vet` clean, `gofmt` clean, bufdiff 0/30 after
+the changes.

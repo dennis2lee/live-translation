@@ -12,6 +12,7 @@ package audio
 import (
 	"log/slog"
 	"strings"
+	"sync"
 
 	"github.com/gen2brain/malgo"
 )
@@ -45,13 +46,21 @@ type InputDevice struct {
 	id malgo.DeviceID
 }
 
-// context holds the one miniaudio context the process needs. malgo contexts are
-// expensive to build, and enumeration happens every time a menu opens.
+// sharedContext is the one miniaudio context the process needs. malgo contexts
+// are expensive to build, and enumeration happens every time a menu opens.
+//
+// Guarded, because "only the UI goroutine touches this" was true but written
+// down nowhere. Preferences opens a capture from its own dialog, the menu
+// enumerates devices, and shutdown releases it — all on the UI goroutine today,
+// and nothing in the types said they had to stay there.
 var (
+	contextMu     sync.Mutex
 	sharedContext *malgo.AllocatedContext
 )
 
 func acquireContext() (*malgo.AllocatedContext, error) {
+	contextMu.Lock()
+	defer contextMu.Unlock()
 	if sharedContext != nil {
 		return sharedContext, nil
 	}
@@ -65,12 +74,16 @@ func acquireContext() (*malgo.AllocatedContext, error) {
 
 // ReleaseContext tears the audio backend down. Called once, from shutdown.
 func ReleaseContext() {
-	if sharedContext == nil {
+	contextMu.Lock()
+	ctx := sharedContext
+	sharedContext = nil
+	contextMu.Unlock()
+
+	if ctx == nil {
 		return
 	}
-	_ = sharedContext.Uninit()
-	sharedContext.Free()
-	sharedContext = nil
+	_ = ctx.Uninit()
+	ctx.Free()
 }
 
 // ListInputDevices enumerates devices that have input channels. Call it every

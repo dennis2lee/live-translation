@@ -17,6 +17,7 @@ import (
 
 	"github.com/dennis2lee/live-translation/src_go/internal/audio"
 	"github.com/dennis2lee/live-translation/src_go/internal/config"
+	"github.com/dennis2lee/live-translation/src_go/internal/logging"
 	"github.com/dennis2lee/live-translation/src_go/internal/netcheck"
 	"github.com/dennis2lee/live-translation/src_go/internal/translator"
 )
@@ -40,9 +41,14 @@ type prefsDialog struct {
 	original config.Settings
 	// storedKey is the encrypted store's contents at the same moment.
 	storedKey string
-	// applied records whether Apply was pressed, so Cancel knows there is
-	// something to undo.
-	applied bool
+	// dirty records that the dialog has already changed something outside
+	// itself, so Cancel knows there is something to undo.
+	//
+	// Apply is not the only thing that sets it. Forget Key acts the moment it
+	// is pressed, and while it only checked Apply, Forget→Cancel left the key
+	// deleted while Forget→Apply→Cancel brought it back — the same button
+	// meaning two different things depending on an unrelated press.
+	dirty bool
 
 	working config.Settings
 
@@ -97,8 +103,17 @@ type prefsDialog struct {
 // running reports whether the level test is on, either way round.
 func (p *prefsDialog) meterRunning() bool { return p.meter != nil || p.observing }
 
-// OpenPreferences shows the dialog.
+// OpenPreferences shows the dialog, or brings the open one forward.
+//
+// One at a time. ⌘, works while the dialog is up, and a second dialog was a
+// second level meter opening the same device, and a second Cancel whose idea of
+// "the settings in force when it opened" was whatever the first one had just
+// applied.
 func (w *Window) OpenPreferences() {
+	if w.prefs != nil {
+		w.prefs.dialog.Show()
+		return
+	}
 	p := &prefsDialog{
 		win:       w,
 		original:  w.settings,
@@ -106,6 +121,7 @@ func (w *Window) OpenPreferences() {
 		working:   w.settings,
 		levelStop: make(chan struct{}),
 	}
+	w.prefs = p
 	p.show()
 }
 
@@ -149,6 +165,9 @@ func (p *prefsDialog) close() {
 		close(p.levelStop)
 	}
 	p.stopMeter()
+	if p.win.prefs == p {
+		p.win.prefs = nil
+	}
 }
 
 // --- tabs -----------------------------------------------------------------
@@ -162,11 +181,7 @@ func (p *prefsDialog) apiTab() fyne.CanvasObject {
 	p.refreshKeyStatus()
 
 	test := widget.NewButton("Test Key", func() { p.testKey() })
-	forget := widget.NewButton("Forget Key", func() {
-		config.ClearAPIKey()
-		p.apiKey.SetText("")
-		p.refreshKeyStatus()
-	})
+	forget := widget.NewButton("Forget Key", func() { p.forgetKey() })
 
 	// The key is never logged and never written to the settings file — only to
 	// the encrypted store, and to the Keychain when asked.
@@ -517,13 +532,24 @@ func (p *prefsDialog) behaviourTab() fyne.CanvasObject {
 	p.debugLogging = widget.NewCheck("Debug logging", nil)
 	p.debugLogging.SetChecked(p.working.DebugLogging)
 
+	// Where the log is, because it is not obvious and there is no terminal
+	// behind an installed .app. The level takes effect on Apply, in this
+	// process — no relaunch.
+	logHint := widget.NewLabel("")
+	logHint.Wrapping = fyne.TextWrapWord
+	if path := logging.Path(); path != "" {
+		logHint.SetText("Log file: " + path)
+	} else {
+		logHint.SetText("No log file could be opened — logging to the terminal only.")
+	}
+
 	form := widget.NewForm(
 		widget.NewFormItem("Clear after silence",
 			container.NewBorder(nil, nil, nil, clearLabel, p.clearAfter)),
 		widget.NewFormItem("Line hold", p.lineHold),
 		widget.NewFormItem("Transcript folder", p.transcriptDir),
 	)
-	return container.NewVBox(form, p.completeOnly, p.saveScript, p.debugLogging)
+	return container.NewVBox(form, p.completeOnly, p.saveScript, p.debugLogging, logHint)
 }
 
 // --- buttons --------------------------------------------------------------
@@ -576,14 +602,28 @@ func (p *prefsDialog) apply() {
 	}
 	next := p.collect()
 	p.working = next
-	p.applied = true
+	p.dirty = true
 	p.win.applySettings(next)
+}
+
+// forgetKey drops the key from everywhere this application put it.
+//
+// It takes effect at once rather than waiting for Apply, which is why it marks
+// the dialog dirty: Cancel restores the encrypted store, and until this counted
+// as a change, Forget→Cancel left the key deleted while Forget→Apply→Cancel
+// brought it back. The Keychain copy is gone either way — there is no way to
+// tell a copy this dialog made from one that was already there.
+func (p *prefsDialog) forgetKey() {
+	config.ClearAPIKey()
+	p.dirty = true
+	p.apiKey.SetText("")
+	p.refreshKeyStatus()
 }
 
 // cancel puts back the settings that were in force when the dialog opened, and
 // the credential store with them.
 func (p *prefsDialog) cancel() {
-	if !p.applied {
+	if !p.dirty {
 		return
 	}
 	slog.Info("preferences cancelled — reverting the applied changes")

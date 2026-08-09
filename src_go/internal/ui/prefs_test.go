@@ -124,6 +124,28 @@ func TestCancelRestoresTheKeyStore(t *testing.T) {
 	}
 }
 
+// Forget Key acts at once, so Cancel has to undo it like anything else.
+//
+// It used to depend on whether Apply happened to have been pressed as well:
+// Forget→Cancel left the key deleted, Forget→Apply→Cancel brought it back.
+func TestCancelUndoesForgetKey(t *testing.T) {
+	w := newTestWindow(t)
+	if err := config.SaveAPIKey("original-key", false); err != nil {
+		t.Fatal(err)
+	}
+	p := openPrefs(t, w)
+
+	p.forgetKey()
+	if got := config.StoredAPIKey(); got != "" {
+		t.Fatalf("Forget Key left %q in the store", got)
+	}
+
+	p.cancel()
+	if got := config.StoredAPIKey(); got != "original-key" {
+		t.Errorf("StoredAPIKey = %q after Cancel, want the key back", got)
+	}
+}
+
 // Cancel must also cope with there having been no key at all: restoring
 // "nothing" empties the store rather than writing an empty string.
 func TestCancelRestoresAnEmptyStore(t *testing.T) {

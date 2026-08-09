@@ -15,6 +15,7 @@ import (
 	"github.com/dennis2lee/live-translation/src_go/internal/audio"
 	"github.com/dennis2lee/live-translation/src_go/internal/captions"
 	"github.com/dennis2lee/live-translation/src_go/internal/config"
+	"github.com/dennis2lee/live-translation/src_go/internal/logging"
 	"github.com/dennis2lee/live-translation/src_go/internal/platform"
 	"github.com/dennis2lee/live-translation/src_go/internal/transcript"
 	"github.com/dennis2lee/live-translation/src_go/internal/translator"
@@ -86,6 +87,9 @@ type Window struct {
 	buffer   *captions.Buffer
 	view     *CaptionView
 	menus    *menuBar
+	// prefs is the open Preferences dialog, or nil. One at a time — see
+	// OpenPreferences.
+	prefs *prefsDialog
 
 	capture    *audio.Capture
 	translator *translator.Translator
@@ -224,6 +228,13 @@ func (w *Window) applySettings(next config.Settings) {
 	if err := config.Save(next); err != nil {
 		slog.Error("could not save settings", "err", err)
 	}
+	// The level changes in the running process. It used to take a relaunch,
+	// with nothing on screen saying so — and the one thing debug logging is
+	// currently for is measuring a live session.
+	if next.DebugLogging != old.DebugLogging {
+		logging.SetDebug(next.DebugLogging)
+		slog.Info("debug logging changed", "on", next.DebugLogging, "log", logging.Path())
+	}
 	w.applyBufferSettings()
 	w.view.ApplySettings(next)
 	w.pushLines()
@@ -335,6 +346,12 @@ func (w *Window) restartTranslator() {
 	}
 	apiKey := config.LoadAPIKey()
 	if apiKey == "" {
+		// The running session keeps translating in the old direction, so this
+		// is a notice rather than an error state — but it has to be said. It
+		// used to return in silence, and pressing 2 with the key forgotten
+		// looked exactly like the key binding being broken.
+		slog.Warn("settings change needs a session restart, but the API key is gone")
+		w.showNotice("API key required — the change will apply next time you start")
 		return
 	}
 	if w.translator != nil {
@@ -785,6 +802,8 @@ func (w *Window) Shutdown() {
 		// clean shutdown it is the runtime's own housekeeping plus the main
 		// goroutine — anything climbing session over session is a leak.
 		slog.Info("shutdown complete", "goroutines", runtime.NumGoroutine())
+		// Last, so everything above is on disk before the file goes.
+		guard("closing the log file", logging.Close)
 	})
 }
 
@@ -798,7 +817,18 @@ func guard(what string, step func()) {
 	step()
 }
 
-func nowSeconds() float64 { return float64(time.Now().UnixNano()) / 1e9 }
+// processStart anchors nowSeconds, so it runs on the monotonic clock.
+var processStart = time.Now()
+
+// nowSeconds is the caption buffer's clock. Every decision it drives is a
+// difference — the idle commit, the duplicate window, the line hold, the clear
+// countdown — so only the rate matters, never the epoch.
+//
+// It used to read time.Now().UnixNano(), which is wall time: an NTP step
+// mid-session moved every one of those deadlines at once, settling or holding
+// text for a reason nothing on screen could explain. time.Since carries the
+// monotonic reading, which no clock adjustment touches.
+func nowSeconds() float64 { return time.Since(processStart).Seconds() }
 
 // deviceLabel is the menu text for one input device.
 func deviceLabel(d audio.InputDevice) string {

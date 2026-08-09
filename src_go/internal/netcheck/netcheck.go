@@ -21,6 +21,7 @@
 package netcheck
 
 import (
+	"bytes"
 	"fmt"
 	"io"
 	"log/slog"
@@ -29,6 +30,7 @@ import (
 	"sort"
 	"strings"
 	"time"
+	"unicode/utf8"
 )
 
 const (
@@ -298,9 +300,10 @@ func MeasureUpload(url string, nbytes int, timeout time.Duration) Throughput {
 	}
 
 	// Zero-filled deliberately: no audio, transcript or key material leaves
-	// the machine.
+	// the machine. bytes.NewReader, not strings.NewReader(string(payload)) —
+	// that conversion copied the whole two megabytes for nothing.
 	payload := make([]byte, nbytes)
-	req, err := http.NewRequest(http.MethodPost, url, strings.NewReader(string(payload)))
+	req, err := http.NewRequest(http.MethodPost, url, bytes.NewReader(payload))
 	if err != nil {
 		flow.Err = truncate(err.Error(), 120)
 		return flow
@@ -352,11 +355,18 @@ func orDefault(s, fallback string) string {
 	return s
 }
 
+// truncate caps an error message for display, on a rune boundary. Cutting at a
+// byte offset would split a multi-byte character and put a replacement glyph on
+// the end of the message.
 func truncate(s string, n int) string {
 	if len(s) <= n {
 		return s
 	}
-	return s[:n]
+	cut := n
+	for cut > 0 && !utf8.RuneStart(s[cut]) {
+		cut--
+	}
+	return s[:cut]
 }
 
 func capitalise(s string) string {

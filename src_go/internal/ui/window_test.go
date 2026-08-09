@@ -15,6 +15,7 @@ import (
 	"github.com/dennis2lee/live-translation/src_go/internal/captions"
 	"github.com/dennis2lee/live-translation/src_go/internal/config"
 	"github.com/dennis2lee/live-translation/src_go/internal/credentials"
+	"github.com/dennis2lee/live-translation/src_go/internal/logging"
 	"github.com/dennis2lee/live-translation/src_go/internal/transcript"
 	"github.com/dennis2lee/live-translation/src_go/internal/translator"
 )
@@ -27,6 +28,11 @@ func newTestWindow(t *testing.T) *Window {
 	dir := t.TempDir()
 	t.Cleanup(config.SetSettingsDirForTests(dir))
 	t.Cleanup(credentials.SetStoreDirForTests(dir))
+	t.Cleanup(logging.SetDirForTests(dir))
+	// applySettings now drives the real log level, so any test that applies
+	// settings can leave debug logging on for the ones that follow.
+	wasDebug := logging.Debug()
+	t.Cleanup(func() { logging.SetDebug(wasDebug) })
 	t.Cleanup(config.SetEnvForTests(func(string) string { return "" }))
 	t.Cleanup(config.SetKeychainForTests(
 		func(string, string) (string, error) { return "", errors.New("no key stored") },
@@ -138,6 +144,26 @@ func TestCompletePhrasesToggle(t *testing.T) {
 	}
 	if w.buffer.CompletePhrasesOnly() != w.settings.CompletePhrasesOnly {
 		t.Error("the buffer did not follow the setting")
+	}
+}
+
+// The Debug logging checkbox has to take effect in this process.
+//
+// It used to save the setting and change nothing: the level was fixed when
+// main installed the handler, so the box did nothing until the next launch and
+// said nothing about it. The one thing debug logging is currently needed for is
+// measuring a live session.
+func TestDebugLoggingTakesEffectImmediately(t *testing.T) {
+	w := newTestWindow(t)
+
+	logging.SetDebug(false) // a known starting point, whatever ran before
+	w.update(func(s *config.Settings) { s.DebugLogging = true })
+	if !logging.Debug() {
+		t.Error("turning the setting on did not change the running log level")
+	}
+	w.update(func(s *config.Settings) { s.DebugLogging = false })
+	if logging.Debug() {
+		t.Error("turning the setting off did not change the running log level")
 	}
 }
 

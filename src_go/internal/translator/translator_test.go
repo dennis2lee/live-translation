@@ -1,8 +1,12 @@
 package translator
 
 import (
+	"bytes"
 	"context"
 	"errors"
+	"net"
+	"net/http"
+	"net/http/httptest"
 	"strings"
 	"sync"
 	"testing"
@@ -493,6 +497,99 @@ func TestSendFailureRetiresTheSession(t *testing.T) {
 	waitFor(t, "a replacement session", func() bool { return opener.attempts() >= 2 })
 }
 
+// The chunk a failed send was carrying must reach the replacement session.
+//
+// It had already left the ring, so dropping it lost 100 ms of speech every time
+// a session ended uncleanly — while the log said the send would be retried.
+func TestAFailedSendKeepsItsChunkForTheNextSession(t *testing.T) {
+	fastTiming(t)
+	ring := audio.NewRing(audio.ChunkBytes * 8)
+	broken := newFakeSession(nil)
+	broken.sendErr = errors.New("websocket: close sent")
+	healthy := newFakeSession(nil)
+
+	opener := &recordingOpener{build: func(attempt int) (liveSession, error) {
+		if attempt == 0 {
+			return broken, nil
+		}
+		return healthy, nil
+	}}
+	tr, err := New(Options{Ring: ring, open: opener.open})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := tr.Start(); err != nil {
+		t.Fatal(err)
+	}
+	defer tr.Stop()
+
+	waitFor(t, "the first session", func() bool { return opener.attempts() >= 1 })
+
+	// Exactly one chunk, with a recognisable payload, and nothing behind it.
+	chunk := make([]byte, audio.ChunkBytes)
+	for i := range chunk {
+		chunk[i] = 0x5A
+	}
+	ring.Write(chunk)
+
+	waitFor(t, "the chunk to reach the replacement", func() bool {
+		return healthy.chunksSent() >= 1
+	})
+	healthy.mu.Lock()
+	got := append([]byte(nil), healthy.sent[0]...)
+	healthy.mu.Unlock()
+	if !bytes.Equal(got, chunk) {
+		t.Error("the replacement session did not receive the chunk the failed send was holding")
+	}
+}
+
+// A session that opens after the supervisor gave up waiting has no owner. It
+// must close itself rather than run on, receiving and overwriting the live
+// session's resumption handle with its own stale one.
+func TestASessionThatOpensAfterTheTimeoutIsClosed(t *testing.T) {
+	fastTiming(t)
+	ring := audio.NewRing(audio.ChunkBytes * 4)
+
+	late := newFakeSession([]Message{{ResumeHandle: "stale-handle-from-the-orphan"}})
+	release := make(chan struct{})
+
+	opener := &recordingOpener{build: func(attempt int) (liveSession, error) {
+		if attempt == 0 {
+			// Outlast the supervisor's OpenTimeout, then succeed anyway —
+			// the window this test exists for.
+			<-release
+			return late, nil
+		}
+		return newFakeSession(nil), nil
+	}}
+	tr, err := New(Options{Ring: ring, open: opener.open})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := tr.Start(); err != nil {
+		t.Fatal(err)
+	}
+	defer tr.Stop()
+
+	// Let the supervisor time out and move on to a second attempt.
+	waitFor(t, "the supervisor to give up and retry", func() bool { return opener.attempts() >= 2 })
+	close(release)
+
+	waitFor(t, "the abandoned session to be closed", func() bool {
+		late.mu.Lock()
+		defer late.mu.Unlock()
+		return late.closed
+	})
+
+	// And its handle must never have been kept.
+	tr.mu.Lock()
+	handle := tr.handle
+	tr.mu.Unlock()
+	if handle == "stale-handle-from-the-orphan" {
+		t.Error("an abandoned session overwrote the resumption handle")
+	}
+}
+
 // The gate exists to save money on a silent room, and must not swallow speech.
 func TestSilenceGateSkipsSilenceButNotSpeech(t *testing.T) {
 	fastTiming(t)
@@ -578,6 +675,73 @@ func TestStatsSummary(t *testing.T) {
 		if !strings.Contains(got, want) {
 			t.Errorf("Summary = %q, want it to contain %q", got, want)
 		}
+	}
+}
+
+// A failed key test must never put the key in the error it reports.
+//
+// Preferences prints that error verbatim in a label, so this is what stops the
+// key being shown in clear on screen. It used to travel in the query string,
+// and net/http's *url.Error prints the whole URL — every DNS failure and every
+// timeout displayed the key.
+func TestKeyTestErrorsNeverCarryTheKey(t *testing.T) {
+	const key = "AIzaSyFAKEKEYFAKEKEYFAKEKEYFAKEKEY123"
+
+	// A server that accepts the connection and closes it without answering, so
+	// the failure is at transport level — the case that used to leak.
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("could not listen: %v", err)
+	}
+	defer listener.Close()
+	go func() {
+		for {
+			conn, err := listener.Accept()
+			if err != nil {
+				return
+			}
+			conn.Close()
+		}
+	}()
+
+	original := KeyTestEndpoint
+	KeyTestEndpoint = "http://" + listener.Addr().String() + "/v1beta/models?pageSize=1"
+	defer func() { KeyTestEndpoint = original }()
+
+	err = TestAPIKey(key)
+	if err == nil {
+		t.Fatal("expected the request to fail")
+	}
+	if strings.Contains(err.Error(), key) {
+		t.Errorf("the API key appears in the error shown to the user: %v", err)
+	}
+}
+
+// The key rides in the header, not the URL. Checked directly, because that is
+// the property the test above depends on.
+func TestKeyTestSendsTheKeyInAHeader(t *testing.T) {
+	const key = "AIzaSyFAKEKEYFAKEKEYFAKEKEYFAKEKEY123"
+
+	var gotHeader, gotURL string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotHeader = r.Header.Get("x-goog-api-key")
+		gotURL = r.URL.String()
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer server.Close()
+
+	original := KeyTestEndpoint
+	KeyTestEndpoint = server.URL + "/v1beta/models?pageSize=1"
+	defer func() { KeyTestEndpoint = original }()
+
+	if err := TestAPIKey(key); err != nil {
+		t.Fatalf("TestAPIKey = %v, want success", err)
+	}
+	if gotHeader != key {
+		t.Errorf("x-goog-api-key = %q, want the key", gotHeader)
+	}
+	if strings.Contains(gotURL, key) {
+		t.Errorf("the key is still in the URL: %q", gotURL)
 	}
 }
 

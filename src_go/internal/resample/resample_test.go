@@ -189,6 +189,33 @@ func TestOutputBufferIsReused(t *testing.T) {
 	}
 }
 
+// The pure-Go filter runs on the device callback thread, where the package's
+// own rule is that nothing is allocated. It used to `make` its working buffer
+// on every call — about fifty allocations a second on the Windows and Linux
+// builds, which is the path that uses it.
+func TestFIRDoesNotAllocateInSteadyState(t *testing.T) {
+	f := newFIRStream(48000, 16000)
+	defer f.Close()
+
+	// One 20 ms block at 48 kHz, the shape the capture callback hands in.
+	block := tone(1000, 48000, 960)
+	// Let the working buffers reach their size first.
+	for i := 0; i < 4; i++ {
+		if _, err := f.Process(block); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	allocs := testing.AllocsPerRun(200, func() {
+		if _, err := f.Process(block); err != nil {
+			t.Fatal(err)
+		}
+	})
+	if allocs > 0 {
+		t.Errorf("Process allocated %.1f times per call on the audio callback thread", allocs)
+	}
+}
+
 func TestUseAfterCloseIsAnError(t *testing.T) {
 	s, err := NewStream(48000, 16000)
 	if err != nil {

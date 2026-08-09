@@ -8,41 +8,9 @@ import (
 	"testing"
 )
 
-// The Windows and Linux branches are pinned from a Mac, the same job
-// tests/test_platform_support.py does for the Python build.
-func TestCaptionFontStacksPerPlatform(t *testing.T) {
-	cases := map[string][]string{
-		"darwin":  {"SF Pro Display", "Apple SD Gothic Neo", "Helvetica Neue", "Helvetica"},
-		"windows": {"Segoe UI", "Malgun Gothic", "Arial"},
-		"linux":   {"Noto Sans", "Noto Sans CJK KR", "DejaVu Sans"},
-	}
-	for goos, want := range cases {
-		if got := captionFontFamiliesFor(goos); !reflect.DeepEqual(got, want) {
-			t.Errorf("%s stack = %q, want %q", goos, got, want)
-		}
-	}
-}
-
-// Every stack must name a Hangul face, or Korean falls back per glyph.
-func TestEveryFontStackHasAKoreanFace(t *testing.T) {
-	korean := map[string]string{
-		"darwin":  "Apple SD Gothic Neo",
-		"windows": "Malgun Gothic",
-		"linux":   "Noto Sans CJK KR",
-	}
-	for goos, face := range korean {
-		stack := captionFontFamiliesFor(goos)
-		found := false
-		for _, f := range stack {
-			if f == face {
-				found = true
-			}
-		}
-		if !found {
-			t.Errorf("%s stack %q has no Korean face", goos, stack)
-		}
-	}
-}
+// The caption font stack was removed rather than tested. It named font
+// families, which is a Qt API shape with no Fyne counterpart — nothing could
+// consume the list, and nothing called it. See the note in fonts.go.
 
 func TestRevealCommandPerPlatform(t *testing.T) {
 	cases := map[string][]string{

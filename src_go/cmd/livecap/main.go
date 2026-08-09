@@ -20,6 +20,7 @@ import (
 	"github.com/dennis2lee/live-translation/src_go/internal/audio"
 	"github.com/dennis2lee/live-translation/src_go/internal/config"
 	"github.com/dennis2lee/live-translation/src_go/internal/credentials"
+	"github.com/dennis2lee/live-translation/src_go/internal/logging"
 	"github.com/dennis2lee/live-translation/src_go/internal/netcheck"
 	"github.com/dennis2lee/live-translation/src_go/internal/platform"
 	"github.com/dennis2lee/live-translation/src_go/internal/resample"
@@ -50,7 +51,9 @@ func main() {
 	}
 
 	settings := config.Load()
-	setupLogging(settings.DebugLogging)
+	if path := logging.Setup(settings.DebugLogging); path != "" {
+		slog.Info("logging to file", "path", path, "debug", settings.DebugLogging)
+	}
 
 	if *selftest {
 		os.Exit(runSelftest())
@@ -101,14 +104,6 @@ func main() {
 	window.Shutdown()
 }
 
-func setupLogging(debug bool) {
-	level := slog.LevelInfo
-	if debug {
-		level = slog.LevelDebug
-	}
-	slog.SetDefault(slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: level})))
-}
-
 // runSelftest reports on everything the application needs, without opening a
 // window. It is what a packaged bundle is checked with.
 func runSelftest() int {
@@ -127,6 +122,11 @@ func runSelftest() int {
 	report("settings", true, config.Path())
 	report("credential store", true, credentials.StorePath())
 	report("app support dir", true, platform.AppSupportDir())
+	if path := logging.Path(); path != "" {
+		report("log file", true, path)
+	} else {
+		report("log file", false, "could not be opened — stderr only")
+	}
 
 	if source := config.APIKeySource(); source != "" {
 		report("api key", true, "from "+source)

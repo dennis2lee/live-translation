@@ -28,9 +28,17 @@ type Capture struct {
 	// without synchronisation, the same way it reads channels.
 	meterOnly bool
 
+	// resampler is atomic because Stop clears it while a device callback may be
+	// reading it: Stop has to retire it *before* device.Stop(), which is what
+	// waits for callbacks to finish, so the write and the read genuinely
+	// overlap. Under the mutex it would still be a race — the callback must not
+	// take a lock — and an interface value is two words, so a torn read is a
+	// real, if unlikely, crash. `go test -race` cannot see it, because no test
+	// drives a device callback.
+	resampler atomic.Pointer[resample.Stream]
+
 	mu         sync.Mutex
 	device     *malgo.Device
-	resampler  resample.Stream
 	channels   int
 	nativeRate int
 	running    bool
@@ -147,7 +155,7 @@ func (c *Capture) Start() (InputDevice, error) {
 	if err != nil {
 		return InputDevice{}, err
 	}
-	c.resampler = resampler
+	c.resampler.Store(&resampler)
 	c.Ring.Clear()
 
 	frames := c.nativeRate * CallbackMS / 1000
@@ -164,13 +172,13 @@ func (c *Capture) Start() (InputDevice, error) {
 	device, err := malgo.InitDevice(ctx.Context, cfg, malgo.DeviceCallbacks{Data: c.onAudio})
 	if err != nil {
 		resampler.Close()
-		c.resampler = nil
+		c.resampler.Store(nil)
 		return InputDevice{}, err
 	}
 	if err := device.Start(); err != nil {
 		device.Uninit()
 		resampler.Close()
-		c.resampler = nil
+		c.resampler.Store(nil)
 		return InputDevice{}, err
 	}
 
@@ -185,8 +193,8 @@ func (c *Capture) Start() (InputDevice, error) {
 // Stop closes the stream. Safe to call when nothing is running.
 func (c *Capture) Stop() {
 	c.mu.Lock()
-	device, resampler := c.device, c.resampler
-	c.device, c.resampler = nil, nil
+	device := c.device
+	c.device = nil
 	c.running = false
 	c.current = InputDevice{}
 	underruns, dropped := c.underruns.Load(), c.Ring.DroppedBytes()
@@ -195,14 +203,17 @@ func (c *Capture) Stop() {
 	if device == nil {
 		return
 	}
-	// Stop before releasing the resampler: the callback may still be in flight,
-	// and Uninit is what waits for it.
+	// Retire the resampler first, so a callback already in flight drops its
+	// block rather than feeding a converter that is about to be closed. Then
+	// stop the device — Uninit is what waits for the callback to return, and
+	// only after it does is the converter safe to release.
+	resampler := c.resampler.Swap(nil)
 	if err := device.Stop(); err != nil {
 		slog.Warn("error stopping the audio device", "err", err)
 	}
 	device.Uninit()
 	if resampler != nil {
-		resampler.Close()
+		(*resampler).Close()
 	}
 	slog.Info("audio capture stopped", "underruns", underruns, "dropped_bytes", dropped)
 }
@@ -214,10 +225,11 @@ func (c *Capture) onAudio(_, in []byte, frames uint32) {
 	if len(in) == 0 || frames == 0 {
 		return
 	}
-	resampler := c.resampler
-	if resampler == nil {
-		return
+	held := c.resampler.Load()
+	if held == nil {
+		return // stopping, or not started
 	}
+	resampler := *held
 
 	// The block arrives as interleaved float32.
 	samples := unsafe.Slice((*float32)(unsafe.Pointer(&in[0])), len(in)/4)
