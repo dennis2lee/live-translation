@@ -1,10 +1,15 @@
 package ui
 
 import (
+	"image"
 	"strings"
 	"testing"
 
+	"fyne.io/fyne/v2"
+	"fyne.io/fyne/v2/test"
+
 	"github.com/dennis2lee/live-translation/src_go/internal/captions"
+	"github.com/dennis2lee/live-translation/src_go/internal/config"
 )
 
 // defaultRowWidth is the text width of the default layout — a 1280 px window,
@@ -98,6 +103,83 @@ func rowTexts(rows []row) []string {
 	out := make([]string, len(rows))
 	for i, r := range rows {
 		out[i] = r.text
+	}
+	return out
+}
+
+// Captions are left-aligned, and the proof is where the ink lands.
+//
+// Centring came from the Python build, where one sentence was one row. Now
+// that settled sentences reflow into shared rows the box carries a paragraph,
+// and a centred paragraph moves its left edge on every row — the reader has to
+// hunt for the start of each line.
+//
+// Rendered rather than asserted on the field: a short row and a long row are
+// put in the same box, and their first ink column has to match.
+func TestCaptionRowsShareALeftEdge(t *testing.T) {
+	s := config.Default()
+	s.FixedBox = true
+	s.MaxLines = 2
+	s.BgColor = "#000000"
+	s.BoxColor = "#000000" // one flat background, so any ink is text
+	s.TextColor = "#FFFFFF"
+	s.FontSize = 24
+
+	v := NewCaptionView(s)
+	v.boxAlpha = 1
+	v.SetLines([]captions.Line{
+		{Text: "A much longer settled row that runs most of the way across.", Settled: true},
+		{Text: "Short.", Settled: true},
+	})
+
+	win := test.NewWindow(v)
+	t.Cleanup(win.Close)
+	win.SetPadded(false)
+	win.Resize(fyne.NewSize(900, 400))
+
+	img := win.Canvas().Capture()
+	rows := inkRows(img)
+	if len(rows) < 2 {
+		t.Fatalf("expected two rows of text, found %d", len(rows))
+	}
+	first, last := rows[0], rows[len(rows)-1]
+	if first < 0 || last < 0 {
+		t.Fatal("a row rendered no text")
+	}
+	// Same left edge, within a glyph's side bearing.
+	if diff := first - last; diff > 4 || diff < -4 {
+		t.Errorf("rows start at x=%d and x=%d — they are not sharing a left edge", first, last)
+	}
+}
+
+// inkRows returns the first inked column of each text row found in the image,
+// top to bottom. Rows are separated by blank scanlines.
+func inkRows(img image.Image) []int {
+	b := img.Bounds()
+	var out []int
+	rowStart := -1
+	inRow := false
+	for y := b.Min.Y; y < b.Max.Y; y++ {
+		firstX := -1
+		for x := b.Min.X; x < b.Max.X; x++ {
+			r, g, bl, _ := img.At(x, y).RGBA()
+			if r > 0x8000 && g > 0x8000 && bl > 0x8000 {
+				firstX = x
+				break
+			}
+		}
+		switch {
+		case firstX >= 0 && !inRow:
+			inRow, rowStart = true, firstX
+		case firstX >= 0 && firstX < rowStart:
+			rowStart = firstX
+		case firstX < 0 && inRow:
+			out = append(out, rowStart)
+			inRow, rowStart = false, -1
+		}
+	}
+	if inRow {
+		out = append(out, rowStart)
 	}
 	return out
 }

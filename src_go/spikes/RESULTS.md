@@ -1148,3 +1148,65 @@ What this does *not* change: clear-on-silence still empties the box after two
 quiet seconds, so the first sentence after a pause still starts alone on the
 bottom row — that is the clear working, not this defect. A reader who wants
 the box to stay full through pauses raises `clear_after_seconds`.
+
+## Fragment inter-arrival, measured at last (2026-08-08)
+
+A two-minute debug recording, 93 gaps. `IdleCommitSeconds` has been waiting on
+this since the constant was written.
+
+**Fragments do not arrive at the pace of speech. They arrive on a fixed
+one-second server clock.** The timestamps land at X.90–X.93 almost every
+second, so the distribution is not continuous — it is quantised:
+
+| gap | count |
+|---|---:|
+| 600–900 ms | 9 |
+| **900–1200 ms** | **73** |
+| 1200–1500 ms | 7 |
+| 1500–2000 ms | 3 |
+| 2000–3000 ms | 1 |
+
+median 1000 ms, p90 1239, p95 1498, max 2003, mean 1039.
+
+The long gaps are not pauses in the speech. Every one of them is a beat that
+slipped, and the beat after it lands back on the clock:
+
+```
+1252 → 743      1239 → 753      1250 → 751      1246 → 748
+```
+
+Each pair sums to ~2000 ms. The rest are whole skipped beats (1992, 1996,
+1997, 2003).
+
+**So `IdleCommitSeconds = 1.2` sits in the worst place available**: 240 ms
+above the modal 1000 ms, exactly where a late beat lands. Eleven of 93 gaps
+(11.8%) crossed it, and seven of those eleven were late beats — a sentence
+split for no reason a reader could see. Raising it to about **1.6 s** clears
+every late beat while still catching a genuinely skipped one. Above 2.0 s
+there is no point: `Tick` force-commits pending text at `ClearAfterSeconds`
+anyway.
+
+Not yet changed, because two minutes is a small sample and the constant is
+worth setting from a session with real pauses in it. What this recording does
+establish beyond doubt is the *shape*: a one-second clock with a ±250 ms
+jitter, which is enough to say 1.2 is the wrong number.
+
+Session health, for the record: 0 reconnects, 0 underruns, 0 dropped bytes,
+max backlog 330 ms, 1007 chunks sent. The transcript settled 3 of 30 lines
+without sentence punctuation (10%), against 30–53% in the 67-minute session —
+clear speech rather than singing.
+
+## Captions are left-aligned (2026-08-08)
+
+Centring was inherited from the Python build, where one sentence was one row:
+a row was its own unit and centring read fine. Since settled sentences reflow
+into shared rows the box carries a paragraph, and a centred paragraph moves
+its left edge on every row — the reader has to find where each line starts.
+A ragged right edge costs nothing next to that.
+
+Pinned by rendering rather than by reading the field back: a short row and a
+long row go into the same box and their first inked column has to match. With
+the alignment put back to centre the test reports `x=112` and `x=418`.
+
+The status line keeps its centring — one line, a different kind of message,
+not something being read continuously.

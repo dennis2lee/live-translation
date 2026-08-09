@@ -57,6 +57,20 @@ const (
 	dotPulseDuration = 1200 * time.Millisecond
 )
 
+// CaptionAlignment is how caption rows sit inside the box.
+//
+// Leading, not centre. Centring was inherited from the Python build, where one
+// sentence was one row and each row was short — the row was its own unit and
+// centring read fine. Since settled sentences reflow into shared rows, the box
+// carries a paragraph, and a centred paragraph moves its left edge on every
+// row: the eye has to find where the next line starts each time, which is the
+// one thing a caption reader cannot afford to spend attention on. A ragged
+// right edge costs nothing by comparison.
+//
+// The status text keeps its own centring: it is a single line and a different
+// kind of message, not something being read continuously.
+const CaptionAlignment = fyne.TextAlignLeading
+
 // CaptionView paints a solid background with a rounded caption box.
 //
 // Everything is drawn by us rather than assembled from widgets, for the same
@@ -378,7 +392,7 @@ func (r *captionRenderer) rebuild(size fyne.Size) {
 		t.Color = c
 		t.TextSize = fontSize
 		t.TextStyle = fyne.TextStyle{}
-		t.Alignment = fyne.TextAlignCenter
+		t.Alignment = CaptionAlignment
 		t.Resize(fyne.NewSize(boxW-2*PadH, lineH))
 		t.Move(fyne.NewPos(boxLeft+PadH, y+float32(i)*lineH))
 		t.Show()
@@ -508,7 +522,7 @@ func reflowRows(lines []captions.Line, fontSize, maxTextW float32, maxLines int)
 func (r *captionRenderer) ensureTexts(n int) {
 	for len(r.texts) < n {
 		t := canvas.NewText("", color.White)
-		t.Alignment = fyne.TextAlignCenter
+		t.Alignment = CaptionAlignment
 		r.texts = append(r.texts, t)
 	}
 }
