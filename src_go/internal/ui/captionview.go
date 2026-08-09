@@ -311,48 +311,11 @@ func (r *captionRenderer) rebuild(size fyne.Size) {
 		maxTextW = 40
 	}
 
-	// Wrap to the real width, then drop from the front if it exceeds max_lines.
-	type wrappedLine struct {
-		text    string
-		settled bool
-	}
-	// Settled sentences reflow as one paragraph rather than one block each.
-	//
-	// Wrapping every sentence separately left each one's tail on a row of its
-	// own: three sentences meant up to three part-empty rows, so a three-row
-	// box held barely more text than a one-row box and turned over far faster
-	// than the width setting suggested. Measured at 44 px in a 1280 px window
-	// with the box at 95%: rows filled 57–87% of the available width, one as
-	// low as 12%. Reflowing fills each row before starting the next.
-	//
-	// Unsettled text keeps its own block, so the dimmed/settled distinction
-	// survives — it is a whole-row property, which is all the renderer can
-	// express.
-	var wrapped []wrappedLine
-	var settledText []string
-	for _, line := range v.lines {
-		if line.Settled {
-			settledText = append(settledText, line.Text)
-			continue
-		}
-		for _, piece := range Wrap(line.Text, fontSize, maxTextW) {
-			wrapped = append(wrapped, wrappedLine{piece, false})
-		}
-	}
-	if joined := strings.TrimSpace(strings.Join(settledText, " ")); joined != "" {
-		var settledRows []wrappedLine
-		for _, piece := range Wrap(joined, fontSize, maxTextW) {
-			settledRows = append(settledRows, wrappedLine{piece, true})
-		}
-		wrapped = append(settledRows, wrapped...)
-	}
 	maxLines := s.MaxLines
 	if maxLines < 1 {
 		maxLines = 1
 	}
-	if len(wrapped) > maxLines {
-		wrapped = wrapped[len(wrapped)-maxLines:]
-	}
+	wrapped := reflowRows(v.lines, fontSize, maxTextW, maxLines)
 
 	visible := v.boxAlpha > 0.001 && (len(wrapped) > 0 || s.FixedBox)
 
@@ -490,6 +453,56 @@ func (r *captionRenderer) rebuild(size fyne.Size) {
 		r.hint.Hide()
 	}
 	r.hint.Refresh()
+}
+
+// row is one display row after wrapping — what the renderer actually paints,
+// as opposed to a captions.Line, which is one settled sentence.
+type row struct {
+	text    string
+	settled bool
+}
+
+// reflowRows turns the buffer's lines into the rows the box paints: settled
+// sentences joined into one paragraph, wrapped to the width, newest maxLines
+// rows kept.
+//
+// Settled sentences reflow as one paragraph rather than one block each.
+// Wrapping every sentence separately left each one's tail on a row of its
+// own: three sentences meant up to three part-empty rows, so a three-row
+// box held barely more text than a one-row box and turned over far faster
+// than the width setting suggested. Measured at 44 px in a 1280 px window
+// with the box at 95%: rows filled 57–87% of the available width, one as
+// low as 12%. Reflowing fills each row before starting the next.
+//
+// Unsettled text keeps its own block, so the dimmed/settled distinction
+// survives — it is a whole-row property, which is all the renderer can
+// express. It comes last, so trimming to maxLines keeps the newest text.
+func reflowRows(lines []captions.Line, fontSize, maxTextW float32, maxLines int) []row {
+	var wrapped []row
+	var settledText []string
+	for _, line := range lines {
+		if line.Settled {
+			settledText = append(settledText, line.Text)
+			continue
+		}
+		for _, piece := range Wrap(line.Text, fontSize, maxTextW) {
+			wrapped = append(wrapped, row{piece, false})
+		}
+	}
+	if joined := strings.TrimSpace(strings.Join(settledText, " ")); joined != "" {
+		var settledRows []row
+		for _, piece := range Wrap(joined, fontSize, maxTextW) {
+			settledRows = append(settledRows, row{piece, true})
+		}
+		wrapped = append(settledRows, wrapped...)
+	}
+	if maxLines < 1 {
+		maxLines = 1
+	}
+	if len(wrapped) > maxLines {
+		wrapped = wrapped[len(wrapped)-maxLines:]
+	}
+	return wrapped
 }
 
 func (r *captionRenderer) ensureTexts(n int) {

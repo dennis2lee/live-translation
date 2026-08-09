@@ -1107,3 +1107,44 @@ concurrency in front of the race detector. Reverting the field to a plain
 
 `go test -race ./...` clean, `go vet` clean, `gofmt` clean, bufdiff 0/30 after
 the changes.
+
+## Three-line captions showed one packed row and two blank ones (2026-08-08)
+
+Reported from live use of 1.0.5: with three caption lines configured, the
+bottom row often carried the only text and the two rows above it were blank.
+
+**Two of this week's fixes were fighting each other.** The reflow fix packed
+rows full — settled sentences join into one paragraph and wrap, so several
+short sentences share a row. But the buffer still kept only `max_lines`
+*sentences* of history, which was the Python build's rule from when one
+sentence was one row. Under reflow, three short sentences are one row, and
+there was nothing left to put in the other two.
+
+Reproduced in a test before changing anything: twelve short settled sentences
+("Love.", "Lord.", "My soul." — the shape the 67-minute transcript measured,
+56 lines of six runes or fewer) into a three-line default-width box:
+
+```
+the box shows 1 of its 3 rows: ["Give thanks. Hallelujah. Glory."]
+```
+
+The fix moves the row cap to where the rows are made: the buffer keeps
+`DisplayHistoryFactor` (8) sentences per display row, and the renderer —
+which is the only place wrapping happens — trims to `max_lines` rows after
+reflowing. Eight is measured, not guessed: the default layout fits about 50
+runes on a row, and the worst measured sentences run about six runes plus a
+joining space. The transcript is unaffected either way — it is fed by
+`drain_new_commits`, not by the display history.
+
+This is the fifth deliberate deviation from the frozen reference, mirrored in
+`bufdiff/deviations.py` (`__post_init__` and `set_max_lines` re-wrap the
+deque at the larger bound, `display_lines` stops truncating). bufdiff after
+the change: 0/30 divergences; the same seed against `--no-deviations`
+diverges, so the mirror is load-bearing, not vacuous. The fuzz invariant
+moved with the contract: committed is bounded by the history factor, and the
+queue bound is unchanged.
+
+What this does *not* change: clear-on-silence still empties the box after two
+quiet seconds, so the first sentence after a pause still starts alone on the
+bottom row — that is the clear working, not this defect. A reader who wants
+the box to stay full through pauses raises `clear_after_seconds`.

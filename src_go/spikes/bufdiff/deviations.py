@@ -11,11 +11,13 @@ Each function mirrors the Go code it was ported to. Reported by Dennis from a
 """
 
 import re
+from collections import deque
 
 ABBREVIATIONS = {
     "dr", "mr", "mrs", "ms", "prof", "rev", "fr", "st", "jr", "sr", "vs",
 }
 CATCH_UP_FACTOR = 2
+DISPLAY_HISTORY_FACTOR = 8
 
 
 def _ends_with_abbreviation(settled: str) -> bool:
@@ -73,13 +75,17 @@ def apply(cb) -> None:
     # 3. Complete-phrases mode shows the text in progress when withholding it
     #    would leave the box empty — there is no settled line to protect, and a
     #    blank box during a long sentence tells the reader nothing.
+    #
+    #    No truncation to max_lines any more — that is deviation 5: the
+    #    renderer trims to max_lines *rows* after reflowing, so display_lines
+    #    hands over the whole (bounded) history.
     def display_lines(self):
         lines = [(t, True) for t in self._committed]
         if self._pending and not self._queue and (
             not self.complete_phrases_only or not self._committed
         ):
             lines.append((self._pending, False))
-        return lines[-self.max_lines:]
+        return lines
 
     # 4. A reconnect resumes the previous line only when it was cut off
     #    mid-sentence. go_away arrives every nine minutes, so resuming a line
@@ -98,7 +104,32 @@ def apply(cb) -> None:
                 self._continue_next = False
         return original_feed(self, text, now)
 
+    # 5. The settled history is bounded by DISPLAY_HISTORY_FACTOR sentences
+    #    per row, not by max_lines. The reference painted one sentence per
+    #    row, so max_lines sentences was one boxful; the Go renderer reflows
+    #    sentences into shared rows, and max_lines *sentences* often filled a
+    #    single row while the rows above sat blank. The renderer trims to
+    #    max_lines rows itself.
+    original_post_init = cb.CaptionBuffer.__post_init__
+
+    def post_init(self) -> None:
+        original_post_init(self)
+        self._committed = deque(
+            self._committed, maxlen=max(1, self.max_lines) * DISPLAY_HISTORY_FACTOR
+        )
+
+    def set_max_lines(self, n: int) -> None:
+        n = max(1, n)
+        if n == self.max_lines:
+            return
+        self.max_lines = n
+        self._committed = deque(
+            self._committed, maxlen=n * DISPLAY_HISTORY_FACTOR
+        )
+
     cb.CaptionBuffer.feed = feed
     cb.CaptionBuffer._ends_a_sentence = ends_a_sentence
     cb.CaptionBuffer._release_due = release_due
     cb.CaptionBuffer.display_lines = display_lines
+    cb.CaptionBuffer.__post_init__ = post_init
+    cb.CaptionBuffer.set_max_lines = set_max_lines

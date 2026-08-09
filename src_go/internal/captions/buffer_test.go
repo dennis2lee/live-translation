@@ -146,9 +146,18 @@ func TestLineIsHeldForItsFullHoldTime(t *testing.T) {
 	if got := texts(b.DisplayLines()); !reflect.DeepEqual(got, want) {
 		t.Errorf("display = %q, want the first line still up", got)
 	}
+	if got := len(b.QueuedLines()); got != 1 {
+		t.Fatalf("queue holds %d lines, want the second waiting out the hold", got)
+	}
 	b.Tick(1.2, SpeechUnknown)
-	if got := texts(b.DisplayLines()); len(got) != 1 || got[0] == want[0] {
-		t.Errorf("display = %q, want the second line after the hold", got)
+	// Released: it is the newest line of the history now, and the renderer
+	// puts the newest rows at the bottom of the box.
+	got := texts(b.DisplayLines())
+	if len(got) == 0 || got[len(got)-1] != "Another sentence long enough too." {
+		t.Errorf("display = %q, want the second line released after the hold", got)
+	}
+	if got := len(b.QueuedLines()); got != 0 {
+		t.Errorf("queue still holds %d lines", got)
 	}
 }
 
@@ -332,11 +341,16 @@ func TestFuzzInvariantsHold(t *testing.T) {
 				}
 				recorded += len(b.DrainNewCommits())
 
-				if got := len(b.CommittedLines()); got > b.MaxLines() {
-					t.Fatalf("step %d: %d committed lines exceed max_lines %d", step, got, b.MaxLines())
+				// The display history is bounded — by DisplayHistoryFactor
+				// sentences per row, not by max_lines: the renderer reflows
+				// sentences into shared rows and trims to max_lines rows
+				// itself, so the buffer keeps enough sentences to fill them.
+				if got := len(b.CommittedLines()); got > b.MaxLines()*DisplayHistoryFactor {
+					t.Fatalf("step %d: %d committed lines exceed the history bound %d",
+						step, got, b.MaxLines()*DisplayHistoryFactor)
 				}
-				if got := len(b.DisplayLines()); got > b.MaxLines() {
-					t.Fatalf("step %d: %d display lines exceed max_lines %d", step, got, b.MaxLines())
+				if got := len(b.DisplayLines()); got > b.MaxLines()*DisplayHistoryFactor+1 {
+					t.Fatalf("step %d: %d display lines exceed history+pending", step, got)
 				}
 				if b.IsEmpty() && len(b.DisplayLines()) > 0 {
 					t.Fatalf("step %d: IsEmpty but display is %v", step, b.DisplayLines())

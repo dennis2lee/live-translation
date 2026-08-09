@@ -64,6 +64,25 @@ const (
 	// transcript, which DrainNewCommits keeps independent of the display.
 	CatchUpFactor = 2
 
+	// DisplayHistoryFactor is how many settled sentences are kept per display
+	// row, so the box can fill all of its rows.
+	//
+	// The Python build painted one sentence per row, so keeping max_lines
+	// sentences was exactly one boxful. The Go renderer reflows settled
+	// sentences into one paragraph — rows pack full — which means several
+	// sentences share a row, and max_lines sentences often filled a single
+	// row while the rows above it sat blank. Reported from live use with three
+	// lines configured: the bottom row carried the only text.
+	//
+	// Eight per row comes from the measured worst case, not a guess: the
+	// 67-minute transcript has 56 settled lines of six runes or fewer
+	// ("Love", "My", "arise"), and the default layout fits roughly 50 runes
+	// on a row — about eight such sentences once each carries its joining
+	// space. The renderer trims to max_lines *rows* after wrapping, so
+	// keeping too much history costs nothing on screen; only too little
+	// shows, as blank rows.
+	DisplayHistoryFactor = 8
+
 	autoSampleSize     = 8
 	autoUtteranceChars = 25
 )
@@ -199,6 +218,12 @@ func New(opts Options) *Buffer {
 // MaxLines is the most lines the display will hold.
 func (b *Buffer) MaxLines() int { return b.maxLines }
 
+// historyBound is how many settled sentences are kept for the display. More
+// than maxLines, because the renderer reflows sentences into shared rows —
+// see DisplayHistoryFactor. The transcript is unaffected either way; it is
+// fed by newCommits, not by this history.
+func (b *Buffer) historyBound() int { return b.maxLines * DisplayHistoryFactor }
+
 // CompletePhrasesOnly reports whether unsettled text is withheld.
 func (b *Buffer) CompletePhrasesOnly() bool { return b.completePhrasesOnly }
 
@@ -235,7 +260,15 @@ func (b *Buffer) IsEmpty() bool {
 	return len(b.committed) == 0 && b.pending == "" && len(b.queue) == 0
 }
 
-// DisplayLines returns at most MaxLines rows, dropping the oldest.
+// DisplayLines returns the settled history, newest last, with the unsettled
+// text after it when it may be shown.
+//
+// This is material for the renderer, not the finished screen: it holds up to
+// historyBound sentences — more than MaxLines — because the renderer reflows
+// settled sentences into shared rows and trims to MaxLines *rows* after
+// wrapping. Handing it exactly MaxLines sentences was the Python rule, where
+// one sentence was one row; under reflow it left a three-row box showing one
+// packed row and two blank ones.
 //
 // Unsettled text is withheld while the queue drains: appending live text under
 // lines that are still catching up would show them out of order. In
@@ -257,9 +290,6 @@ func (b *Buffer) DisplayLines() []Line {
 		(!b.completePhrasesOnly || len(b.committed) == 0) {
 		lines = append(lines, Line{Text: b.pending, Settled: false})
 	}
-	if len(lines) > b.maxLines {
-		lines = lines[len(lines)-b.maxLines:]
-	}
 	return lines
 }
 
@@ -272,8 +302,8 @@ func (b *Buffer) SetMaxLines(n int) {
 		return
 	}
 	b.maxLines = n
-	if len(b.committed) > n {
-		b.committed = append([]string(nil), b.committed[len(b.committed)-n:]...)
+	if bound := b.historyBound(); len(b.committed) > bound {
+		b.committed = append([]string(nil), b.committed[len(b.committed)-bound:]...)
 	}
 }
 
@@ -572,8 +602,8 @@ func (b *Buffer) drain(now float64) bool {
 	for b.releaseDue(now) {
 		b.committed = append(b.committed, b.queue[0])
 		b.queue = b.queue[1:]
-		if len(b.committed) > b.maxLines {
-			b.committed = b.committed[len(b.committed)-b.maxLines:]
+		if bound := b.historyBound(); len(b.committed) > bound {
+			b.committed = b.committed[len(b.committed)-bound:]
 		}
 		b.releasedAt = now
 		changed = true
