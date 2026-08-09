@@ -11,6 +11,12 @@ dist/
 # Local agent instructions — kept out of the repository
 CLAUDE.md
 
+# Review write-ups. Working documents: what a review looked at, in what order,
+# and what was left alone. Whatever they conclude that outlives the review goes
+# where it is read — the fix, its test, a rule in CLAUDE.md, a measurement in
+# spikes/RESULTS.md — so the file itself is not the record.
+code_review*.md
+
 # Never commit key material or captured audio
 .env
 *.pem
