@@ -201,6 +201,21 @@ type Buffer struct {
 	samples       []int
 	newCommits    []string
 	resumedPrefix string
+
+	// lastCommitFinished is how the newest settled line came to settle: a
+	// whole utterance, or interrupted by a timer. Only the second kind should
+	// be resumed after a reconnect.
+	//
+	// It has to be recorded rather than inferred, which is what the first
+	// version of the resume gate got wrong. Punctuation answers the question
+	// for most lines, but not for all of them: the server's turn_complete
+	// settles whatever is buffered whether or not it ends in a full stop, and
+	// "Thank you" is then a complete turn that looks exactly like a phrase cut
+	// off mid-sentence. Every commit says which it was.
+	//
+	// One flag is enough for the whole buffer: commit appends to the queue,
+	// and the line a reconnect resumes is always the newest settled one.
+	lastCommitFinished bool
 }
 
 // New builds a Buffer, filling in the defaults for anything left at zero.
@@ -370,7 +385,7 @@ func (b *Buffer) Feed(text string, now float64) bool {
 	// It may still be queued rather than on screen, so check the queue first.
 	if b.continueNext {
 		b.continueNext = false
-		if b.pending == "" && !looksFinished(b.lastSettledLine()) {
+		if b.pending == "" && !b.lastCommitFinished {
 			resumed := ""
 			if n := len(b.queue); n > 0 {
 				resumed = b.queue[n-1]
@@ -395,7 +410,7 @@ func (b *Buffer) Feed(text string, now float64) bool {
 	b.pending = join(b.pending, text)
 
 	if b.EffectivePolicy() == PolicyUtterance || b.endsASentence() {
-		b.commit()
+		b.commit(true)
 		// Show it straight away when there is room, so a single sentence never
 		// waits for the next tick.
 		b.drain(now)
@@ -405,25 +420,11 @@ func (b *Buffer) Feed(text string, now float64) bool {
 
 // endsASentence reports whether the pending text has reached a sentence end.
 //
-// In complete-phrases mode a full stop also has to have enough text behind it:
-// "Dr." and "vs." would otherwise settle a two-word fragment as a sentence, and
-// there is no dimmed pending line left on screen to show the reader that more
-// is coming.
-func (b *Buffer) endsASentence() bool {
-	settled := strings.TrimRightFunc(b.pending, unicode.IsSpace)
-	if settled == "" {
-		return false
-	}
-	last, _ := utf8.DecodeLastRuneInString(settled)
-	if !strings.ContainsRune(SentenceEnders, last) {
-		return false
-	}
-	// "?" and "!" never end an abbreviation, so they always settle.
-	if last != '.' {
-		return true
-	}
-	return !endsWithAbbreviation(settled)
-}
+// The same question looksFinished asks of a settled line, so it is the same
+// code: the two were written separately and were identical line for line, which
+// meant the next change to what counts as a sentence end could land in one and
+// miss the other.
+func (b *Buffer) endsASentence() bool { return looksFinished(b.pending) }
 
 // abbreviations are the words whose trailing full stop does not end a sentence.
 //
@@ -482,7 +483,7 @@ func (b *Buffer) NoteTurnComplete(now float64) bool {
 	if b.pending == "" {
 		return false
 	}
-	b.commit()
+	b.commit(true)
 	b.drain(now)
 	return true
 }
@@ -506,7 +507,7 @@ func (b *Buffer) Tick(now float64, speech Speech) bool {
 
 	// Settle a phrase that stopped without sentence-final punctuation.
 	if b.EffectivePolicy() == PolicyIncremental && b.pending != "" && idle >= b.idleCommitSeconds {
-		b.commit()
+		b.commit(false)
 		changed = true
 	}
 
@@ -514,7 +515,7 @@ func (b *Buffer) Tick(now float64, speech Speech) bool {
 	// pending text: the display would never report itself complete, so it would
 	// never clear and the text would never reach the transcript.
 	if b.clearAfterSeconds != 0 && b.pending != "" && idle >= b.clearAfterSeconds {
-		b.commit()
+		b.commit(false)
 		changed = true
 	}
 
@@ -547,7 +548,7 @@ func (b *Buffer) Flush() bool {
 	if b.pending == "" {
 		return false
 	}
-	b.commit()
+	b.commit(false)
 	return true
 }
 
@@ -561,18 +562,6 @@ func (b *Buffer) Flush() bool {
 func (b *Buffer) NoteReconnect() {
 	b.continueNext = true
 	b.lastText = ""
-}
-
-// lastSettledLine is the line a reconnect would resume — the newest settled
-// line, whether it is queued or already on screen.
-func (b *Buffer) lastSettledLine() string {
-	if n := len(b.queue); n > 0 {
-		return b.queue[n-1]
-	}
-	if n := len(b.committed); n > 0 {
-		return b.committed[n-1]
-	}
-	return ""
 }
 
 // looksFinished reports whether a settled line was a whole sentence.
@@ -603,7 +592,7 @@ func looksFinished(line string) bool {
 // underneath it. commit files it under newCommits, and emptying the queue below
 // keeps it off the screen.
 func (b *Buffer) Clear() {
-	b.commit()
+	b.commit(false)
 	b.committed = b.committed[:0]
 	b.queue = b.queue[:0]
 	b.pending = ""
@@ -685,7 +674,11 @@ func (b *Buffer) clearDue(now float64) bool {
 	return now-quietSince >= b.clearAfterSeconds
 }
 
-func (b *Buffer) commit() {
+// commit settles the pending text. `finished` says whether it was a whole
+// utterance — a sentence end, the server's turn_complete, or a whole-utterance
+// policy — as opposed to a timer giving up on it. Punctuation is honoured on
+// top, so a caller that does not know can pass false safely.
+func (b *Buffer) commit(finished bool) {
 	line := strings.TrimSpace(b.pending)
 	b.pending = ""
 	prefix := b.resumedPrefix
@@ -693,6 +686,7 @@ func (b *Buffer) commit() {
 	if line == "" {
 		return
 	}
+	b.lastCommitFinished = finished || looksFinished(line)
 	b.queue = append(b.queue, line)
 	if prefix != "" && strings.HasPrefix(line, prefix) {
 		rest := strings.TrimSpace(line[len(prefix):])

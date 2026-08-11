@@ -1266,3 +1266,36 @@ what makes 1.2 s wrong — but it does not show what a real pause looks like on
 the far side of 1.6 s. A longer session with genuine silences would confirm
 whether 1.6 is also the right ceiling, or whether the clear-on-silence path is
 doing that work already.
+
+## The reconnect merge, closed properly (2026-08-08)
+
+The gate added earlier that day judged a settled line by its punctuation. That
+left one way through, flagged in the review and now fixed: **the server's
+`turn_complete` settles whatever is buffered, whether or not it ends in a full
+stop.** "Thank you" is then a finished turn that reads exactly like a phrase cut
+off mid-sentence, so the gate resumed it. Reproduced before changing anything:
+
+```
+a completed turn was glued to the next session: "Thank you So we begin."
+```
+
+The buffer now records *how* each line settled rather than inferring it from
+the text. `commit` takes a `finished` argument — true for a sentence end, for
+`turn_complete`, and for the whole-utterance policy; false when a timer gave
+up — and punctuation is still honoured on top, so a caller that cannot tell
+may pass false safely. One flag covers the whole buffer, because `commit`
+appends to the queue and the line a reconnect resumes is always the newest
+settled one.
+
+The distinction is the settling, not the wording, and a pair of tests says so:
+"Thank you" ended by `turn_complete` is left alone, and the same text left
+hanging by the idle timer is still rejoined into "Thank you for coming."
+
+`endsASentence` now delegates to `looksFinished`. They were identical line for
+line — the review's warning was that the next change to what counts as a
+sentence end would land in one and miss the other, and this was that change.
+
+Mirrored in `deviations.py`, which needed the same restructuring: the hint is
+set around `feed` and `note_turn_complete` and consumed in a wrapped `_commit`.
+bufdiff 0/40 after; putting the punctuation-only gate back into the mirror
+diverges on **40 of 40** seeds, so it is thoroughly load-bearing.

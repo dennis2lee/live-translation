@@ -564,6 +564,49 @@ func TestReconnectStillJoinsAnInterruptedSentence(t *testing.T) {
 	}
 }
 
+// A turn the server declared over must not be resumed either, even with no
+// punctuation on the end.
+//
+// This is what punctuation alone could not see. turn_complete settles whatever
+// is buffered, so "Thank you" is a finished turn that reads exactly like a
+// phrase cut off mid-sentence — and the first version of this gate resumed it,
+// gluing the next session's opening onto it.
+func TestReconnectDoesNotResumeATurnTheServerEnded(t *testing.T) {
+	b := incremental(Options{CompletePhrasesOnly: true, ClearAfterSeconds: 0})
+	b.Feed("Thank you", 0)
+	b.NoteTurnComplete(0.5) // no full stop, but the turn is over
+	b.DrainNewCommits()
+
+	b.NoteReconnect()
+	b.Feed(" So we begin.", 1.5)
+
+	for _, l := range texts(b.DisplayLines()) {
+		if strings.Contains(l, "Thank you So we begin") {
+			t.Errorf("a completed turn was glued to the next session: %q", l)
+		}
+	}
+	if got := b.DrainNewCommits(); len(got) != 1 || got[0] != "So we begin." {
+		t.Errorf("transcript got %q, want the new sentence on its own", got)
+	}
+}
+
+// The distinction is how the line settled, not how it reads: the same text,
+// settled by the idle timer instead, is still rejoined.
+func TestTheSameTextIsResumedWhenATimerCutItOff(t *testing.T) {
+	b := incremental(Options{CompletePhrasesOnly: true, ClearAfterSeconds: 0})
+	b.Feed("Thank you", 0)
+	b.Tick(2.0, SpeechUnknown) // the idle timer gave up — it was interrupted
+	b.DrainNewCommits()
+
+	b.NoteReconnect()
+	b.Feed(" for coming.", 3.0)
+
+	joined := strings.Join(texts(b.DisplayLines()), " | ")
+	if !strings.Contains(joined, "Thank you for coming.") {
+		t.Errorf("display = %q, want the halves rejoined", joined)
+	}
+}
+
 // looksFinished decides which of the two cases applies.
 func TestLooksFinished(t *testing.T) {
 	cases := []struct {

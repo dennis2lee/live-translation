@@ -88,22 +88,48 @@ def apply(cb) -> None:
             lines.append((self._pending, False))
         return lines
 
-    # 4. A reconnect resumes the previous line only when it was cut off
-    #    mid-sentence. go_away arrives every nine minutes, so resuming a line
-    #    that had already reached a full stop glued two unrelated sentences
-    #    into one, seven times an hour.
+    # 4. A reconnect resumes the previous line only when a timer cut it off.
+    #    go_away arrives every nine minutes, so resuming a line that was
+    #    already whole glued two unrelated sentences into one, seven times an
+    #    hour.
+    #
+    #    Which kind it was is *recorded at commit time*, not read back off the
+    #    text. Punctuation answers it for most lines but not all: the server's
+    #    turn_complete settles whatever is buffered, so "Thank you" is a
+    #    finished turn that reads exactly like a phrase cut off mid-sentence.
+    #    Judging by punctuation alone resumed it and produced "Thank you So we
+    #    begin."
+    original_commit = cb.CaptionBuffer._commit
+
+    def _commit(self) -> None:
+        finished = self._commit_finished_hint
+        self._commit_finished_hint = False
+        line = self._pending.strip()
+        original_commit(self)
+        if line:
+            self._last_commit_finished = finished or _looks_finished(line)
+
     original_feed = cb.CaptionBuffer.feed
 
     def feed(self, text: str, now: float) -> bool:
-        if self._continue_next and not self._pending:
-            last = ""
-            if self._queue:
-                last = self._queue[-1]
-            elif self._committed:
-                last = self._committed[-1]
-            if _looks_finished(last):
-                self._continue_next = False
-        return original_feed(self, text, now)
+        if self._continue_next and not self._pending and self._last_commit_finished:
+            self._continue_next = False
+        # feed commits only at a sentence end or under the whole-utterance
+        # policy, and both of those are finished lines.
+        self._commit_finished_hint = True
+        try:
+            return original_feed(self, text, now)
+        finally:
+            self._commit_finished_hint = False
+
+    original_note_turn_complete = cb.CaptionBuffer.note_turn_complete
+
+    def note_turn_complete(self, now: float) -> bool:
+        self._commit_finished_hint = True
+        try:
+            return original_note_turn_complete(self, now)
+        finally:
+            self._commit_finished_hint = False
 
     # 5. The settled history is bounded by DISPLAY_HISTORY_FACTOR sentences
     #    per row, not by max_lines. The reference painted one sentence per
@@ -120,6 +146,8 @@ def apply(cb) -> None:
 
     def post_init(self) -> None:
         original_post_init(self)
+        self._last_commit_finished = False
+        self._commit_finished_hint = False
         if self.idle_commit_seconds == cb.IDLE_COMMIT_SECONDS:
             self.idle_commit_seconds = IDLE_COMMIT_SECONDS
         self._committed = deque(
@@ -135,7 +163,9 @@ def apply(cb) -> None:
             self._committed, maxlen=n * DISPLAY_HISTORY_FACTOR
         )
 
+    cb.CaptionBuffer._commit = _commit
     cb.CaptionBuffer.feed = feed
+    cb.CaptionBuffer.note_turn_complete = note_turn_complete
     cb.CaptionBuffer._ends_a_sentence = ends_a_sentence
     cb.CaptionBuffer._release_due = release_due
     cb.CaptionBuffer.display_lines = display_lines

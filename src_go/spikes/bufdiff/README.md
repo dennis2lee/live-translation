@@ -33,7 +33,8 @@ frozen reference in six named ways, listed and applied at runtime in
 `deviations.py` — a full stop settles by abbreviation rather than by length, a
 backlog is paced in two tiers instead of dumped, complete-phrases mode shows
 the text in progress rather than an empty box, a reconnect resumes the
-previous line only when it was cut off mid-sentence, the settled history
+previous line only when a timer cut it off (recorded at commit time, since
+the server's turn_complete finishes a turn that carries no punctuation), the settled history
 is bounded by `DISPLAY_HISTORY_FACTOR` sentences per row rather than by
 `max_lines` (because the Go renderer reflows sentences into shared rows and
 trims to `max_lines` rows itself), and the idle timer is 1.6 s rather than
