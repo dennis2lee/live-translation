@@ -29,14 +29,15 @@ builds a bare `Options{}` hits the difference — pass
 `captions.ClearAfterSeconds` explicitly.
 
 **Deliberate deviations.** Since 2026-08-08 the Go buffer departs from the
-frozen reference in five named ways, listed and applied at runtime in
+frozen reference in six named ways, listed and applied at runtime in
 `deviations.py` — a full stop settles by abbreviation rather than by length, a
 backlog is paced in two tiers instead of dumped, complete-phrases mode shows
 the text in progress rather than an empty box, a reconnect resumes the
-previous line only when it was cut off mid-sentence, and the settled history
+previous line only when it was cut off mid-sentence, the settled history
 is bounded by `DISPLAY_HISTORY_FACTOR` sentences per row rather than by
-`max_lines`, because the Go renderer reflows sentences into shared rows and
-trims to `max_lines` rows itself. `ref.py` applies them by default
+`max_lines` (because the Go renderer reflows sentences into shared rows and
+trims to `max_lines` rows itself), and the idle timer is 1.6 s rather than
+1.2, measured against the API's one-second fragment clock. `ref.py` applies them by default
 so the harness still reports only the divergences nobody intended; pass
 `--no-deviations` to compare against untouched 0.5.1 behaviour.
 

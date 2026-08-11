@@ -18,6 +18,7 @@ ABBREVIATIONS = {
 }
 CATCH_UP_FACTOR = 2
 DISPLAY_HISTORY_FACTOR = 8
+IDLE_COMMIT_SECONDS = 1.6
 
 
 def _ends_with_abbreviation(settled: str) -> bool:
@@ -110,10 +111,17 @@ def apply(cb) -> None:
     #    sentences into shared rows, and max_lines *sentences* often filled a
     #    single row while the rows above sat blank. The renderer trims to
     #    max_lines rows itself.
+    # 6. The idle timer is 1.6 s, not 1.2. Fragments arrive on a one-second
+    #    server clock, and 1.2 s sat inside its jitter: a beat arriving late
+    #    settled a sentence the speaker had not finished, 11 times in 93 gaps.
+    #    Applied in __post_init__ below, since it is a dataclass default and
+    #    the harness never passes one.
     original_post_init = cb.CaptionBuffer.__post_init__
 
     def post_init(self) -> None:
         original_post_init(self)
+        if self.idle_commit_seconds == cb.IDLE_COMMIT_SECONDS:
+            self.idle_commit_seconds = IDLE_COMMIT_SECONDS
         self._committed = deque(
             self._committed, maxlen=max(1, self.max_lines) * DISPLAY_HISTORY_FACTOR
         )

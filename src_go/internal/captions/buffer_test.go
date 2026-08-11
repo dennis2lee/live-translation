@@ -161,6 +161,41 @@ func TestLineIsHeldForItsFullHoldTime(t *testing.T) {
 	}
 }
 
+// The idle timer must clear a late server beat, and still fire on a real pause.
+//
+// Fragments arrive on a one-second server clock, not at the pace of speech
+// (measured 2026-08-08: 73 of 93 gaps between 900 and 1200 ms). The tail is a
+// beat arriving late followed by one back on the clock. At 1.2 s the timer sat
+// inside that jitter and split sentences the speaker had not finished — 11 of
+// 93 gaps crossed it.
+func TestIdleTimerClearsALateBeatButStillFires(t *testing.T) {
+	// A late beat: the slowest gap measured that was followed by an early one.
+	b := incremental(Options{ClearAfterSeconds: 0})
+	b.Feed("a phrase with no full stop", 0)
+	b.Tick(1.26, SpeechActive) // p90 of the measured distribution
+	if got := b.PendingText(); got == "" {
+		t.Error("a late server beat settled the phrase — the timer is inside the jitter")
+	}
+
+	// A real pause still settles it, well before the two-second missed beat.
+	b.Tick(1.7, SpeechActive)
+	if got := b.PendingText(); got != "" {
+		t.Errorf("pending is still %q after a genuine pause", got)
+	}
+	if got := texts(b.DisplayLines()); len(got) != 1 || got[0] != "a phrase with no full stop" {
+		t.Errorf("display = %q, want the settled phrase", got)
+	}
+}
+
+// The timer cannot usefully exceed the clear window: Tick force-commits
+// pending text there too, so a larger idle value would never be reached.
+func TestIdleTimerFitsInsideTheClearWindow(t *testing.T) {
+	if IdleCommitSeconds >= ClearAfterSeconds {
+		t.Errorf("IdleCommitSeconds %.1f >= ClearAfterSeconds %.1f, so the idle timer is dead code",
+			IdleCommitSeconds, ClearAfterSeconds)
+	}
+}
+
 // --- complete-phrases mode ------------------------------------------------
 
 func TestCompletePhrasesWithholdsUnsettledText(t *testing.T) {

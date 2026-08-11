@@ -1210,3 +1210,59 @@ the alignment put back to centre the test reports `x=112` and `x=418`.
 
 The status line keeps its centring — one line, a different kind of message,
 not something being read continuously.
+
+## The idle timer, set from the fragment clock (2026-08-08)
+
+A debug session finally measured what nothing had recorded: how fast
+translation fragments actually arrive. 93 gaps, from two sessions totalling
+about two minutes.
+
+| | ms |
+|---|---:|
+| min | 699 |
+| p25 | 990 |
+| **median** | **1000** |
+| p75 | 1014 |
+| p90 | 1239 |
+| p95 | 1498 |
+| max | 2003 |
+
+```
+   600-900ms    9  #########
+  900-1200ms   73  #########################################################################
+ 1200-1500ms    7  #######
+ 1500-2000ms    3  ###
+ 2000-3000ms    1  #
+```
+
+**Fragments arrive on a one-second server clock, not at the pace of speech.**
+That is the finding. 73 of 93 gaps sit in a 300 ms band around one second, and
+the distribution has a hard floor at 699 ms — speech does not produce a shape
+like that.
+
+The tail is not the speaker pausing either. Every long gap is followed by a
+short one: 1252 then 743, 1239 then 753, 1246 then 760 — each pair summing to
+about two seconds. A beat arrives late and the next lands back on the clock.
+
+**So `IdleCommitSeconds = 1.2` sat 240 ms above the normal interval, inside the
+jitter.** Eleven of 93 gaps crossed it, and each one settled a sentence the
+speaker had not finished. That is the mechanism behind the short lines counted
+in the 67-minute transcript — 30% of sermon lines with no sentence
+punctuation, 56 of them six runes or fewer.
+
+Raised to **1.6 s**. It clears a late beat with room to spare and still fires
+well inside the two-second missed beat. It cannot usefully go higher at the
+default settings: `Tick` force-commits pending text at `ClearAfterSeconds`
+(2.0) as well, so anything above that is unreachable — pinned by
+`TestIdleTimerFitsInsideTheClearWindow`.
+
+Sixth deliberate deviation from the frozen reference, mirrored in
+`deviations.py`. bufdiff 0/30 after; putting 1.2 back into the mirror diverges,
+so it is load-bearing.
+
+**What this measurement does not cover.** Two minutes, and the speaker barely
+paused. It establishes the *clock* — which is the part that was unknown and is
+what makes 1.2 s wrong — but it does not show what a real pause looks like on
+the far side of 1.6 s. A longer session with genuine silences would confirm
+whether 1.6 is also the right ceiling, or whether the clear-on-silence path is
+doing that work already.

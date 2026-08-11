@@ -16,7 +16,7 @@ cb = importlib.util.module_from_spec(spec)
 sys.modules["caption_buffer"] = cb  # dataclasses resolve types via sys.modules
 spec.loader.exec_module(cb)
 
-# The Go buffer deliberately departs from the frozen reference in five ways
+# The Go buffer deliberately departs from the frozen reference in six ways
 # (spikes/bufdiff/deviations.py). Apply them here so bufdiff keeps reporting
 # only the divergences nobody intended. Pass --no-deviations to compare against
 # the untouched 0.5.1 behaviour.

@@ -21,7 +21,25 @@ const SentenceEnders = ".?!"
 
 const (
 	// IdleCommitSeconds settles a phrase that stopped without punctuation.
-	IdleCommitSeconds = 1.2
+	//
+	// Measured, 2026-08-08: fragments do not arrive at the pace of speech, they
+	// arrive on a **one-second server clock**. 73 of 93 gaps in a debug session
+	// fell between 900 and 1200 ms, median 1000. The tail is not the speaker
+	// pausing — it is a beat arriving late followed by one landing back on the
+	// clock (1252 then 743, 1239 then 753), each pair summing to about two
+	// seconds.
+	//
+	// At 1.2 s the timer sat 240 ms above the normal interval, which is inside
+	// that jitter: 11 of 93 gaps crossed it, and every one of those split a
+	// sentence the speaker had not finished. That is the source of the short
+	// settled lines counted in the 67-minute transcript — 56 of them six runes
+	// or fewer ("Love", "My", "arise").
+	//
+	// 1.6 s clears a late beat with room to spare and still fires well inside
+	// the two-second missed beat. It cannot usefully go higher at the default
+	// settings: Tick force-commits pending text at ClearAfterSeconds (2.0)
+	// as well, so anything above that is unreachable.
+	IdleCommitSeconds = 1.6
 	// ClearAfterSeconds is the default silence before the display is wiped.
 	ClearAfterSeconds = 2.0
 
