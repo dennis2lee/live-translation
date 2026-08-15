@@ -135,6 +135,7 @@ type collector struct {
 	source        []string
 	states        []State
 	details       []string
+	audio         [][]byte
 	reconnects    int
 	turnCompletes int
 }
@@ -153,7 +154,16 @@ func (c *collector) callbacks() Callbacks {
 		},
 		OnReconnect:    func() { c.mu.Lock(); c.reconnects++; c.mu.Unlock() },
 		OnTurnComplete: func() { c.mu.Lock(); c.turnCompletes++; c.mu.Unlock() },
+		// Kept by reference on purpose: whether the bytes handed over stay
+		// valid is exactly what TestReceivedAudioIsCopied checks.
+		OnAudio: func(pcm []byte) { c.mu.Lock(); c.audio = append(c.audio, pcm); c.mu.Unlock() },
 	}
+}
+
+func (c *collector) audioBlobs() [][]byte {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return append([][]byte(nil), c.audio...)
 }
 
 func (c *collector) targets() []string {
@@ -243,7 +253,7 @@ func TestFragmentsReachTheCallbacks(t *testing.T) {
 			{SourceText: "안녕하세요"},
 			{TargetText: "Hello."},
 			{TurnComplete: true},
-			{AudioBytes: 4096},
+			{Audio: make([]byte, 4096)},
 		}), nil
 	}}
 
@@ -267,6 +277,59 @@ func TestFragmentsReachTheCallbacks(t *testing.T) {
 	})
 	if !c.sawState(StateRunning) {
 		t.Error("never reached the running state")
+	}
+}
+
+// The translated speech has to reach whoever is listening, and carry its bytes
+// rather than a count. Until 1.1.0 it was counted and dropped.
+func TestTranslatedAudioReachesTheCallback(t *testing.T) {
+	fastTiming(t)
+	c := &collector{}
+	want := []byte{1, 2, 3, 4, 5, 6, 7, 8}
+	opener := &recordingOpener{build: func(int) (liveSession, error) {
+		return newFakeSession([]Message{{Audio: want}}), nil
+	}}
+
+	tr, err := New(Options{Ring: audio.NewRing(audio.ChunkBytes * 4), open: opener.open, Callbacks: c.callbacks()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := tr.Start(); err != nil {
+		t.Fatal(err)
+	}
+	defer tr.Stop()
+
+	waitFor(t, "a blob of translated audio", func() bool { return len(c.audioBlobs()) > 0 })
+	if got := c.audioBlobs()[0]; !bytes.Equal(got, want) {
+		t.Errorf("audio = %v, want %v", got, want)
+	}
+}
+
+// A session that carries no audio must not call the callback at all, or a
+// player would be woken ten times a second to do nothing.
+func TestNoAudioMeansNoAudioCallback(t *testing.T) {
+	fastTiming(t)
+	c := &collector{}
+	opener := &recordingOpener{build: func(int) (liveSession, error) {
+		return newFakeSession([]Message{{TargetText: "Hello."}, {TurnComplete: true}}), nil
+	}}
+
+	tr, err := New(Options{Ring: audio.NewRing(audio.ChunkBytes * 4), open: opener.open, Callbacks: c.callbacks()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := tr.Start(); err != nil {
+		t.Fatal(err)
+	}
+	defer tr.Stop()
+
+	waitFor(t, "turn_complete", func() bool {
+		c.mu.Lock()
+		defer c.mu.Unlock()
+		return c.turnCompletes == 1
+	})
+	if got := c.audioBlobs(); len(got) != 0 {
+		t.Errorf("OnAudio fired %d times for messages carrying no audio", len(got))
 	}
 }
 

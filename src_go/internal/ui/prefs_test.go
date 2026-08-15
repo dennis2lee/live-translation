@@ -189,6 +189,8 @@ func TestApplyCollectsEveryTab(t *testing.T) {
 	p.saveScript.SetChecked(false)
 	p.transcriptDir.SetText("/tmp/somewhere")
 	p.debugLogging.SetChecked(true)
+	p.speakAloud.SetChecked(true)
+	p.speechVolume.SetValue(0.4)
 	p.apply()
 
 	s := w.settings
@@ -219,6 +221,8 @@ func TestApplyCollectsEveryTab(t *testing.T) {
 		{"SaveTranscript", s.SaveTranscript, false},
 		{"TranscriptDir", s.TranscriptDir, "/tmp/somewhere"},
 		{"DebugLogging", s.DebugLogging, true},
+		{"SpeakTranslation", s.SpeakTranslation, true},
+		{"SpeechVolume", s.SpeechVolume, 0.4},
 	}
 	for _, c := range checks {
 		if c.got != c.want {

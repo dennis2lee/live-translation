@@ -141,6 +141,10 @@ type Callbacks struct {
 	OnState        func(state State, detail string)
 	OnReconnect    func()
 	OnTurnComplete func()
+	// OnAudio receives the translated speech, 24 kHz mono PCM16. It is called
+	// from the receive loop, so it must not block: anything slow here stalls
+	// the stream for the captions too.
+	OnAudio func(pcm []byte)
 }
 
 func (c Callbacks) sourceText(t string) {
@@ -166,6 +170,11 @@ func (c Callbacks) reconnected() {
 func (c Callbacks) turnComplete() {
 	if c.OnTurnComplete != nil {
 		c.OnTurnComplete()
+	}
+}
+func (c Callbacks) audio(pcm []byte) {
+	if c.OnAudio != nil && len(pcm) > 0 {
+		c.OnAudio(pcm)
 	}
 }
 
@@ -661,8 +670,11 @@ func (t *Translator) sessionMain(ctx context.Context, holder *sessionHolder, han
 		if msg.TurnComplete {
 			t.cb.turnComplete()
 		}
-		// 6) msg.AudioBytes was already consumed and discarded by the adapter.
-		// Failing to read the audio stalls the stream.
+		// 6) The translated speech. Consuming it is not optional — failing to
+		// read the audio stalls the stream — but playing it is: with nobody
+		// listening the callback is nil and the bytes go where they always
+		// went.
+		t.cb.audio(msg.Audio)
 	}
 }
 

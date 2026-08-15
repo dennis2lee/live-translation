@@ -59,6 +59,7 @@ func TestClampingPullsEverythingIntoRange(t *testing.T) {
 		MaxLines:           40,
 		ClearAfterSeconds:  -1,
 		LineHoldSeconds:    99,
+		SpeechVolume:       4.5,
 		TranscriptDir:      "  ",
 		TargetLanguageCode: "",
 		CaptionPolicy:      "nonsense",
@@ -82,6 +83,7 @@ func TestClampingPullsEverythingIntoRange(t *testing.T) {
 		{"MaxLines", got.MaxLines, 4},
 		{"ClearAfterSeconds", got.ClearAfterSeconds, 0.0},
 		{"LineHoldSeconds", got.LineHoldSeconds, 3.0},
+		{"SpeechVolume", got.SpeechVolume, 1.0},
 		{"TargetLanguageCode", got.TargetLanguageCode, "en"},
 		{"CaptionPolicy", got.CaptionPolicy, "incremental"},
 	}
@@ -228,6 +230,44 @@ func TestPartialSettingsFileKeepsDefaults(t *testing.T) {
 	}
 	if got.MaxLines != Default().MaxLines {
 		t.Errorf("MaxLines = %d, want the default %d", got.MaxLines, Default().MaxLines)
+	}
+}
+
+// The upgrade trap for a new field whose default is not the zero value.
+//
+// Every settings file written before 1.1.0 has no speech_volume key. Load
+// starts from Default() and unmarshals into it, so the absent key keeps 1.0 —
+// but a loader that unmarshalled into a bare Settings would read 0.0, clamp it
+// to a perfectly legal 0.0, and mute every existing install. The failure looks
+// like a broken feature rather than a wrong setting, which is why it gets a
+// test of its own rather than a comment.
+func TestUpgradingSettingsKeepsTheSpeechVolumeAudible(t *testing.T) {
+	dir, _ := isolate(t)
+	// A settings file from 1.0.9: no speak_translation, no speech_volume.
+	old := `{"font_size": 44, "max_lines": 2, "audio_device_name": "MacBook Air Microphone"}`
+	if err := os.WriteFile(filepath.Join(dir, Filename), []byte(old), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	got := Load()
+	if got.SpeechVolume != 1.0 {
+		t.Errorf("SpeechVolume = %v after upgrading, want 1.0 — every install would be silent", got.SpeechVolume)
+	}
+	if got.SpeakTranslation {
+		t.Error("SpeakTranslation came on by itself on upgrade")
+	}
+	if got.OutputDeviceName != "" {
+		t.Errorf("OutputDeviceName = %q, want the system default", got.OutputDeviceName)
+	}
+}
+
+// Muting is a choice, and it has to survive being saved.
+func TestSpeechVolumeOfZeroIsKept(t *testing.T) {
+	dir, _ := isolate(t)
+	if err := os.WriteFile(filepath.Join(dir, Filename), []byte(`{"speech_volume": 0}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if got := Load().SpeechVolume; got != 0 {
+		t.Errorf("SpeechVolume = %v, want the 0 the user chose", got)
 	}
 }
 

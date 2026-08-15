@@ -1,6 +1,7 @@
 package ui
 
 import (
+	"encoding/binary"
 	"fmt"
 	"image/color"
 	"log/slog"
@@ -61,6 +62,14 @@ type prefsDialog struct {
 	level        *widget.ProgressBar
 	levelStatus  *widget.Label
 	levelButton  *widget.Button
+
+	speakAloud   *widget.Check
+	outputSelect *widget.Select
+	outputNames  []string
+	speechVolume *widget.Slider
+	toneButton   *widget.Button
+	toneStatus   *widget.Label
+
 	netResult    *widget.Label
 	netDetail    *widget.Label
 	runTest      *widget.Button
@@ -98,6 +107,17 @@ type prefsDialog struct {
 	lastPeak  float64
 	levelStop chan struct{}
 	netBusy   bool
+
+	// tone is the dialog's own player for the output test, and toneStop ends
+	// the goroutine feeding it.
+	//
+	// Unlike the level meter, this never borrows the session's device. Two
+	// captures on one microphone is a genuine conflict, which is why the meter
+	// observes instead; two streams on an output device simply mix, so opening
+	// our own is free — and it is the only way to test the device the dropdown
+	// is *pointing at* rather than the one already in use.
+	tone     *audio.Player
+	toneStop chan struct{}
 }
 
 // running reports whether the level test is on, either way round.
@@ -165,6 +185,7 @@ func (p *prefsDialog) close() {
 		close(p.levelStop)
 	}
 	p.stopMeter()
+	p.stopTone()
 	if p.win.prefs == p {
 		p.win.prefs = nil
 	}
@@ -244,6 +265,7 @@ func (p *prefsDialog) audioTab() fyne.CanvasObject {
 	p.silenceGate.SetChecked(p.working.SilenceGate)
 
 	return container.NewVBox(
+		widget.NewLabelWithStyle("Input", fyne.TextAlignLeading, fyne.TextStyle{Bold: true}),
 		widget.NewLabel("Input device"),
 		p.deviceSelect,
 		widget.NewLabel("Input level"),
@@ -252,7 +274,90 @@ func (p *prefsDialog) audioTab() fyne.CanvasObject {
 		container.NewHBox(p.levelButton),
 		hint,
 		p.silenceGate,
+		widget.NewSeparator(),
+		p.outputGroup(),
 	)
+}
+
+// outputGroup is the spoken-translation half of the Audio tab.
+func (p *prefsDialog) outputGroup() fyne.CanvasObject {
+	p.speakAloud = widget.NewCheck("Speak the translation aloud", nil)
+	p.speakAloud.SetChecked(p.working.SpeakTranslation)
+
+	// The one thing a first-time user of this has to know, and it is measured,
+	// not cautious: with speakers the translation is heard by the microphone
+	// and translated again, and echo_target_language does not stop it.
+	warning := widget.NewLabel(
+		"Use headphones. Through speakers the translation returns to the " +
+			"microphone and is translated again.")
+	warning.Wrapping = fyne.TextWrapWord
+
+	devices := audio.ListOutputDevices()
+	p.outputNames = []string{""}
+	labels := []string{"System Default Output"}
+	for _, d := range devices {
+		p.outputNames = append(p.outputNames, d.Name)
+		labels = append(labels, outputDeviceLabel(d))
+	}
+	p.outputSelect = widget.NewSelect(labels, nil)
+	p.outputSelect.SetSelectedIndex(0)
+	for i, name := range p.outputNames {
+		if name == p.working.OutputDeviceName {
+			p.outputSelect.SetSelectedIndex(i)
+		}
+	}
+	// Restarting on a device change is the point of the test: what is being
+	// checked is which box the sound comes out of.
+	p.outputSelect.OnChanged = func(string) {
+		if p.tone != nil {
+			p.stopTone()
+			p.startTone()
+		}
+	}
+
+	p.speechVolume = widget.NewSlider(0, 1)
+	p.speechVolume.Step = 0.05
+	p.speechVolume.Value = p.working.SpeechVolume
+	volumeLabel := widget.NewLabel("")
+	setVolumeLabel := func(v float64) { volumeLabel.SetText(fmt.Sprintf("%.0f%%", v*100)) }
+	setVolumeLabel(p.speechVolume.Value)
+	// Live only on the dialog's own test player. The session's volume moves on
+	// Apply like every other setting, so Cancel has one thing to put back.
+	p.speechVolume.OnChanged = func(v float64) {
+		setVolumeLabel(v)
+		if p.tone != nil {
+			p.tone.SetVolume(v)
+		}
+	}
+
+	p.toneStatus = widget.NewLabel("Not running.")
+	p.toneStatus.Wrapping = fyne.TextWrapWord
+	p.toneButton = widget.NewButton("Play Test Tone", func() {
+		if p.tone != nil {
+			p.stopTone()
+		} else {
+			p.startTone()
+		}
+	})
+
+	return container.NewVBox(
+		widget.NewLabelWithStyle("Output", fyne.TextAlignLeading, fyne.TextStyle{Bold: true}),
+		p.speakAloud,
+		warning,
+		widget.NewLabel("Output device"),
+		p.outputSelect,
+		container.NewBorder(nil, nil, widget.NewLabel("Volume"), volumeLabel, p.speechVolume),
+		container.NewHBox(p.toneButton),
+		p.toneStatus,
+	)
+}
+
+func outputDeviceLabel(d audio.OutputDevice) string {
+	label := fmt.Sprintf("%s (%.0f Hz, %dch)", d.Name, d.DefaultSampleRate, d.Channels)
+	if d.IsDefault {
+		label += " — default"
+	}
+	return label
 }
 
 func (p *prefsDialog) networkTab() fyne.CanvasObject {
@@ -560,6 +665,11 @@ func (p *prefsDialog) collect() config.Settings {
 	if i := p.deviceSelect.SelectedIndex(); i >= 0 && i < len(p.deviceNames) {
 		s.AudioDeviceName = p.deviceNames[i]
 	}
+	if i := p.outputSelect.SelectedIndex(); i >= 0 && i < len(p.outputNames) {
+		s.OutputDeviceName = p.outputNames[i]
+	}
+	s.SpeakTranslation = p.speakAloud.Checked
+	s.SpeechVolume = p.speechVolume.Value
 	s.SilenceGate = p.silenceGate.Checked
 	s.VocabularySource = p.vocabSource.Text
 	s.VocabularyCaptions = p.vocabCaption.Text
@@ -767,6 +877,100 @@ func (p *prefsDialog) startMeter() {
 	p.meter = capture
 	p.levelButton.SetText("Stop Level Test")
 	p.levelStatus.SetText("Listening to " + dev.Name + "…")
+}
+
+// toneFrequency is an unmistakable note: high enough to carry on a laptop
+// speaker, low enough not to be shrill.
+const toneFrequency = 440.0
+
+// toneAmplitude leaves headroom, so a device already near clipping does not
+// distort and read as a broken output.
+const toneAmplitude = 0.25
+
+// startTone opens the selected output device and feeds it a sine wave.
+//
+// A tone rather than a speech sample: it needs no bundled asset, it cannot be
+// mistaken for a caption, and what is being tested is routing — whether sound
+// leaves the right box — not quality. It runs through the real Player, so it
+// exercises the resampler and the jitter buffer the translation will use.
+func (p *prefsDialog) startTone() {
+	name := ""
+	if i := p.outputSelect.SelectedIndex(); i >= 0 && i < len(p.outputNames) {
+		name = p.outputNames[i]
+	}
+
+	player := audio.NewPlayer(name, audio.TranslatedRate)
+	player.SetVolume(p.speechVolume.Value)
+	dev, err := player.Start()
+	if err != nil {
+		p.toneStatus.SetText("Could not open the device: " + err.Error())
+		p.toneButton.SetText("Play Test Tone")
+		return
+	}
+	p.tone = player
+	p.toneStop = make(chan struct{})
+	p.toneButton.SetText("Stop Test Tone")
+	p.toneStatus.SetText(fmt.Sprintf("Playing a %.0f Hz tone through %s…", toneFrequency, dev.Name))
+
+	stop := p.toneStop
+	go func() {
+		// 100 ms blobs, the shape the network delivers.
+		const blobMS = 100
+		samples := audio.TranslatedRate * blobMS / 1000
+		pcm := make([]byte, samples*2)
+		phase := 0.0
+		ticker := time.NewTicker(blobMS * time.Millisecond)
+		defer ticker.Stop()
+		for {
+			phase = fillTone(pcm, toneFrequency, audio.TranslatedRate, phase)
+			player.Write(pcm)
+			select {
+			case <-stop:
+				return
+			case <-p.levelStop:
+				return
+			case <-ticker.C:
+			}
+		}
+	}()
+}
+
+// stopTone releases the device. Safe when nothing is running, because close()
+// calls it on every dismissal.
+func (p *prefsDialog) stopTone() {
+	if p.toneStop != nil {
+		select {
+		case <-p.toneStop:
+		default:
+			close(p.toneStop)
+		}
+		p.toneStop = nil
+	}
+	if p.tone != nil {
+		p.tone.Stop()
+		p.tone = nil
+	}
+	if p.toneButton != nil {
+		p.toneButton.SetText("Play Test Tone")
+	}
+	if p.toneStatus != nil {
+		p.toneStatus.SetText("Not running.")
+	}
+}
+
+// fillTone writes one blob of sine into pcm and returns the phase to continue
+// from. Carrying the phase is what stops a click at every blob boundary.
+func fillTone(pcm []byte, freq float64, rate int, phase float64) float64 {
+	step := 2 * math.Pi * freq / float64(rate)
+	for i := 0; i+1 < len(pcm); i += 2 {
+		v := math.Sin(phase) * toneAmplitude
+		binary.LittleEndian.PutUint16(pcm[i:i+2], uint16(int16(v*32767)))
+		phase += step
+		if phase > 2*math.Pi {
+			phase -= 2 * math.Pi
+		}
+	}
+	return phase
 }
 
 // stopMeter releases the device. It is safe to call when nothing is running,

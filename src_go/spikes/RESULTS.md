@@ -1299,3 +1299,164 @@ Mirrored in `deviations.py`, which needed the same restructuring: the hint is
 set around `feed` and `note_turn_complete` and consumed in a wrapped `_commit`.
 bufdiff 0/40 after; putting the punctuation-only gate back into the mirror
 diverges on **40 of 40** seeds, so it is thoroughly load-bearing.
+
+## Hearing the translation: what the server actually sends (2026-08-15)
+
+Spikes `v1_voice` and `v2_play`, run before any of "play the translation" was
+designed. The application has always counted the model's audio and thrown it
+away, so nothing here had ever looked at it.
+
+### The audio is 24 kHz, and it arrives in real time
+
+```
+mime:        "audio/pcm;rate=24000"   (every chunk, every run)
+90 s of Korean in  ->  93.0 s of English audio out
+max backlog: 0.57 s at 1m12s
+```
+
+`rate=24000` comes off the MIME type the server stamps on each blob, not from
+an assumption: **guessing this wrong plays the translation at the wrong pitch,
+which sounds like a fault in the model rather than in us.** Mono, PCM16, so it
+is the capture format at a different rate — the same converter runs, backwards.
+
+The backlog number is the one that decides whether the feature is viable at
+all. It is what a player would fall behind by if it played every blob the
+instant it arrived, and it stays **under 0.6 s over 90 seconds**. A jitter
+buffer is enough; nothing has to be dropped or sped up.
+
+**Short clips say the opposite, and they are wrong.** 10–12 second runs
+measured 1.25–1.33× — 12 s of Korean returning 15 s of English — which reads
+like the translation outrunning the speaker and falling permanently behind. It
+is the tail: sending stops, the model finishes the sentence it had already
+heard, and three seconds of tail against a ten-second clip is a third of it.
+The ratio only means anything once the run is long enough for the tail to stop
+dominating. Measure this on 90 s, not on 10.
+
+First audio arrives **3.3–5.2 s** after speech starts (3.26, 3.32, 3.46, 4.28,
+5.24 across five runs). That is the fixed cost of hearing a translation, and no
+buffering choice changes it.
+
+### The voice cannot be chosen
+
+`LiveConnectConfig.SpeechConfig` exists in the SDK, so the obvious reading is
+that a prebuilt voice can be picked. It cannot — not on this model.
+
+```
+NoSuchVoiceZZ9   accepted, session ran normally, no error
+```
+
+An unknown voice name is not rejected, which is the first sign the field is
+being dropped rather than honoured. A server that ignores `SpeechConfig` and
+one that honours it both connect and both return speech, so the field was
+measured by pitch instead — median F0 over voiced frames, autocorrelation,
+60–400 Hz:
+
+```
+control (no SpeechConfig)   185, 170, 174 Hz
+Charon (a deep voice)       162, 173, 186 Hz
+Kore                        195 Hz
+Puck                        189 Hz
+NoSuchVoiceZZ9              188 Hz
+```
+
+**The ranges overlap completely.** A single Charon run at 162 Hz looked like a
+real effect until it was repeated: run-to-run variation on the same voice is
+larger than the gap between voices. There is one voice, and asking for another
+changes nothing.
+
+Do not add a voice control to Preferences on the strength of the SDK type. Add
+`SpeechConfig` to the list this preview model ignores, next to batch mode,
+caching, tools and structured output. Worth re-measuring when the model
+version changes; the spike is checked in for that.
+
+### `echo_target_language` is inert too, and there is a feedback loop
+
+The SDK documents it as: if false, no audio is produced for the target
+language. That would have made an open-speaker setup mostly safe — our own
+English going back into the microphone would produce nothing.
+
+It does not work that way. English in, `target=en`:
+
+```
+echo=false   68 chunks, 816000 bytes, 17.0 s of audio, full transcription
+echo=true    65 chunks, 780000 bytes, 16.2 s of audio, full transcription
+```
+
+The two are the same run twice. **Target-language input produces a full
+re-utterance regardless**, so speakers plus a microphone is a real feedback
+loop: our English is heard, translated, spoken, heard again. This is measured,
+not feared.
+
+It also poisons two things that read the microphone peak rather than the text:
+clear-on-silence never sees a quiet room, and the "no signal" warning never
+fires. Headphones are not a nicety for this feature.
+
+### Playback works, and the device rate is not 48 kHz
+
+`v2_play` opens a playback device and feeds it 100 ms at a time, the way the
+network will:
+
+```
+playback devices on this Mac:
+    MacBook Air Speakers      44100 Hz  2ch
+    Jump Desktop Microphone   48000 Hz  8ch
+  * Jump Desktop Audio        48000 Hz  8ch   (default)
+
+15.0 s of audio played in 15.388 s wall clock
+max buffered 112 ms, 0 bytes dropped, 33 starved callbacks
+```
+
+Two things fall out of the device list. **The speakers run at 44.1 kHz while
+the default device runs at 48** — so 24 kHz has to be converted per device, and
+a hardcoded output rate would be wrong on the very first machine tried. And the
+system default here is a *virtual* device (remote desktop), not the speakers,
+which is exactly why the user has to be able to choose.
+
+The starved callbacks are all at the start: the feeder sleeps 100 ms while the
+device asks every 20, so the ring is empty for the first few. A player needs a
+short prebuffer before it starts, or it clicks in.
+
+### Building it: three numbers and one wrong constant (2026-08-15)
+
+The design above survived contact, with one exception worth recording because
+it was wrong *on its own evidence*.
+
+**`PlayRingMS` was drafted at 500 ms.** The peak backlog had already been
+measured at 570 ms, and the backlog is exactly what the playback buffer holds —
+so the first number would have dropped audio at the worst moment of every burst,
+having been chosen "small enough that the listener is not held further behind".
+It is 2000 ms now. In practice it never fills: the live run peaked at 283 ms.
+
+**The prebuffer is worth 32 gaps.** `PlayPrebufferMS` (200) holds playback until
+there is a cushion, and re-arms whenever the buffer runs dry, so each utterance
+starts with one:
+
+```
+hand-rolled spike, no prebuffer      33 starved callbacks
+Player, WAV on a 100 ms metronome     1 starved,  16 ms silence, 0 dropped
+Player, live API audio, 45 s          1 starved,  18 ms silence, 0 dropped
+```
+
+The third line is the one that was not a given. A WAV fed on a tidy tick is a
+metronome; live blobs are not, and whether the jitter buffer copes with real
+arrival is a different question. It does.
+
+**The output rate is per device, and the default is not the speakers.** Already
+noted above, but it bit immediately: this Mac's speakers run at 44.1 kHz, so the
+first end-to-end run resampled 24000→44100 rather than the 48000 every earlier
+test had used.
+
+Two smaller things the build settled:
+
+- **`Player` needs a mutex where `Capture` needs an atomic.** Capture's
+  converter is touched by the device callback, which cannot take a lock and
+  which `Uninit` is what waits for — the ordering dance in `Capture.Stop` exists
+  for that. The player's converter is touched by `Write`, on the translator's
+  receive goroutine, so an ordinary lock retires it safely. What the callback
+  *does* touch is published as one immutable `playState` through an
+  `atomic.Pointer`, which is M3's answer with a whole struct instead of one
+  field.
+- **The audio callback is the one place `fyne.Do` is skipped.** Every other
+  translator callback hops to the UI goroutine. `OnAudio` must not: it touches
+  no widget, and ten blobs a second through the UI thread would make the sound
+  hostage to a repaint.

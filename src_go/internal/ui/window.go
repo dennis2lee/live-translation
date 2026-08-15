@@ -95,6 +95,17 @@ type Window struct {
 	translator *translator.Translator
 	writer     *transcript.Writer
 
+	// player speaks the translation, when SpeakTranslation is on. It is atomic
+	// where every other field here is plain, because it is the one thing read
+	// from a translator goroutine: OnAudio hands blobs straight to it rather
+	// than through fyne.Do, which would push ten blobs a second of audio
+	// through the UI thread and make the sound hostage to a repaint.
+	player atomic.Pointer[playerRef]
+	// newSpeaker builds that player. It is a field only so the tests can drive
+	// the start/stop/reopen rules without opening a device — malgo opens real
+	// hardware, and a test that needs headphones plugged in is not a test.
+	newSpeaker func(deviceName string, sourceRate int) speaker
+
 	state       translator.State
 	errorDetail string
 	notice      string
@@ -119,6 +130,9 @@ func NewWindow(app fyne.App, settings config.Settings) *Window {
 		settings: settings,
 		state:    translator.StateIdle,
 		stopTick: make(chan struct{}),
+		newSpeaker: func(deviceName string, sourceRate int) speaker {
+			return audio.NewPlayer(deviceName, sourceRate)
+		},
 	}
 	w.buffer = newBuffer(settings)
 	w.view = NewCaptionView(settings)
@@ -322,6 +336,7 @@ func (w *Window) applySessionChanges(old config.Settings) {
 		w.StartTranslation()
 		return
 	}
+	w.applySpeechChanges(old)
 	if old.TargetLanguageCode != next.TargetLanguageCode ||
 		old.SilenceGate != next.SilenceGate ||
 		old.EchoTargetLanguage != next.EchoTargetLanguage ||
@@ -335,6 +350,36 @@ func (w *Window) applySessionChanges(old config.Settings) {
 			w.announceDirection()
 		}
 		w.restartTranslator()
+	}
+}
+
+// applySpeechChanges brings the player into line with the settings, doing the
+// least that will get there.
+//
+// The last case is the one that matters and the one that gets broken by
+// accident: with the output settings unchanged this must do *nothing at all*.
+// Reopening the device on every Apply would punch a hole in the sound every
+// time any setting on any tab was changed.
+func (w *Window) applySpeechChanges(old config.Settings) {
+	next := w.settings
+	player := w.player.Load()
+
+	switch {
+	case !next.SpeakTranslation:
+		w.stopPlayer()
+	case player == nil:
+		// Off→on, or a device that failed to open last time. Retrying on Apply
+		// is how a user who plugged the headphones back in gets sound.
+		w.startPlayer()
+	case old.OutputDeviceName != next.OutputDeviceName:
+		slog.Info("output device changed while running — reopening",
+			"from", old.OutputDeviceName, "to", next.OutputDeviceName)
+		w.stopPlayer()
+		w.startPlayer()
+	case old.SpeechVolume != next.SpeechVolume:
+		// Never reopen for this. The gain is read per block, so the slider
+		// takes effect on the next one with no gap.
+		player.SetVolume(next.SpeechVolume)
 	}
 }
 
@@ -394,8 +439,71 @@ func (w *Window) newTranslator(ring *audio.Ring, apiKey string) (*translator.Tra
 			},
 			OnReconnect:    func() { fyne.Do(w.onReconnected) },
 			OnTurnComplete: func() { fyne.Do(w.onTurnComplete) },
+			// The exception to the rule above, deliberately — see speakAudio.
+			OnAudio: w.speakAudio,
 		},
 	})
+}
+
+// speakAudio hands one blob of translated speech to the player.
+//
+// This is the one callback that does not hop to the UI goroutine, and that is
+// the point: it touches no widget, and it must not queue behind a repaint.
+// Ten blobs a second through fyne.Do would make the sound hostage to the
+// drawing. The player has its own jitter buffer and its own device thread, so
+// the fastest thing to do here is hand the bytes over and return.
+//
+// With no player — speech switched off, or a device that would not open — the
+// bytes go where they went before 1.2.0, which is nowhere.
+func (w *Window) speakAudio(pcm []byte) {
+	if p := w.player.Load(); p != nil {
+		p.Write(pcm)
+	}
+}
+
+// speaker is the output player as the window uses it.
+type speaker interface {
+	Start() (audio.OutputDevice, error)
+	Stop()
+	Write(pcm []byte)
+	SetVolume(v float64)
+}
+
+// playerRef boxes the interface so it can live in an atomic.Pointer.
+type playerRef struct{ speaker }
+
+// startPlayer opens the output device, when speech is switched on and a session
+// is running.
+//
+// Failure is never fatal. Captions are the product; sound is an extra, and an
+// output device that will not open must not take the session down with it.
+func (w *Window) startPlayer() {
+	if !w.settings.SpeakTranslation || w.capture == nil {
+		return
+	}
+	if w.player.Load() != nil {
+		return
+	}
+	player := w.newSpeaker(w.settings.OutputDeviceName, audio.TranslatedRate)
+	player.SetVolume(w.settings.SpeechVolume)
+	dev, err := player.Start()
+	if err != nil {
+		slog.Error("could not open the output device", "err", err)
+		w.showNotice("Cannot speak the translation: " + err.Error())
+		return
+	}
+	if w.settings.OutputDeviceName != "" && dev.Name != w.settings.OutputDeviceName {
+		slog.Warn("requested output device unavailable", "using", dev.Name)
+		w.showNotice(w.settings.OutputDeviceName + " unavailable — playing through " + dev.Name)
+	}
+	w.player.Store(&playerRef{player})
+}
+
+// stopPlayer releases the output device. Safe when nothing is playing.
+func (w *Window) stopPlayer() {
+	if player := w.player.Swap(nil); player != nil {
+		guard("stopping audio playback", player.Stop)
+	}
 }
 
 // StartTranslation opens the audio device and the session.
@@ -445,6 +553,10 @@ func (w *Window) StartTranslation() {
 		}
 	}
 
+	// Before tr.Start, so the first blob of translated speech already has
+	// somewhere to go.
+	w.startPlayer()
+
 	if err := tr.Start(); err != nil {
 		w.failToStart(err.Error())
 		return
@@ -477,6 +589,8 @@ func (w *Window) StopTranslation() {
 	if tr != nil {
 		guard("stopping the translator", tr.Stop)
 	}
+	// After the translator, so nothing is still writing into it.
+	w.stopPlayer()
 	if capture != nil {
 		guard("stopping audio capture", capture.Stop)
 	}

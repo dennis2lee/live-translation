@@ -152,9 +152,29 @@ type Settings struct {
 	// behaviour
 	AudioDeviceName string `json:"audio_device_name"` // empty means the system default input
 	DebugLogging    bool   `json:"debug_logging"`
-	ShowSourceText  bool   `json:"show_source_text"`
-	Fullscreen      bool   `json:"fullscreen"`
-	SilenceGate     bool   `json:"silence_gate"`
+
+	// SpeakTranslation plays the model's translated speech aloud. The audio
+	// has always been arriving — it is generated whether or not anyone listens,
+	// so this costs nothing extra to switch on.
+	//
+	// Off by default, and that is not caution. Measured: with speakers rather
+	// than headphones the translation returns through the microphone and is
+	// translated again, and echo_target_language does not prevent it
+	// (spikes/RESULTS.md).
+	SpeakTranslation bool `json:"speak_translation"`
+
+	// OutputDeviceName is empty for the system default output. Stored by name,
+	// never index, for the same reason as AudioDeviceName.
+	OutputDeviceName string `json:"output_device_name"`
+
+	// SpeechVolume scales the spoken translation, 0.0 to 1.0. Its own control
+	// because the translation competes with a live speaker in the same room,
+	// and the system slider moves everything else along with it.
+	SpeechVolume float64 `json:"speech_volume"`
+
+	ShowSourceText bool `json:"show_source_text"`
+	Fullscreen     bool `json:"fullscreen"`
+	SilenceGate    bool `json:"silence_gate"`
 
 	// Terms to bias speech recognition towards, one per line. Two lists,
 	// because they are genuinely different: what the model should hear in the
@@ -191,6 +211,7 @@ func Default() Settings {
 		SaveTranscript:     true,
 		TranscriptDir:      transcript.DefaultDir,
 		ShowDirectionHint:  true,
+		SpeechVolume:       1.0,
 		TargetLanguageCode: "en",
 		CaptionPolicy:      string(captions.PolicyIncremental),
 	}
@@ -216,6 +237,11 @@ func (s Settings) Clamped() Settings {
 	out.MaxLines = int(clamp(float64(s.MaxLines), 1, 4))
 	out.ClearAfterSeconds = clamp(s.ClearAfterSeconds, 0, 30)
 	out.LineHoldSeconds = clamp(s.LineHoldSeconds, 0, 3)
+	// 0 is a legal volume — muted — so this cannot treat it as "unset". An
+	// upgraded settings file has no speech_volume key at all, and Load starts
+	// from Default() and unmarshals into it, so the absent key keeps 1.0
+	// rather than arriving here as a silent zero. See store.go.
+	out.SpeechVolume = clamp(s.SpeechVolume, 0, 1)
 	if strings.TrimSpace(s.TranscriptDir) == "" {
 		out.TranscriptDir = transcript.DefaultDir
 	}
