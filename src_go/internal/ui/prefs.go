@@ -1,7 +1,7 @@
 package ui
 
 import (
-	"encoding/binary"
+	"context"
 	"fmt"
 	"image/color"
 	"log/slog"
@@ -17,9 +17,11 @@ import (
 	"fyne.io/fyne/v2/widget"
 
 	"github.com/dennis2lee/live-translation/src_go/internal/audio"
+	"github.com/dennis2lee/live-translation/src_go/internal/classify"
 	"github.com/dennis2lee/live-translation/src_go/internal/config"
 	"github.com/dennis2lee/live-translation/src_go/internal/logging"
 	"github.com/dennis2lee/live-translation/src_go/internal/netcheck"
+	"github.com/dennis2lee/live-translation/src_go/internal/platform"
 	"github.com/dennis2lee/live-translation/src_go/internal/translator"
 )
 
@@ -67,6 +69,8 @@ type prefsDialog struct {
 	outputSelect *widget.Select
 	outputNames  []string
 	speechVolume *widget.Slider
+	captionsForm *widget.Form
+	coloursForm  *widget.Form
 	toneButton   *widget.Button
 	toneStatus   *widget.Label
 
@@ -118,6 +122,22 @@ type prefsDialog struct {
 	// is *pointing at* rather than the one already in use.
 	tone     *audio.Player
 	toneStop chan struct{}
+
+	// The music filter tab.
+	musicGate      *widget.Check
+	musicThreshold *widget.Slider
+	musicHold      *widget.Slider
+	modelStatus    *widget.Label
+	modelButton    *widget.Button
+	clsButton      *widget.Button
+	clsStatus      *widget.Label
+	// clsCapture is the classifier test's own microphone, opened only when no
+	// session is running — the same conflict rule as the level meter. clsStop
+	// ends its goroutine; when a gated session is live the test observes the
+	// session's own gate instead and opens nothing.
+	clsCapture  *audio.Capture
+	clsStop     chan struct{}
+	downloading bool
 }
 
 // running reports whether the level test is on, either way round.
@@ -145,13 +165,45 @@ func (w *Window) OpenPreferences() {
 	p.show()
 }
 
+// The dialog's size, and the room a tab actually gets inside it.
+//
+// Measured rather than chosen: TestNoTabOverflowsTheDialog prints what every
+// tab asks for and fails if one does not fit, so these two numbers and the tab
+// layout have to be changed together. prefsChrome is the tab bar plus the
+// Apply/OK/Cancel row.
+const (
+	// 600, not 560: the eighth tab (Filter) pushed the measured tab bar to
+	// 573 px. TestTheAssembledTabsFitTheDialog holds the proof.
+	prefsWidth  = 600
+	prefsHeight = 480
+
+	// prefsChrome is the tab bar plus the Apply/OK/Cancel row. The bar half is
+	// measured: the assembled tabs come to 386 px against a tallest tab of
+	// 346, so the bar costs 40. TestTheAssembledTabsFitTheDialog checks the
+	// whole thing rather than trusting this number.
+	prefsChrome        = 100
+	prefsContentHeight = prefsHeight - prefsChrome
+)
+
 func (p *prefsDialog) show() {
+	// Eight narrow tabs rather than four wide ones. "API" and not
+	// "Connection" purely for the tab bar's width: at 600 px the longer word
+	// pushed Behaviour into Fyne's "…" overflow menu, which is where settings
+	// go to not be found. The dialog is sized by its
+	// tallest and widest tab, and with Audio at 668 px tall and Vocabulary at
+	// 884 px wide, two of the six overflowed a 640x520 window — the settings
+	// that did fit were made big by the ones that did not. Splitting the two
+	// tallest and wrapping the labels that forced the width lets the whole
+	// dialog be smaller than any of its old tabs. TestNoTabOverflowsTheDialog
+	// keeps it that way.
 	tabs := container.NewAppTabs(
-		container.NewTabItem("API Key", p.apiTab()),
-		container.NewTabItem("Audio", p.audioTab()),
-		container.NewTabItem("Network", p.networkTab()),
-		container.NewTabItem("Vocabulary", p.vocabularyTab()),
-		container.NewTabItem("Appearance", p.appearanceTab()),
+		container.NewTabItem("API", p.connectionTab()),
+		container.NewTabItem("Input", p.inputTab()),
+		container.NewTabItem("Output", p.outputTab()),
+		container.NewTabItem("Captions", p.captionsTab()),
+		container.NewTabItem("Colours", p.coloursTab()),
+		container.NewTabItem("Filter", p.filterTab()),
+		container.NewTabItem("Words", p.vocabularyTab()),
 		container.NewTabItem("Behaviour", p.behaviourTab()),
 	)
 
@@ -169,7 +221,7 @@ func (p *prefsDialog) show() {
 
 	content := container.NewBorder(nil, container.NewCenter(buttons), nil, nil, tabs)
 	p.dialog = dialog.NewCustomWithoutButtons("Preferences", content, p.win.win)
-	p.dialog.Resize(fyne.NewSize(640, 520))
+	p.dialog.Resize(fyne.NewSize(prefsWidth, prefsHeight))
 	p.dialog.SetOnClosed(p.close)
 	p.dialog.Show()
 	p.startLevelMeter()
@@ -179,6 +231,7 @@ func (p *prefsDialog) show() {
 // does not leave a goroutine writing into freed widgets — and releases the
 // meter's device, which would otherwise stay open for the life of the process.
 func (p *prefsDialog) close() {
+	p.stopClassifierTest()
 	select {
 	case <-p.levelStop:
 	default:
@@ -215,7 +268,17 @@ func (p *prefsDialog) apiTab() fyne.CanvasObject {
 	)
 }
 
-func (p *prefsDialog) audioTab() fyne.CanvasObject {
+// connectionTab is everything about reaching the service: the key that
+// authorises it and the link that carries it. Both were their own tab and both
+// were short; together they are still shorter than any other tab.
+func (p *prefsDialog) connectionTab() fyne.CanvasObject {
+	// Side by side rather than stacked. Both groups are narrow — 255 px each
+	// against a 560 px dialog — and stacking them made this the tallest tab in
+	// the dialog at 394 px, which is the one thing the split was for.
+	return container.NewGridWithColumns(2, p.apiTab(), p.networkTab())
+}
+
+func (p *prefsDialog) inputTab() fyne.CanvasObject {
 	devices := audio.ListInputDevices()
 	p.deviceNames = []string{""}
 	labels := []string{"System Default Input"}
@@ -265,7 +328,6 @@ func (p *prefsDialog) audioTab() fyne.CanvasObject {
 	p.silenceGate.SetChecked(p.working.SilenceGate)
 
 	return container.NewVBox(
-		widget.NewLabelWithStyle("Input", fyne.TextAlignLeading, fyne.TextStyle{Bold: true}),
 		widget.NewLabel("Input device"),
 		p.deviceSelect,
 		widget.NewLabel("Input level"),
@@ -274,13 +336,12 @@ func (p *prefsDialog) audioTab() fyne.CanvasObject {
 		container.NewHBox(p.levelButton),
 		hint,
 		p.silenceGate,
-		widget.NewSeparator(),
-		p.outputGroup(),
 	)
 }
 
-// outputGroup is the spoken-translation half of the Audio tab.
-func (p *prefsDialog) outputGroup() fyne.CanvasObject {
+// outputTab is the spoken translation. It was the lower half of the Audio tab,
+// which made that tab 668 px tall on its own.
+func (p *prefsDialog) outputTab() fyne.CanvasObject {
 	p.speakAloud = widget.NewCheck("Speak the translation aloud", nil)
 	p.speakAloud.SetChecked(p.working.SpeakTranslation)
 
@@ -330,9 +391,16 @@ func (p *prefsDialog) outputGroup() fyne.CanvasObject {
 		}
 	}
 
+	// The key is written down here for the same reason "(9)" is written into
+	// the complete-phrases check: a bare-digit or bare-letter shortcut cannot
+	// be shown as a menu accelerator, so the only place a user can find out
+	// about it is the label.
+	muteHint := widget.NewLabel("Press m while translating to mute and unmute.")
+	muteHint.Wrapping = fyne.TextWrapWord
+
 	p.toneStatus = widget.NewLabel("Not running.")
 	p.toneStatus.Wrapping = fyne.TextWrapWord
-	p.toneButton = widget.NewButton("Play Test Tone", func() {
+	p.toneButton = widget.NewButton("Play Test Sound", func() {
 		if p.tone != nil {
 			p.stopTone()
 		} else {
@@ -341,12 +409,12 @@ func (p *prefsDialog) outputGroup() fyne.CanvasObject {
 	})
 
 	return container.NewVBox(
-		widget.NewLabelWithStyle("Output", fyne.TextAlignLeading, fyne.TextStyle{Bold: true}),
 		p.speakAloud,
 		warning,
 		widget.NewLabel("Output device"),
 		p.outputSelect,
 		container.NewBorder(nil, nil, widget.NewLabel("Volume"), volumeLabel, p.speechVolume),
+		muteHint,
 		container.NewHBox(p.toneButton),
 		p.toneStatus,
 	)
@@ -370,10 +438,15 @@ func (p *prefsDialog) networkTab() fyne.CanvasObject {
 
 	p.runTest = widget.NewButton("Run Test", func() { p.runNetworkTest() })
 
+	// Wrapping, like the two labels above. Without it this one sentence set the
+	// minimum width of the whole dialog to 720 px.
+	intro := widget.NewLabel(fmt.Sprintf(
+		"A session needs about %.0f kbit/s upstream and a steady round trip to %s.",
+		netcheck.AudioKbps, netcheck.LiveAPIHost))
+	intro.Wrapping = fyne.TextWrapWord
+
 	return container.NewVBox(
-		widget.NewLabel(fmt.Sprintf(
-			"A session needs about %.0f kbit/s upstream and a steady round trip to %s.",
-			netcheck.AudioKbps, netcheck.LiveAPIHost)),
+		intro,
 		p.runTest,
 		widget.NewLabelWithStyle("Result", fyne.TextAlignLeading, fyne.TextStyle{Bold: true}),
 		p.netResult,
@@ -387,21 +460,31 @@ func (p *prefsDialog) vocabularyTab() fyne.CanvasObject {
 	p.vocabCaption = widget.NewMultiLineEntry()
 	p.vocabCaption.SetText(p.working.VocabularyCaptions)
 
+	// This was the widest thing in the dialog at 884 px, purely because a label
+	// with no wrapping asks for its whole text on one line.
+	note := widget.NewLabel(fmt.Sprintf(
+		"Split on line breaks only, never commas, so a term can be a whole clause. "+
+			"At most %d terms — they are resent with every reconnect.",
+		config.MaxVocabularyTerms))
+	note.Wrapping = fyne.TextWrapWord
+
+	sourceHint := widget.NewLabel("Names and jargon the model should expect to hear.")
+	sourceHint.Wrapping = fyne.TextWrapWord
+	captionHint := widget.NewLabel("How names should be spelled on screen.")
+	captionHint.Wrapping = fyne.TextWrapWord
+
 	// Two lists, and they must stay separate: one biases recognition of the
 	// language being spoken, the other how names come out in the captions.
 	return container.NewVBox(
 		widget.NewLabelWithStyle("Spoken language — one term per line",
 			fyne.TextAlignLeading, fyne.TextStyle{Bold: true}),
-		widget.NewLabel("Names and jargon the model should expect to hear."),
+		sourceHint,
 		p.vocabSource,
 		widget.NewLabelWithStyle("Captions — one term per line",
 			fyne.TextAlignLeading, fyne.TextStyle{Bold: true}),
-		widget.NewLabel("How names should be spelled on screen."),
+		captionHint,
 		p.vocabCaption,
-		widget.NewLabel(fmt.Sprintf(
-			"Split on line breaks only, never commas, so a term can be a whole clause. "+
-				"At most %d terms — they are resent with every reconnect.",
-			config.MaxVocabularyTerms)),
+		note,
 	)
 }
 
@@ -524,9 +607,15 @@ func (p *prefsDialog) newColourPick(title, initial string, presets []preset) *co
 		d.Show()
 	})
 
-	// The hex label sits between the presets and the preview: with the preview
-	// butted straight against the row it read as a seventh preset.
-	c.root = container.NewHBox(row, c.label, c.current, custom)
+	// Two rows, not one. All of it on a single line made this the widest thing
+	// in the dialog at 608 px — the swatches, the hex, the preview and the
+	// button end to end — and the dialog is only ever as narrow as its widest
+	// control. Stacked, it costs about 35 px of height per colour and the
+	// Colours tab has room for it.
+	//
+	// The hex label still sits between the presets and the preview: with the
+	// preview butted straight against the row it read as a seventh preset.
+	c.root = container.NewVBox(row, container.NewHBox(c.label, c.current, custom))
 	c.refresh()
 	return c
 }
@@ -555,7 +644,11 @@ func (c *colourPick) refresh() {
 
 func normaliseHex(v string) string { return strings.ToUpper(strings.TrimSpace(v)) }
 
-func (p *prefsDialog) appearanceTab() fyne.CanvasObject {
+// Appearance was one tab of ten form rows and three checks, 511 px tall. It is
+// two now, split where the question changes: Captions is about size and
+// placement, Colours is about what it looks like. Both halves are built here
+// because the widgets are read back together by collect().
+func (p *prefsDialog) appearanceWidgets() {
 	p.bgColour = p.newColourPick("Background colour", p.working.BgColor, bgPresets)
 	p.boxColour = p.newColourPick("Caption box colour", p.working.BoxColor, boxPresets)
 	p.textColour = p.newColourPick("Text colour", p.working.TextColor, textPresets)
@@ -593,19 +686,39 @@ func (p *prefsDialog) appearanceTab() fyne.CanvasObject {
 	p.directionHint = widget.NewCheck("Show the direction briefly on start", nil)
 	p.directionHint.SetChecked(p.working.ShowDirectionHint)
 
-	form := widget.NewForm(
+	p.captionsForm = widget.NewForm(
 		widget.NewFormItem("Font size", container.NewBorder(nil, nil, nil, fontLabel, p.fontSize)),
 		widget.NewFormItem("Caption lines", p.maxLines),
+		widget.NewFormItem("Box width %", p.boxWidth),
+		widget.NewFormItem("Edge margin %", p.bottomMargin),
+		widget.NewFormItem("Box position", p.boxPosition),
+	)
+	p.coloursForm = widget.NewForm(
 		widget.NewFormItem("Background colour", p.bgColour.root),
 		widget.NewFormItem("Caption box colour", p.boxColour.root),
 		widget.NewFormItem("Text colour", p.textColour.root),
 		widget.NewFormItem("Box opacity", p.boxOpacity),
 		widget.NewFormItem("Corner radius", p.cornerRadius),
-		widget.NewFormItem("Box width %", p.boxWidth),
-		widget.NewFormItem("Edge margin %", p.bottomMargin),
-		widget.NewFormItem("Box position", p.boxPosition),
 	)
-	return container.NewVBox(form, p.fixedBox, p.sourceText, p.directionHint)
+}
+
+// captionsTab is size and placement.
+func (p *prefsDialog) captionsTab() fyne.CanvasObject {
+	if p.captionsForm == nil {
+		p.appearanceWidgets()
+	}
+	return container.NewVBox(p.captionsForm, p.fixedBox, p.sourceText, p.directionHint)
+}
+
+// coloursTab is what it looks like. It shares appearanceWidgets with
+// captionsTab, so whichever is built first builds both — show() calls each
+// once, and the tab that is built second reuses the widgets rather than
+// replacing the ones collect() will read.
+func (p *prefsDialog) coloursTab() fyne.CanvasObject {
+	if p.coloursForm == nil {
+		p.appearanceWidgets()
+	}
+	return container.NewVBox(p.coloursForm)
 }
 
 func (p *prefsDialog) behaviourTab() fyne.CanvasObject {
@@ -671,6 +784,9 @@ func (p *prefsDialog) collect() config.Settings {
 	s.SpeakTranslation = p.speakAloud.Checked
 	s.SpeechVolume = p.speechVolume.Value
 	s.SilenceGate = p.silenceGate.Checked
+	s.MusicGate = p.musicGate.Checked
+	s.MusicGateThreshold = p.musicThreshold.Value
+	s.MusicGateHold = p.musicHold.Value
 	s.VocabularySource = p.vocabSource.Text
 	s.VocabularyCaptions = p.vocabCaption.Text
 	s.FontSize = int(p.fontSize.Value)
@@ -879,20 +995,13 @@ func (p *prefsDialog) startMeter() {
 	p.levelStatus.SetText("Listening to " + dev.Name + "…")
 }
 
-// toneFrequency is an unmistakable note: high enough to carry on a laptop
-// speaker, low enough not to be shrill.
-const toneFrequency = 440.0
-
-// toneAmplitude leaves headroom, so a device already near clipping does not
-// distort and read as a broken output.
-const toneAmplitude = 0.25
-
-// startTone opens the selected output device and feeds it a sine wave.
+// startTone opens the selected output device and plays the chime.
 //
-// A tone rather than a speech sample: it needs no bundled asset, it cannot be
-// mistaken for a caption, and what is being tested is routing — whether sound
-// leaves the right box — not quality. It runs through the real Player, so it
-// exercises the resampler and the jitter buffer the translation will use.
+// A sound of our own rather than a speech sample: it needs no bundled asset, it
+// cannot be mistaken for a caption, and what is being tested is routing —
+// whether sound leaves the right box — not quality. It runs through the real
+// Player, so it exercises the resampler and the jitter buffer the translation
+// will use. See chime.go for what it plays and why it stopped being a beep.
 func (p *prefsDialog) startTone() {
 	name := ""
 	if i := p.outputSelect.SelectedIndex(); i >= 0 && i < len(p.outputNames) {
@@ -904,13 +1013,13 @@ func (p *prefsDialog) startTone() {
 	dev, err := player.Start()
 	if err != nil {
 		p.toneStatus.SetText("Could not open the device: " + err.Error())
-		p.toneButton.SetText("Play Test Tone")
+		p.toneButton.SetText("Play Test Sound")
 		return
 	}
 	p.tone = player
 	p.toneStop = make(chan struct{})
-	p.toneButton.SetText("Stop Test Tone")
-	p.toneStatus.SetText(fmt.Sprintf("Playing a %.0f Hz tone through %s…", toneFrequency, dev.Name))
+	p.toneButton.SetText("Stop Test Sound")
+	p.toneStatus.SetText("Playing a test chime through " + dev.Name + "…")
 
 	stop := p.toneStop
 	go func() {
@@ -918,11 +1027,11 @@ func (p *prefsDialog) startTone() {
 		const blobMS = 100
 		samples := audio.TranslatedRate * blobMS / 1000
 		pcm := make([]byte, samples*2)
-		phase := 0.0
+		var pos int64
 		ticker := time.NewTicker(blobMS * time.Millisecond)
 		defer ticker.Stop()
 		for {
-			phase = fillTone(pcm, toneFrequency, audio.TranslatedRate, phase)
+			pos = fillChime(pcm, audio.TranslatedRate, pos)
 			player.Write(pcm)
 			select {
 			case <-stop:
@@ -951,7 +1060,7 @@ func (p *prefsDialog) stopTone() {
 		p.tone = nil
 	}
 	if p.toneButton != nil {
-		p.toneButton.SetText("Play Test Tone")
+		p.toneButton.SetText("Play Test Sound")
 	}
 	if p.toneStatus != nil {
 		p.toneStatus.SetText("Not running.")
@@ -960,18 +1069,6 @@ func (p *prefsDialog) stopTone() {
 
 // fillTone writes one blob of sine into pcm and returns the phase to continue
 // from. Carrying the phase is what stops a click at every blob boundary.
-func fillTone(pcm []byte, freq float64, rate int, phase float64) float64 {
-	step := 2 * math.Pi * freq / float64(rate)
-	for i := 0; i+1 < len(pcm); i += 2 {
-		v := math.Sin(phase) * toneAmplitude
-		binary.LittleEndian.PutUint16(pcm[i:i+2], uint16(int16(v*32767)))
-		phase += step
-		if phase > 2*math.Pi {
-			phase -= 2 * math.Pi
-		}
-	}
-	return phase
-}
 
 // stopMeter releases the device. It is safe to call when nothing is running,
 // because close() calls it on every dismissal.
@@ -1093,4 +1190,266 @@ func (w *Window) ResetSettings() {
 	w.buffer.Clear()
 	w.view.Clear()
 	w.syncActions()
+}
+
+// --- the music filter tab --------------------------------------------------
+
+// filterTab is the music gate: the switch, the model, the tuning, and a live
+// classifier test, because the only tuning that means anything is done
+// against the user's own music playing into their own microphone.
+func (p *prefsDialog) filterTab() fyne.CanvasObject {
+	p.musicGate = widget.NewCheck("Translate speech only — skip singing and music", nil)
+	p.musicGate.SetChecked(p.working.MusicGate)
+
+	about := widget.NewLabel(
+		"Songs are classified locally by YAMNet (Apache 2.0) — no audio " +
+			"leaves the machine for this, and gated minutes are not billed.")
+	about.Wrapping = fyne.TextWrapWord
+
+	p.modelStatus = widget.NewLabel("")
+	p.modelStatus.Wrapping = fyne.TextWrapWord
+	p.modelButton = widget.NewButton("Download Model (4 MB)", p.downloadModel)
+	p.refreshModelStatus()
+
+	p.musicThreshold = widget.NewSlider(0.1, 0.9)
+	p.musicThreshold.Step = 0.05
+	p.musicThreshold.SetValue(p.working.MusicGateThreshold)
+	thresholdLabel := widget.NewLabel("")
+	setThreshold := func(v float64) {
+		// Low sensitivity = a high score needed = only unmistakable music is
+		// gated. The label speaks the user's direction, the value the model's.
+		thresholdLabel.SetText(fmt.Sprintf("%.2f", v))
+	}
+	p.musicThreshold.OnChanged = setThreshold
+	setThreshold(p.musicThreshold.Value)
+
+	p.musicHold = widget.NewSlider(0.5, 10)
+	p.musicHold.Step = 0.5
+	p.musicHold.SetValue(p.working.MusicGateHold)
+	holdLabel := widget.NewLabel("")
+	setHold := func(v float64) { holdLabel.SetText(fmt.Sprintf("%.1f s", v)) }
+	p.musicHold.OnChanged = setHold
+	setHold(p.musicHold.Value)
+
+	form := widget.NewForm(
+		widget.NewFormItem("Music threshold",
+			container.NewBorder(nil, nil, nil, thresholdLabel, p.musicThreshold)),
+		widget.NewFormItem("Gate after",
+			container.NewBorder(nil, nil, nil, holdLabel, p.musicHold)),
+	)
+
+	p.clsStatus = widget.NewLabel("Not running.")
+	p.clsStatus.Wrapping = fyne.TextWrapWord
+	p.clsButton = widget.NewButton("Start Classifier Test", func() {
+		if p.clsRunning() {
+			p.stopClassifierTest()
+		} else {
+			p.startClassifierTest()
+		}
+	})
+
+	return container.NewVBox(
+		p.musicGate,
+		about,
+		container.NewHBox(p.modelButton),
+		p.modelStatus,
+		form,
+		container.NewHBox(p.clsButton),
+		p.clsStatus,
+	)
+}
+
+// refreshModelStatus reads what is on disk and sets the label and button.
+func (p *prefsDialog) refreshModelStatus() {
+	if p.downloading {
+		return
+	}
+	path := classify.ModelPath(platform.AppSupportDir())
+	if _, err := classify.LoadModel(path); err == nil {
+		p.modelStatus.SetText("Model installed.")
+		p.modelButton.Hide()
+		return
+	}
+	p.modelStatus.SetText("The classifier model is not installed yet. " +
+		"It is downloaded once and runs entirely on this machine.")
+	p.modelButton.Show()
+}
+
+// downloadModel fetches the model in the background, reporting into the
+// status label. Failure is stated, never fatal — the dialog stays usable.
+func (p *prefsDialog) downloadModel() {
+	if p.downloading {
+		return
+	}
+	p.downloading = true
+	p.modelButton.Disable()
+	p.modelStatus.SetText("Downloading…")
+	dst := classify.ModelPath(platform.AppSupportDir())
+
+	go func() {
+		err := classify.DownloadModel(context.Background(), dst, func(done, total int64) {
+			mb := float64(done) / (1 << 20)
+			fyne.Do(func() { p.modelStatus.SetText(fmt.Sprintf("Downloading… %.1f MB", mb)) })
+		})
+		fyne.Do(func() {
+			p.downloading = false
+			p.modelButton.Enable()
+			if err != nil {
+				p.modelStatus.SetText("Download failed: " + err.Error())
+				return
+			}
+			p.refreshModelStatus()
+		})
+	}()
+}
+
+func (p *prefsDialog) clsRunning() bool { return p.clsStop != nil }
+
+// startClassifierTest shows live verdicts. With a gated session running it
+// observes the session's own gate; otherwise it opens the selected input
+// device itself — never both, because two captures on one microphone
+// conflict, the same rule the level meter follows.
+func (p *prefsDialog) startClassifierTest() {
+	if gate := p.win.musicGate; gate != nil {
+		p.clsStop = make(chan struct{})
+		p.clsButton.SetText("Stop Classifier Test")
+		p.clsStatus.SetText("Observing the running session's gate…")
+		go p.pollGateVerdicts(gate, p.clsStop)
+		return
+	}
+	if live := p.win.capture; live != nil && live.IsRunning() {
+		p.clsStatus.SetText("A session is running without the filter — stop it first, or enable the filter and Apply.")
+		return
+	}
+
+	model, err := p.win.loadYamnet()
+	if err != nil {
+		p.clsStatus.SetText("Model not available: " + err.Error())
+		return
+	}
+
+	name := ""
+	if i := p.deviceSelect.SelectedIndex(); i >= 0 && i < len(p.deviceNames) {
+		name = p.deviceNames[i]
+	}
+	capture := audio.NewCapture(name, 1)
+	dev, err := capture.Start()
+	if err != nil {
+		p.clsStatus.SetText("Could not open the device: " + err.Error())
+		return
+	}
+	p.clsCapture = capture
+	p.clsStop = make(chan struct{})
+	p.clsButton.SetText("Stop Classifier Test")
+	p.clsStatus.SetText("Listening on " + dev.Name + "…")
+	go p.classifyLoop(model, capture, p.clsStop)
+}
+
+// pollGateVerdicts mirrors the live gate's verdicts into the label.
+func (p *prefsDialog) pollGateVerdicts(gate *classify.Gate, stop chan struct{}) {
+	ticker := time.NewTicker(250 * time.Millisecond)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-stop:
+			return
+		case <-ticker.C:
+			v, ok := gate.LastVerdict()
+			if !ok {
+				continue
+			}
+			text := verdictText(v, gate.Closed())
+			fyne.Do(func() { p.clsStatus.SetText(text) })
+		}
+	}
+}
+
+// classifyLoop drains the test capture into a sliding window and classifies
+// at the model's own cadence. All off the UI goroutine — one verdict costs
+// ~52 ms of inference.
+func (p *prefsDialog) classifyLoop(model *classify.Model, capture *audio.Capture, stop chan struct{}) {
+	window := make([]float32, 0, classify.PatchSamples)
+	fresh := 0
+	ticker := time.NewTicker(100 * time.Millisecond)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-stop:
+			return
+		case <-ticker.C:
+		}
+		for {
+			chunk, err := capture.Ring.Read(audio.ChunkBytes)
+			if err != nil || chunk == nil {
+				break
+			}
+			for i := 0; i+1 < len(chunk); i += 2 {
+				v := int16(uint16(chunk[i]) | uint16(chunk[i+1])<<8)
+				window = append(window, float32(v)/32768)
+			}
+			fresh += len(chunk) / 2
+			if excess := len(window) - classify.PatchSamples; excess > 0 {
+				copy(window, window[excess:])
+				window = window[:classify.PatchSamples]
+			}
+		}
+		if len(window) < classify.PatchSamples || fresh < classify.PatchSamples/2 {
+			continue
+		}
+		fresh = 0
+		scores := model.Scores(window)
+		v := classify.Verdict{
+			Speech: classify.SpeechScore(scores),
+			Music:  classify.MusicScore(scores),
+			Top:    classify.Top(scores, 3),
+		}
+		v.Musical = float64(v.Music) >= p.thresholdValue() &&
+			float64(v.Music) >= float64(v.Speech)+classify.Margin
+		text := verdictText(v, false)
+		fyne.Do(func() { p.clsStatus.SetText(text) })
+	}
+}
+
+// thresholdValue reads the slider from the classify goroutine — sliders are
+// not thread-safe to *write*, but Value is a plain read of a float the user
+// moves; worst case is a verdict computed against the previous position.
+func (p *prefsDialog) thresholdValue() float64 { return p.musicThreshold.Value }
+
+// verdictText renders one verdict for the status label.
+func verdictText(v classify.Verdict, gateClosed bool) string {
+	kind := "SPEECH"
+	if v.Musical {
+		kind = "MUSIC"
+	}
+	if v.Speech < 0.1 && v.Music < 0.1 {
+		kind = "quiet"
+	}
+	state := ""
+	if gateClosed {
+		state = " — gate closed, not translating"
+	}
+	names := make([]string, 0, len(v.Top))
+	for _, i := range v.Top {
+		names = append(names, classify.ClassName(i))
+	}
+	return fmt.Sprintf("%s%s   (speech %.2f, music %.2f)\n%s",
+		kind, state, v.Speech, v.Music, strings.Join(names, " / "))
+}
+
+// stopClassifierTest releases whichever source the test was using.
+func (p *prefsDialog) stopClassifierTest() {
+	if p.clsStop != nil {
+		close(p.clsStop)
+		p.clsStop = nil
+	}
+	if p.clsCapture != nil {
+		p.clsCapture.Stop()
+		p.clsCapture = nil
+	}
+	if p.clsButton != nil {
+		p.clsButton.SetText("Start Classifier Test")
+	}
+	if p.clsStatus != nil {
+		p.clsStatus.SetText("Not running.")
+	}
 }

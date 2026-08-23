@@ -13,3 +13,9 @@
 /bufdiff
 /v1_voice
 /v2_play
+/v3_voiceid
+/y3_gatecal
+/y4_gate_live
+
+# The YAMNet model is downloaded, never committed — see spikes/fixtures/fetch_yamnet.sh
+*.tflite

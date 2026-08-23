@@ -176,6 +176,20 @@ type Settings struct {
 	Fullscreen     bool `json:"fullscreen"`
 	SilenceGate    bool `json:"silence_gate"`
 
+	// MusicGate skips sending audio the local YAMNet classifier calls music,
+	// so songs are not translated. Off by default: it needs a one-time model
+	// download, and a gate nobody asked for that eats a sentence would be a
+	// defect with no explanation.
+	MusicGate bool `json:"music_gate"`
+	// MusicGateThreshold is the music-family score at which a frame counts as
+	// musical. 0.5 is measured, not guessed: Korean TTS speech never pushed
+	// the music family past 0.004, real music medians 0.67–0.89, and 0.5 is
+	// the crossover at which speech twice as loud as backing music still
+	// reads as speech (spikes/y3_gatecal).
+	MusicGateThreshold float64 `json:"music_gate_threshold"`
+	// MusicGateHold is how many seconds of continuous music close the gate.
+	MusicGateHold float64 `json:"music_gate_hold"`
+
 	// Terms to bias speech recognition towards, one per line. Two lists,
 	// because they are genuinely different: what the model should hear in the
 	// source language, and how names should come out in the captions. They must
@@ -212,6 +226,8 @@ func Default() Settings {
 		TranscriptDir:      transcript.DefaultDir,
 		ShowDirectionHint:  true,
 		SpeechVolume:       1.0,
+		MusicGateThreshold: 0.5,
+		MusicGateHold:      2.0,
 		TargetLanguageCode: "en",
 		CaptionPolicy:      string(captions.PolicyIncremental),
 	}
@@ -242,6 +258,20 @@ func (s Settings) Clamped() Settings {
 	// from Default() and unmarshals into it, so the absent key keeps 1.0
 	// rather than arriving here as a silent zero. See store.go.
 	out.SpeechVolume = clamp(s.SpeechVolume, 0, 1)
+	// Unlike SpeechVolume, zero here can only mean "the key was absent from
+	// an older settings file" — a threshold of 0 would gate on everything and
+	// a hold of 0 would close on a single frame, neither of which is a
+	// setting anyone can choose (the sliders stop well short).
+	if s.MusicGateThreshold == 0 {
+		out.MusicGateThreshold = 0.5
+	} else {
+		out.MusicGateThreshold = clamp(s.MusicGateThreshold, 0.1, 0.9)
+	}
+	if s.MusicGateHold == 0 {
+		out.MusicGateHold = 2.0
+	} else {
+		out.MusicGateHold = clamp(s.MusicGateHold, 0.5, 10)
+	}
 	if strings.TrimSpace(s.TranscriptDir) == "" {
 		out.TranscriptDir = transcript.DefaultDir
 	}

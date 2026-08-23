@@ -1,0 +1,2478 @@
+[
+ {
+  "index": 0,
+  "name": "waveform_binary",
+  "dtype": "float32",
+  "shape": [
+   15600
+  ],
+  "scales": [],
+  "n_scales": 0,
+  "zero_points": [],
+  "quant_dim": 0,
+  "crc32": 471905348
+ },
+ {
+  "index": 1,
+  "name": "stft/frame/zeros_like",
+  "dtype": "int32",
+  "shape": [
+   1
+  ],
+  "scales": [],
+  "n_scales": 0,
+  "zero_points": [],
+  "quant_dim": 0,
+  "crc32": 558161692
+ },
+ {
+  "index": 2,
+  "name": "stft/frame/concat",
+  "dtype": "int32",
+  "shape": [
+   1
+  ],
+  "scales": [],
+  "n_scales": 0,
+  "zero_points": [],
+  "quant_dim": 0,
+  "crc32": 2320749903
+ },
+ {
+  "index": 3,
+  "name": "stft/frame/ones_like",
+  "dtype": "int32",
+  "shape": [
+   1
+  ],
+  "scales": [],
+  "n_scales": 0,
+  "zero_points": [],
+  "quant_dim": 0,
+  "crc32": 2583214201
+ },
+ {
+  "index": 4,
+  "name": "stft/frame/StridedSlice",
+  "dtype": "float32",
+  "shape": [
+   15600
+  ],
+  "scales": [],
+  "n_scales": 0,
+  "zero_points": [],
+  "quant_dim": 0,
+  "crc32": 471905348
+ },
+ {
+  "index": 5,
+  "name": "stft/frame/concat_1",
+  "dtype": "int32",
+  "shape": [
+   2
+  ],
+  "scales": [],
+  "n_scales": 0,
+  "zero_points": [],
+  "quant_dim": 0,
+  "crc32": 1510379551
+ },
+ {
+  "index": 6,
+  "name": "stft/frame/Reshape",
+  "dtype": "float32",
+  "shape": [
+   195,
+   80
+  ],
+  "scales": [],
+  "n_scales": 0,
+  "zero_points": [],
+  "quant_dim": 0,
+  "crc32": 471905348
+ },
+ {
+  "index": 7,
+  "name": "stft/frame/add_1",
+  "dtype": "int32",
+  "shape": [
+   96,
+   5
+  ],
+  "scales": [],
+  "n_scales": 0,
+  "zero_points": [],
+  "quant_dim": 0,
+  "crc32": 1882659457
+ },
+ {
+  "index": 8,
+  "name": "stft/frame/GatherV2;stft/frame/GatherV2/axis",
+  "dtype": "float32",
+  "shape": [
+   96,
+   5,
+   80
+  ],
+  "scales": [],
+  "n_scales": 0,
+  "zero_points": [],
+  "quant_dim": 0,
+  "crc32": 698219621
+ },
+ {
+  "index": 9,
+  "name": "stft/frame/concat_2/values_1",
+  "dtype": "int32",
+  "shape": [
+   2
+  ],
+  "scales": [],
+  "n_scales": 0,
+  "zero_points": [],
+  "quant_dim": 0,
+  "crc32": 155972673
+ },
+ {
+  "index": 10,
+  "name": "stft/frame/Reshape_3",
+  "dtype": "float32",
+  "shape": [
+   96,
+   400
+  ],
+  "scales": [],
+  "n_scales": 0,
+  "zero_points": [],
+  "quant_dim": 0,
+  "crc32": 698219621
+ },
+ {
+  "index": 11,
+  "name": "stft/hann_window/sub_2",
+  "dtype": "float32",
+  "shape": [
+   400
+  ],
+  "scales": [],
+  "n_scales": 0,
+  "zero_points": [],
+  "quant_dim": 0,
+  "crc32": 3170853421
+ },
+ {
+  "index": 12,
+  "name": "stft/mul",
+  "dtype": "float32",
+  "shape": [
+   96,
+   400
+  ],
+  "scales": [],
+  "n_scales": 0,
+  "zero_points": [],
+  "quant_dim": 0,
+  "crc32": 1359193632
+ },
+ {
+  "index": 13,
+  "name": "stft/rfft/Pad/paddings",
+  "dtype": "int32",
+  "shape": [
+   2,
+   2
+  ],
+  "scales": [],
+  "n_scales": 0,
+  "zero_points": [],
+  "quant_dim": 0,
+  "crc32": 2273635273
+ },
+ {
+  "index": 14,
+  "name": "stft/rfft/Pad",
+  "dtype": "float32",
+  "shape": [
+   96,
+   512
+  ],
+  "scales": [],
+  "n_scales": 0,
+  "zero_points": [],
+  "quant_dim": 0,
+  "crc32": 3054505691
+ },
+ {
+  "index": 15,
+  "name": "stft/rfft1",
+  "dtype": "int32",
+  "shape": [
+   3
+  ],
+  "scales": [],
+  "n_scales": 0,
+  "zero_points": [],
+  "quant_dim": 0,
+  "crc32": 2628353687
+ },
+ {
+  "index": 16,
+  "name": "stft/rfft3",
+  "dtype": "float32",
+  "shape": [
+   96,
+   1,
+   512
+  ],
+  "scales": [],
+  "n_scales": 0,
+  "zero_points": [],
+  "quant_dim": 0,
+  "crc32": 3054505691
+ },
+ {
+  "index": 17,
+  "name": "stft/rfft",
+  "dtype": "int32",
+  "shape": [
+   2
+  ],
+  "scales": [],
+  "n_scales": 0,
+  "zero_points": [],
+  "quant_dim": 0,
+  "crc32": 2852916121
+ },
+ {
+  "index": 18,
+  "name": "stft/rfft4",
+  "dtype": "complex64",
+  "shape": [
+   96,
+   1,
+   257
+  ],
+  "scales": [],
+  "n_scales": 0,
+  "zero_points": [],
+  "quant_dim": 0,
+  "crc32": 397005920
+ },
+ {
+  "index": 19,
+  "name": "stft/rfft2",
+  "dtype": "int32",
+  "shape": [
+   2
+  ],
+  "scales": [],
+  "n_scales": 0,
+  "zero_points": [],
+  "quant_dim": 0,
+  "crc32": 213348992
+ },
+ {
+  "index": 20,
+  "name": "stft/rfft5",
+  "dtype": "complex64",
+  "shape": [
+   96,
+   257
+  ],
+  "scales": [],
+  "n_scales": 0,
+  "zero_points": [],
+  "quant_dim": 0,
+  "crc32": 397005920
+ },
+ {
+  "index": 21,
+  "name": "magnitude_spectrogram",
+  "dtype": "float32",
+  "shape": [
+   96,
+   257
+  ],
+  "scales": [],
+  "n_scales": 0,
+  "zero_points": [],
+  "quant_dim": 0,
+  "crc32": 2139310716
+ },
+ {
+  "index": 22,
+  "name": "mel_spectrogram",
+  "dtype": "float32",
+  "shape": [
+   64,
+   257
+  ],
+  "scales": [],
+  "n_scales": 0,
+  "zero_points": [],
+  "quant_dim": 0,
+  "crc32": 644172490
+ },
+ {
+  "index": 23,
+  "name": "add",
+  "dtype": "float32",
+  "shape": [
+   64
+  ],
+  "scales": [],
+  "n_scales": 0,
+  "zero_points": [],
+  "quant_dim": 0,
+  "crc32": 1436585538
+ },
+ {
+  "index": 24,
+  "name": "mel_spectrogram;add",
+  "dtype": "float32",
+  "shape": [
+   96,
+   64
+  ],
+  "scales": [],
+  "n_scales": 0,
+  "zero_points": [],
+  "quant_dim": 0,
+  "crc32": 3977813068
+ },
+ {
+  "index": 25,
+  "name": "log_mel_spectrogram",
+  "dtype": "float32",
+  "shape": [
+   96,
+   64
+  ],
+  "scales": [],
+  "n_scales": 0,
+  "zero_points": [],
+  "quant_dim": 0,
+  "crc32": 397212445
+ },
+ {
+  "index": 26,
+  "name": "Reshape/shape",
+  "dtype": "int32",
+  "shape": [
+   3
+  ],
+  "scales": [],
+  "n_scales": 0,
+  "zero_points": [],
+  "quant_dim": 0,
+  "crc32": 2878304902
+ },
+ {
+  "index": 27,
+  "name": "feature_patch",
+  "dtype": "float32",
+  "shape": [
+   1,
+   96,
+   64
+  ],
+  "scales": [],
+  "n_scales": 0,
+  "zero_points": [],
+  "quant_dim": 0,
+  "crc32": 397212445
+ },
+ {
+  "index": 28,
+  "name": "tfl.quantize",
+  "dtype": "int8",
+  "shape": [
+   1,
+   96,
+   64
+  ],
+  "scales": [
+   0.048020608723163605
+  ],
+  "n_scales": 1,
+  "zero_points": [
+   16
+  ],
+  "quant_dim": 0,
+  "crc32": 3680362507
+ },
+ {
+  "index": 29,
+  "name": "ExpandDims",
+  "dtype": "int32",
+  "shape": [
+   4
+  ],
+  "scales": [],
+  "n_scales": 0,
+  "zero_points": [],
+  "quant_dim": 0,
+  "crc32": 4221571908
+ },
+ {
+  "index": 30,
+  "name": "ExpandDims1",
+  "dtype": "int8",
+  "shape": [
+   1,
+   96,
+   64,
+   1
+  ],
+  "scales": [
+   0.048020608723163605
+  ],
+  "n_scales": 1,
+  "zero_points": [
+   16
+  ],
+  "quant_dim": 0,
+  "crc32": 3680362507
+ },
+ {
+  "index": 31,
+  "name": "pre_tower/split/split_dim",
+  "dtype": "int32",
+  "shape": [],
+  "scales": [],
+  "n_scales": 0,
+  "zero_points": [],
+  "quant_dim": 0,
+  "crc32": 558161692
+ },
+ {
+  "index": 32,
+  "name": "pre_tower/split",
+  "dtype": "int8",
+  "shape": [
+   1,
+   96,
+   64,
+   1
+  ],
+  "scales": [
+   0.048020608723163605
+  ],
+  "n_scales": 1,
+  "zero_points": [
+   16
+  ],
+  "quant_dim": 0,
+  "crc32": 3680362507
+ },
+ {
+  "index": 33,
+  "name": "tower0/network/layer1/conv/Conv2D",
+  "dtype": "int8",
+  "shape": [
+   32,
+   3,
+   3,
+   1
+  ],
+  "scales": [
+   0.0017568651819601655,
+   0.0015590015100315213,
+   0.008588762953877449,
+   0.004756095819175243
+  ],
+  "n_scales": 32,
+  "zero_points": [
+   0,
+   0,
+   0,
+   0
+  ],
+  "quant_dim": 0,
+  "crc32": 1806554879
+ },
+ {
+  "index": 34,
+  "name": "tower0/network/layer1/conv/BatchNorm/FusedBatchNormV3",
+  "dtype": "int32",
+  "shape": [
+   32
+  ],
+  "scales": [
+   8.436573261860758e-05,
+   7.486420508939773e-05,
+   0.00041243762825615704,
+   0.00022839062148705125
+  ],
+  "n_scales": 32,
+  "zero_points": [
+   0,
+   0,
+   0,
+   0
+  ],
+  "quant_dim": 0,
+  "crc32": 1255628821
+ },
+ {
+  "index": 35,
+  "name": "tower0/network/layer1/conv/Relu6;tower0/network/layer1/conv/BatchNorm/FusedBatchNormV3;tower0/network/layer2/sepconv/BatchNorm/FusedBatchNormV3;tower0/network/layer2/sepconv/depthwise;tower0/network/layer1/conv/Conv2D",
+  "dtype": "int8",
+  "shape": [
+   1,
+   48,
+   32,
+   32
+  ],
+  "scales": [
+   0.0235294122248888
+  ],
+  "n_scales": 1,
+  "zero_points": [
+   -128
+  ],
+  "quant_dim": 0,
+  "crc32": 4277323319
+ },
+ {
+  "index": 36,
+  "name": "tower0/network/layer2/sepconv/BatchNorm/FusedBatchNormV3;tower0/network/layer2/sepconv/depthwise",
+  "dtype": "int8",
+  "shape": [
+   1,
+   3,
+   3,
+   32
+  ],
+  "scales": [
+   0.01620890200138092,
+   0.014312687329947948,
+   0.013814881443977356,
+   0.005818251986056566
+  ],
+  "n_scales": 32,
+  "zero_points": [
+   0,
+   0,
+   0,
+   0
+  ],
+  "quant_dim": 3,
+  "crc32": 2807241921
+ },
+ {
+  "index": 37,
+  "name": "tower0/network/layer2/sepconv/BatchNorm/FusedBatchNormV3",
+  "dtype": "int32",
+  "shape": [
+   32
+  ],
+  "scales": [
+   0.00038138593663461506,
+   0.00033676912426017225,
+   0.0003250560548622161,
+   0.00013690005289390683
+  ],
+  "n_scales": 32,
+  "zero_points": [
+   0,
+   0,
+   0,
+   0
+  ],
+  "quant_dim": 0,
+  "crc32": 3040004218
+ },
+ {
+  "index": 38,
+  "name": "tower0/network/layer2/sepconv/Relu6;tower0/network/layer2/sepconv/BatchNorm/FusedBatchNormV3;tower0/network/layer2/sepconv/depthwise",
+  "dtype": "int8",
+  "shape": [
+   1,
+   48,
+   32,
+   32
+  ],
+  "scales": [
+   0.0235294122248888
+  ],
+  "n_scales": 1,
+  "zero_points": [
+   -128
+  ],
+  "quant_dim": 0,
+  "crc32": 4088547894
+ },
+ {
+  "index": 39,
+  "name": "tower0/network/layer3/conv/Conv2D",
+  "dtype": "int8",
+  "shape": [
+   64,
+   1,
+   1,
+   32
+  ],
+  "scales": [
+   0.0066320281475782394,
+   0.005976006854325533,
+   0.004918751306831837,
+   0.005339371506124735
+  ],
+  "n_scales": 64,
+  "zero_points": [
+   0,
+   0,
+   0,
+   0
+  ],
+  "quant_dim": 0,
+  "crc32": 2567941477
+ },
+ {
+  "index": 40,
+  "name": "tower0/network/layer3/conv/BatchNorm/FusedBatchNormV3",
+  "dtype": "int32",
+  "shape": [
+   64
+  ],
+  "scales": [
+   0.00015604772488586605,
+   0.0001406119263265282,
+   0.00011573532538022846,
+   0.00012563227210193872
+  ],
+  "n_scales": 64,
+  "zero_points": [
+   0,
+   0,
+   0,
+   0
+  ],
+  "quant_dim": 0,
+  "crc32": 975567896
+ },
+ {
+  "index": 41,
+  "name": "tower0/network/layer3/conv/Relu6;tower0/network/layer3/conv/BatchNorm/FusedBatchNormV3;tower0/network/layer4/sepconv/BatchNorm/FusedBatchNormV3;tower0/network/layer4/sepconv/depthwise;tower0/network/layer3/conv/Conv2D",
+  "dtype": "int8",
+  "shape": [
+   1,
+   48,
+   32,
+   64
+  ],
+  "scales": [
+   0.0235294122248888
+  ],
+  "n_scales": 1,
+  "zero_points": [
+   -128
+  ],
+  "quant_dim": 0,
+  "crc32": 2331810363
+ },
+ {
+  "index": 42,
+  "name": "tower0/network/layer4/sepconv/BatchNorm/FusedBatchNormV3;tower0/network/layer4/sepconv/depthwise",
+  "dtype": "int8",
+  "shape": [
+   1,
+   3,
+   3,
+   64
+  ],
+  "scales": [
+   0.004789071157574654,
+   0.003886049147695303,
+   0.005825637374073267,
+   0.005497841164469719
+  ],
+  "n_scales": 64,
+  "zero_points": [
+   0,
+   0,
+   0,
+   0
+  ],
+  "quant_dim": 3,
+  "crc32": 2092625235
+ },
+ {
+  "index": 43,
+  "name": "tower0/network/layer4/sepconv/BatchNorm/FusedBatchNormV3",
+  "dtype": "int32",
+  "shape": [
+   64
+  ],
+  "scales": [
+   0.0001126840288634412,
+   9.143645002041012e-05,
+   0.00013707381731364876,
+   0.00012936096754856408
+  ],
+  "n_scales": 64,
+  "zero_points": [
+   0,
+   0,
+   0,
+   0
+  ],
+  "quant_dim": 0,
+  "crc32": 1043541466
+ },
+ {
+  "index": 44,
+  "name": "tower0/network/layer4/sepconv/Relu6;tower0/network/layer4/sepconv/BatchNorm/FusedBatchNormV3;tower0/network/layer4/sepconv/depthwise",
+  "dtype": "int8",
+  "shape": [
+   1,
+   24,
+   16,
+   64
+  ],
+  "scales": [
+   0.0235294122248888
+  ],
+  "n_scales": 1,
+  "zero_points": [
+   -128
+  ],
+  "quant_dim": 0,
+  "crc32": 1252289058
+ },
+ {
+  "index": 45,
+  "name": "tower0/network/layer5/conv/Conv2D",
+  "dtype": "int8",
+  "shape": [
+   128,
+   1,
+   1,
+   64
+  ],
+  "scales": [
+   0.0030972310341894627,
+   0.0037516048178076744,
+   0.002420182805508375,
+   0.0026913348119705915
+  ],
+  "n_scales": 128,
+  "zero_points": [
+   0,
+   0,
+   0,
+   0
+  ],
+  "quant_dim": 0,
+  "crc32": 3519584524
+ },
+ {
+  "index": 46,
+  "name": "tower0/network/layer5/conv/BatchNorm/FusedBatchNormV3",
+  "dtype": "int32",
+  "shape": [
+   128
+  ],
+  "scales": [
+   7.287602784344926e-05,
+   8.827305282466114e-05,
+   5.6945478718262166e-05,
+   6.332552584353834e-05
+  ],
+  "n_scales": 128,
+  "zero_points": [
+   0,
+   0,
+   0,
+   0
+  ],
+  "quant_dim": 0,
+  "crc32": 1752282849
+ },
+ {
+  "index": 47,
+  "name": "tower0/network/layer5/conv/Relu6;tower0/network/layer5/conv/BatchNorm/FusedBatchNormV3;tower0/network/layer8/sepconv/BatchNorm/FusedBatchNormV3;tower0/network/layer8/sepconv/depthwise;tower0/network/layer5/conv/Conv2D",
+  "dtype": "int8",
+  "shape": [
+   1,
+   24,
+   16,
+   128
+  ],
+  "scales": [
+   0.0235294122248888
+  ],
+  "n_scales": 1,
+  "zero_points": [
+   -128
+  ],
+  "quant_dim": 0,
+  "crc32": 1383254609
+ },
+ {
+  "index": 48,
+  "name": "tower0/network/layer6/sepconv/BatchNorm/FusedBatchNormV3;tower0/network/layer6/sepconv/depthwise;tower0/network/layer8/sepconv/depthwise",
+  "dtype": "int8",
+  "shape": [
+   1,
+   3,
+   3,
+   128
+  ],
+  "scales": [
+   0.010391290299594402,
+   0.0130294905975461,
+   0.009455464780330658,
+   0.007536287885159254
+  ],
+  "n_scales": 128,
+  "zero_points": [
+   0,
+   0,
+   0,
+   0
+  ],
+  "quant_dim": 3,
+  "crc32": 2427790581
+ },
+ {
+  "index": 49,
+  "name": "tower0/network/layer6/sepconv/BatchNorm/FusedBatchNormV3",
+  "dtype": "int32",
+  "shape": [
+   128
+  ],
+  "scales": [
+   0.0002445009595248848,
+   0.000306576257571578,
+   0.00022248152527026832,
+   0.0001773244293872267
+  ],
+  "n_scales": 128,
+  "zero_points": [
+   0,
+   0,
+   0,
+   0
+  ],
+  "quant_dim": 0,
+  "crc32": 626043679
+ },
+ {
+  "index": 50,
+  "name": "tower0/network/layer6/sepconv/Relu6;tower0/network/layer6/sepconv/BatchNorm/FusedBatchNormV3;tower0/network/layer8/sepconv/BatchNorm/FusedBatchNormV3;tower0/network/layer8/sepconv/depthwise;tower0/network/layer6/sepconv/depthwise",
+  "dtype": "int8",
+  "shape": [
+   1,
+   24,
+   16,
+   128
+  ],
+  "scales": [
+   0.0235294122248888
+  ],
+  "n_scales": 1,
+  "zero_points": [
+   -128
+  ],
+  "quant_dim": 0,
+  "crc32": 2780367935
+ },
+ {
+  "index": 51,
+  "name": "tower0/network/layer7/conv/Conv2D",
+  "dtype": "int8",
+  "shape": [
+   128,
+   1,
+   1,
+   128
+  ],
+  "scales": [
+   0.0021752212196588516,
+   0.002051963936537504,
+   0.0033849698957055807,
+   0.003349017584696412
+  ],
+  "n_scales": 128,
+  "zero_points": [
+   0,
+   0,
+   0,
+   0
+  ],
+  "quant_dim": 0,
+  "crc32": 2065692020
+ },
+ {
+  "index": 52,
+  "name": "tower0/network/layer7/conv/BatchNorm/FusedBatchNormV3",
+  "dtype": "int32",
+  "shape": [
+   128
+  ],
+  "scales": [
+   5.118167609907687e-05,
+   4.8281504859915e-05,
+   7.964635005919263e-05,
+   7.88004181231372e-05
+  ],
+  "n_scales": 128,
+  "zero_points": [
+   0,
+   0,
+   0,
+   0
+  ],
+  "quant_dim": 0,
+  "crc32": 4274103724
+ },
+ {
+  "index": 53,
+  "name": "tower0/network/layer7/conv/Relu6;tower0/network/layer7/conv/BatchNorm/FusedBatchNormV3;tower0/network/layer8/sepconv/BatchNorm/FusedBatchNormV3;tower0/network/layer8/sepconv/depthwise;tower0/network/layer7/conv/Conv2D",
+  "dtype": "int8",
+  "shape": [
+   1,
+   24,
+   16,
+   128
+  ],
+  "scales": [
+   0.0235294122248888
+  ],
+  "n_scales": 1,
+  "zero_points": [
+   -128
+  ],
+  "quant_dim": 0,
+  "crc32": 3268823068
+ },
+ {
+  "index": 54,
+  "name": "tower0/network/layer8/sepconv/BatchNorm/FusedBatchNormV3;tower0/network/layer8/sepconv/depthwise",
+  "dtype": "int8",
+  "shape": [
+   1,
+   3,
+   3,
+   128
+  ],
+  "scales": [
+   0.004908984526991844,
+   0.005915799178183079,
+   0.004630943760275841,
+   0.006027551833540201
+  ],
+  "n_scales": 128,
+  "zero_points": [
+   0,
+   0,
+   0,
+   0
+  ],
+  "quant_dim": 3,
+  "crc32": 3775898249
+ },
+ {
+  "index": 55,
+  "name": "tower0/network/layer8/sepconv/BatchNorm/FusedBatchNormV3",
+  "dtype": "int32",
+  "shape": [
+   128
+  ],
+  "scales": [
+   0.00011550552153494209,
+   0.00013919528282713145,
+   0.00010896338790189475,
+   0.00014182475570123643
+  ],
+  "n_scales": 128,
+  "zero_points": [
+   0,
+   0,
+   0,
+   0
+  ],
+  "quant_dim": 0,
+  "crc32": 4048489336
+ },
+ {
+  "index": 56,
+  "name": "tower0/network/layer8/sepconv/Relu6;tower0/network/layer8/sepconv/BatchNorm/FusedBatchNormV3;tower0/network/layer8/sepconv/depthwise",
+  "dtype": "int8",
+  "shape": [
+   1,
+   12,
+   8,
+   128
+  ],
+  "scales": [
+   0.0235294122248888
+  ],
+  "n_scales": 1,
+  "zero_points": [
+   -128
+  ],
+  "quant_dim": 0,
+  "crc32": 374307561
+ },
+ {
+  "index": 57,
+  "name": "tower0/network/layer9/conv/Conv2D",
+  "dtype": "int8",
+  "shape": [
+   256,
+   1,
+   1,
+   128
+  ],
+  "scales": [
+   0.0024757906794548035,
+   0.0036672691348940134,
+   0.002646859036758542,
+   0.0034519473556429148
+  ],
+  "n_scales": 256,
+  "zero_points": [
+   0,
+   0,
+   0,
+   0
+  ],
+  "quant_dim": 0,
+  "crc32": 879384015
+ },
+ {
+  "index": 58,
+  "name": "tower0/network/layer9/conv/BatchNorm/FusedBatchNormV3",
+  "dtype": "int32",
+  "shape": [
+   256
+  ],
+  "scales": [
+   5.825389962410554e-05,
+   8.62886881805025e-05,
+   6.227903941180557e-05,
+   8.12222933745943e-05
+  ],
+  "n_scales": 256,
+  "zero_points": [
+   0,
+   0,
+   0,
+   0
+  ],
+  "quant_dim": 0,
+  "crc32": 1657756340
+ },
+ {
+  "index": 59,
+  "name": "tower0/network/layer9/conv/Relu6;tower0/network/layer9/conv/BatchNorm/FusedBatchNormV3;tower0/network/layer12/sepconv/BatchNorm/FusedBatchNormV3;tower0/network/layer12/sepconv/depthwise;tower0/network/layer9/conv/Conv2D",
+  "dtype": "int8",
+  "shape": [
+   1,
+   12,
+   8,
+   256
+  ],
+  "scales": [
+   0.0235294122248888
+  ],
+  "n_scales": 1,
+  "zero_points": [
+   -128
+  ],
+  "quant_dim": 0,
+  "crc32": 344747735
+ },
+ {
+  "index": 60,
+  "name": "tower0/network/layer10/sepconv/BatchNorm/FusedBatchNormV3;tower0/network/layer10/sepconv/depthwise;tower0/network/layer12/sepconv/depthwise",
+  "dtype": "int8",
+  "shape": [
+   1,
+   3,
+   3,
+   256
+  ],
+  "scales": [
+   0.010789552703499794,
+   0.010628045536577702,
+   0.0065747471526265144,
+   0.00913490355014801
+  ],
+  "n_scales": 256,
+  "zero_points": [
+   0,
+   0,
+   0,
+   0
+  ],
+  "quant_dim": 3,
+  "crc32": 371351949
+ },
+ {
+  "index": 61,
+  "name": "tower0/network/layer10/sepconv/BatchNorm/FusedBatchNormV3",
+  "dtype": "int32",
+  "shape": [
+   256
+  ],
+  "scales": [
+   0.0002538718399591744,
+   0.0002500716655049473,
+   0.00015469994104932994,
+   0.0002149389183614403
+  ],
+  "n_scales": 256,
+  "zero_points": [
+   0,
+   0,
+   0,
+   0
+  ],
+  "quant_dim": 0,
+  "crc32": 3356906785
+ },
+ {
+  "index": 62,
+  "name": "tower0/network/layer10/sepconv/Relu6;tower0/network/layer10/sepconv/BatchNorm/FusedBatchNormV3;tower0/network/layer12/sepconv/BatchNorm/FusedBatchNormV3;tower0/network/layer12/sepconv/depthwise;tower0/network/layer10/sepconv/depthwise",
+  "dtype": "int8",
+  "shape": [
+   1,
+   12,
+   8,
+   256
+  ],
+  "scales": [
+   0.0235294122248888
+  ],
+  "n_scales": 1,
+  "zero_points": [
+   -128
+  ],
+  "quant_dim": 0,
+  "crc32": 2285704095
+ },
+ {
+  "index": 63,
+  "name": "tower0/network/layer11/conv/Conv2D",
+  "dtype": "int8",
+  "shape": [
+   256,
+   1,
+   1,
+   256
+  ],
+  "scales": [
+   0.0017023910768330097,
+   0.0014978848630562425,
+   0.002511531813070178,
+   0.0018330658785998821
+  ],
+  "n_scales": 256,
+  "zero_points": [
+   0,
+   0,
+   0,
+   0
+  ],
+  "quant_dim": 0,
+  "crc32": 2720639234
+ },
+ {
+  "index": 64,
+  "name": "tower0/network/layer11/conv/BatchNorm/FusedBatchNormV3",
+  "dtype": "int32",
+  "shape": [
+   256
+  ],
+  "scales": [
+   4.005626033176668e-05,
+   3.5244349419372156e-05,
+   5.9094865719089285e-05,
+   4.313096360419877e-05
+  ],
+  "n_scales": 256,
+  "zero_points": [
+   0,
+   0,
+   0,
+   0
+  ],
+  "quant_dim": 0,
+  "crc32": 2590423739
+ },
+ {
+  "index": 65,
+  "name": "tower0/network/layer11/conv/Relu6;tower0/network/layer11/conv/BatchNorm/FusedBatchNormV3;tower0/network/layer12/sepconv/BatchNorm/FusedBatchNormV3;tower0/network/layer12/sepconv/depthwise;tower0/network/layer11/conv/Conv2D",
+  "dtype": "int8",
+  "shape": [
+   1,
+   12,
+   8,
+   256
+  ],
+  "scales": [
+   0.0235294122248888
+  ],
+  "n_scales": 1,
+  "zero_points": [
+   -128
+  ],
+  "quant_dim": 0,
+  "crc32": 1610275377
+ },
+ {
+  "index": 66,
+  "name": "tower0/network/layer12/sepconv/BatchNorm/FusedBatchNormV3;tower0/network/layer12/sepconv/depthwise",
+  "dtype": "int8",
+  "shape": [
+   1,
+   3,
+   3,
+   256
+  ],
+  "scales": [
+   0.008293726481497288,
+   0.0055534509010612965,
+   0.004647157154977322,
+   0.005439053755253553
+  ],
+  "n_scales": 256,
+  "zero_points": [
+   0,
+   0,
+   0,
+   0
+  ],
+  "quant_dim": 3,
+  "crc32": 1860268885
+ },
+ {
+  "index": 67,
+  "name": "tower0/network/layer12/sepconv/BatchNorm/FusedBatchNormV3",
+  "dtype": "int32",
+  "shape": [
+   256
+  ],
+  "scales": [
+   0.00019514650921337306,
+   0.00013066943211015314,
+   0.000109344873635564,
+   0.00012797773524653167
+  ],
+  "n_scales": 256,
+  "zero_points": [
+   0,
+   0,
+   0,
+   0
+  ],
+  "quant_dim": 0,
+  "crc32": 1861314133
+ },
+ {
+  "index": 68,
+  "name": "tower0/network/layer12/sepconv/Relu6;tower0/network/layer12/sepconv/BatchNorm/FusedBatchNormV3;tower0/network/layer12/sepconv/depthwise",
+  "dtype": "int8",
+  "shape": [
+   1,
+   6,
+   4,
+   256
+  ],
+  "scales": [
+   0.0235294122248888
+  ],
+  "n_scales": 1,
+  "zero_points": [
+   -128
+  ],
+  "quant_dim": 0,
+  "crc32": 1694023429
+ },
+ {
+  "index": 69,
+  "name": "tower0/network/layer13/conv/Conv2D",
+  "dtype": "int8",
+  "shape": [
+   512,
+   1,
+   1,
+   256
+  ],
+  "scales": [
+   0.0013891162816435099,
+   0.0019828728400170803,
+   0.003254157258197665,
+   0.0019545266404747963
+  ],
+  "n_scales": 512,
+  "zero_points": [
+   0,
+   0,
+   0,
+   0
+  ],
+  "quant_dim": 0,
+  "crc32": 4209346739
+ },
+ {
+  "index": 70,
+  "name": "tower0/network/layer13/conv/BatchNorm/FusedBatchNormV3",
+  "dtype": "int32",
+  "shape": [
+   512
+  ],
+  "scales": [
+   3.268508953624405e-05,
+   4.665583401219919e-05,
+   7.656840898562223e-05,
+   4.598886152962223e-05
+  ],
+  "n_scales": 512,
+  "zero_points": [
+   0,
+   0,
+   0,
+   0
+  ],
+  "quant_dim": 0,
+  "crc32": 948304306
+ },
+ {
+  "index": 71,
+  "name": "tower0/network/layer13/conv/Relu6;tower0/network/layer13/conv/BatchNorm/FusedBatchNormV3;tower0/network/layer24/sepconv/BatchNorm/FusedBatchNormV3;tower0/network/layer24/sepconv/depthwise;tower0/network/layer13/conv/Conv2D",
+  "dtype": "int8",
+  "shape": [
+   1,
+   6,
+   4,
+   512
+  ],
+  "scales": [
+   0.0235294122248888
+  ],
+  "n_scales": 1,
+  "zero_points": [
+   -128
+  ],
+  "quant_dim": 0,
+  "crc32": 4051411609
+ },
+ {
+  "index": 72,
+  "name": "tower0/network/layer14/sepconv/BatchNorm/FusedBatchNormV3;tower0/network/layer14/sepconv/depthwise;tower0/network/layer24/sepconv/depthwise",
+  "dtype": "int8",
+  "shape": [
+   1,
+   3,
+   3,
+   512
+  ],
+  "scales": [
+   0.009774475358426571,
+   0.007552097551524639,
+   0.004839564673602581,
+   0.007656051777303219
+  ],
+  "n_scales": 512,
+  "zero_points": [
+   0,
+   0,
+   0,
+   0
+  ],
+  "quant_dim": 3,
+  "crc32": 268519694
+ },
+ {
+  "index": 73,
+  "name": "tower0/network/layer14/sepconv/BatchNorm/FusedBatchNormV3",
+  "dtype": "int32",
+  "shape": [
+   512
+  ],
+  "scales": [
+   0.00022998766507953405,
+   0.00017769641999620944,
+   0.0001138721127063036,
+   0.0001801423932192847
+  ],
+  "n_scales": 512,
+  "zero_points": [
+   0,
+   0,
+   0,
+   0
+  ],
+  "quant_dim": 0,
+  "crc32": 2014496008
+ },
+ {
+  "index": 74,
+  "name": "tower0/network/layer14/sepconv/Relu6;tower0/network/layer14/sepconv/BatchNorm/FusedBatchNormV3;tower0/network/layer24/sepconv/BatchNorm/FusedBatchNormV3;tower0/network/layer24/sepconv/depthwise;tower0/network/layer14/sepconv/depthwise",
+  "dtype": "int8",
+  "shape": [
+   1,
+   6,
+   4,
+   512
+  ],
+  "scales": [
+   0.0235294122248888
+  ],
+  "n_scales": 1,
+  "zero_points": [
+   -128
+  ],
+  "quant_dim": 0,
+  "crc32": 419243274
+ },
+ {
+  "index": 75,
+  "name": "tower0/network/layer15/conv/Conv2D",
+  "dtype": "int8",
+  "shape": [
+   512,
+   1,
+   1,
+   512
+  ],
+  "scales": [
+   0.0010372446849942207,
+   0.0012731647584587336,
+   0.0015784684801474214,
+   0.0012947687646374106
+  ],
+  "n_scales": 512,
+  "zero_points": [
+   0,
+   0,
+   0,
+   0
+  ],
+  "quant_dim": 0,
+  "crc32": 2585448204
+ },
+ {
+  "index": 76,
+  "name": "tower0/network/layer15/conv/BatchNorm/FusedBatchNormV3",
+  "dtype": "int32",
+  "shape": [
+   512
+  ],
+  "scales": [
+   2.440575735818129e-05,
+   2.995681825268548e-05,
+   3.71404348697979e-05,
+   3.0465147574432194e-05
+  ],
+  "n_scales": 512,
+  "zero_points": [
+   0,
+   0,
+   0,
+   0
+  ],
+  "quant_dim": 0,
+  "crc32": 382030868
+ },
+ {
+  "index": 77,
+  "name": "tower0/network/layer15/conv/Relu6;tower0/network/layer15/conv/BatchNorm/FusedBatchNormV3;tower0/network/layer24/sepconv/BatchNorm/FusedBatchNormV3;tower0/network/layer24/sepconv/depthwise;tower0/network/layer15/conv/Conv2D",
+  "dtype": "int8",
+  "shape": [
+   1,
+   6,
+   4,
+   512
+  ],
+  "scales": [
+   0.0235294122248888
+  ],
+  "n_scales": 1,
+  "zero_points": [
+   -128
+  ],
+  "quant_dim": 0,
+  "crc32": 724022611
+ },
+ {
+  "index": 78,
+  "name": "tower0/network/layer16/sepconv/BatchNorm/FusedBatchNormV3;tower0/network/layer16/sepconv/depthwise;tower0/network/layer24/sepconv/depthwise",
+  "dtype": "int8",
+  "shape": [
+   1,
+   3,
+   3,
+   512
+  ],
+  "scales": [
+   0.011274242773652077,
+   0.007680883631110191,
+   0.009073726832866669,
+   0.006715741474181414
+  ],
+  "n_scales": 512,
+  "zero_points": [
+   0,
+   0,
+   0,
+   0
+  ],
+  "quant_dim": 3,
+  "crc32": 2991841474
+ },
+ {
+  "index": 79,
+  "name": "tower0/network/layer16/sepconv/BatchNorm/FusedBatchNormV3",
+  "dtype": "int32",
+  "shape": [
+   512
+  ],
+  "scales": [
+   0.0002652762923389673,
+   0.0001807266817195341,
+   0.00021349945745896548,
+   0.00015801744302734733
+  ],
+  "n_scales": 512,
+  "zero_points": [
+   0,
+   0,
+   0,
+   0
+  ],
+  "quant_dim": 0,
+  "crc32": 3132186170
+ },
+ {
+  "index": 80,
+  "name": "tower0/network/layer16/sepconv/Relu6;tower0/network/layer16/sepconv/BatchNorm/FusedBatchNormV3;tower0/network/layer24/sepconv/BatchNorm/FusedBatchNormV3;tower0/network/layer24/sepconv/depthwise;tower0/network/layer16/sepconv/depthwise",
+  "dtype": "int8",
+  "shape": [
+   1,
+   6,
+   4,
+   512
+  ],
+  "scales": [
+   0.0235294122248888
+  ],
+  "n_scales": 1,
+  "zero_points": [
+   -128
+  ],
+  "quant_dim": 0,
+  "crc32": 1964647408
+ },
+ {
+  "index": 81,
+  "name": "tower0/network/layer17/conv/Conv2D",
+  "dtype": "int8",
+  "shape": [
+   512,
+   1,
+   1,
+   512
+  ],
+  "scales": [
+   0.0014760892372578382,
+   0.0015540864551439881,
+   0.0012658340856432915,
+   0.0016399797750636935
+  ],
+  "n_scales": 512,
+  "zero_points": [
+   0,
+   0,
+   0,
+   0
+  ],
+  "quant_dim": 0,
+  "crc32": 287424251
+ },
+ {
+  "index": 82,
+  "name": "tower0/network/layer17/conv/BatchNorm/FusedBatchNormV3",
+  "dtype": "int32",
+  "shape": [
+   512
+  ],
+  "scales": [
+   3.473151082289405e-05,
+   3.6566740163834766e-05,
+   2.9784332582494244e-05,
+   3.858776108245365e-05
+  ],
+  "n_scales": 512,
+  "zero_points": [
+   0,
+   0,
+   0,
+   0
+  ],
+  "quant_dim": 0,
+  "crc32": 1564788800
+ },
+ {
+  "index": 83,
+  "name": "tower0/network/layer17/conv/Relu6;tower0/network/layer17/conv/BatchNorm/FusedBatchNormV3;tower0/network/layer24/sepconv/BatchNorm/FusedBatchNormV3;tower0/network/layer24/sepconv/depthwise;tower0/network/layer17/conv/Conv2D",
+  "dtype": "int8",
+  "shape": [
+   1,
+   6,
+   4,
+   512
+  ],
+  "scales": [
+   0.0235294122248888
+  ],
+  "n_scales": 1,
+  "zero_points": [
+   -128
+  ],
+  "quant_dim": 0,
+  "crc32": 1781766732
+ },
+ {
+  "index": 84,
+  "name": "tower0/network/layer18/sepconv/BatchNorm/FusedBatchNormV3;tower0/network/layer18/sepconv/depthwise;tower0/network/layer24/sepconv/depthwise",
+  "dtype": "int8",
+  "shape": [
+   1,
+   3,
+   3,
+   512
+  ],
+  "scales": [
+   0.007369006983935833,
+   0.005981015507131815,
+   0.005731556098908186,
+   0.007842322811484337
+  ],
+  "n_scales": 512,
+  "zero_points": [
+   0,
+   0,
+   0,
+   0
+  ],
+  "quant_dim": 3,
+  "crc32": 2082171560
+ },
+ {
+  "index": 85,
+  "name": "tower0/network/layer18/sepconv/BatchNorm/FusedBatchNormV3",
+  "dtype": "int32",
+  "shape": [
+   512
+  ],
+  "scales": [
+   0.00017338839825242758,
+   0.00014072978228796273,
+   0.00013486015086527914,
+   0.00018452524091117084
+  ],
+  "n_scales": 512,
+  "zero_points": [
+   0,
+   0,
+   0,
+   0
+  ],
+  "quant_dim": 0,
+  "crc32": 3672312512
+ },
+ {
+  "index": 86,
+  "name": "tower0/network/layer18/sepconv/Relu6;tower0/network/layer18/sepconv/BatchNorm/FusedBatchNormV3;tower0/network/layer24/sepconv/BatchNorm/FusedBatchNormV3;tower0/network/layer24/sepconv/depthwise;tower0/network/layer18/sepconv/depthwise",
+  "dtype": "int8",
+  "shape": [
+   1,
+   6,
+   4,
+   512
+  ],
+  "scales": [
+   0.0235294122248888
+  ],
+  "n_scales": 1,
+  "zero_points": [
+   -128
+  ],
+  "quant_dim": 0,
+  "crc32": 2953575142
+ },
+ {
+  "index": 87,
+  "name": "tower0/network/layer19/conv/Conv2D",
+  "dtype": "int8",
+  "shape": [
+   512,
+   1,
+   1,
+   512
+  ],
+  "scales": [
+   0.0013006147928535938,
+   0.00152458471711725,
+   0.0017671316163614392,
+   0.0019796655979007483
+  ],
+  "n_scales": 512,
+  "zero_points": [
+   0,
+   0,
+   0,
+   0
+  ],
+  "quant_dim": 0,
+  "crc32": 251189646
+ },
+ {
+  "index": 88,
+  "name": "tower0/network/layer19/conv/BatchNorm/FusedBatchNormV3",
+  "dtype": "int32",
+  "shape": [
+   512
+  ],
+  "scales": [
+   3.060270319110714e-05,
+   3.58725810656324e-05,
+   4.157956936978735e-05,
+   4.658036777982488e-05
+  ],
+  "n_scales": 512,
+  "zero_points": [
+   0,
+   0,
+   0,
+   0
+  ],
+  "quant_dim": 0,
+  "crc32": 4274251872
+ },
+ {
+  "index": 89,
+  "name": "tower0/network/layer19/conv/Relu6;tower0/network/layer19/conv/BatchNorm/FusedBatchNormV3;tower0/network/layer24/sepconv/BatchNorm/FusedBatchNormV3;tower0/network/layer24/sepconv/depthwise;tower0/network/layer19/conv/Conv2D",
+  "dtype": "int8",
+  "shape": [
+   1,
+   6,
+   4,
+   512
+  ],
+  "scales": [
+   0.0235294122248888
+  ],
+  "n_scales": 1,
+  "zero_points": [
+   -128
+  ],
+  "quant_dim": 0,
+  "crc32": 1595002128
+ },
+ {
+  "index": 90,
+  "name": "tower0/network/layer20/sepconv/BatchNorm/FusedBatchNormV3;tower0/network/layer20/sepconv/depthwise;tower0/network/layer24/sepconv/depthwise",
+  "dtype": "int8",
+  "shape": [
+   1,
+   3,
+   3,
+   512
+  ],
+  "scales": [
+   0.007584701757878065,
+   0.004905501380562782,
+   0.006846485193818808,
+   0.008775133639574051
+  ],
+  "n_scales": 512,
+  "zero_points": [
+   0,
+   0,
+   0,
+   0
+  ],
+  "quant_dim": 3,
+  "crc32": 1281391415
+ },
+ {
+  "index": 91,
+  "name": "tower0/network/layer20/sepconv/BatchNorm/FusedBatchNormV3",
+  "dtype": "int32",
+  "shape": [
+   512
+  ],
+  "scales": [
+   0.00017846356786321849,
+   0.00011542356514837593,
+   0.000161093776114285,
+   0.00020647373457904905
+  ],
+  "n_scales": 512,
+  "zero_points": [
+   0,
+   0,
+   0,
+   0
+  ],
+  "quant_dim": 0,
+  "crc32": 2698496570
+ },
+ {
+  "index": 92,
+  "name": "tower0/network/layer20/sepconv/Relu6;tower0/network/layer20/sepconv/BatchNorm/FusedBatchNormV3;tower0/network/layer24/sepconv/BatchNorm/FusedBatchNormV3;tower0/network/layer24/sepconv/depthwise;tower0/network/layer20/sepconv/depthwise",
+  "dtype": "int8",
+  "shape": [
+   1,
+   6,
+   4,
+   512
+  ],
+  "scales": [
+   0.0235294122248888
+  ],
+  "n_scales": 1,
+  "zero_points": [
+   -128
+  ],
+  "quant_dim": 0,
+  "crc32": 107314390
+ },
+ {
+  "index": 93,
+  "name": "tower0/network/layer21/conv/Conv2D",
+  "dtype": "int8",
+  "shape": [
+   512,
+   1,
+   1,
+   512
+  ],
+  "scales": [
+   0.0011285076616331935,
+   0.0013838654849678278,
+   0.0014059027889743447,
+   0.0024889702908694744
+  ],
+  "n_scales": 512,
+  "zero_points": [
+   0,
+   0,
+   0,
+   0
+  ],
+  "quant_dim": 0,
+  "crc32": 1333139576
+ },
+ {
+  "index": 94,
+  "name": "tower0/network/layer21/conv/BatchNorm/FusedBatchNormV3",
+  "dtype": "int32",
+  "shape": [
+   512
+  ],
+  "scales": [
+   2.6553121642791666e-05,
+   3.256154013797641e-05,
+   3.308006489533e-05,
+   5.8564008213579655e-05
+  ],
+  "n_scales": 512,
+  "zero_points": [
+   0,
+   0,
+   0,
+   0
+  ],
+  "quant_dim": 0,
+  "crc32": 1929027271
+ },
+ {
+  "index": 95,
+  "name": "tower0/network/layer21/conv/Relu6;tower0/network/layer21/conv/BatchNorm/FusedBatchNormV3;tower0/network/layer24/sepconv/BatchNorm/FusedBatchNormV3;tower0/network/layer24/sepconv/depthwise;tower0/network/layer21/conv/Conv2D",
+  "dtype": "int8",
+  "shape": [
+   1,
+   6,
+   4,
+   512
+  ],
+  "scales": [
+   0.0235294122248888
+  ],
+  "n_scales": 1,
+  "zero_points": [
+   -128
+  ],
+  "quant_dim": 0,
+  "crc32": 3097871400
+ },
+ {
+  "index": 96,
+  "name": "tower0/network/layer22/sepconv/BatchNorm/FusedBatchNormV3;tower0/network/layer22/sepconv/depthwise;tower0/network/layer24/sepconv/depthwise",
+  "dtype": "int8",
+  "shape": [
+   1,
+   3,
+   3,
+   512
+  ],
+  "scales": [
+   0.0062657748349010944,
+   0.006043435540050268,
+   0.0004378031298983842,
+   0.006049065385013819
+  ],
+  "n_scales": 512,
+  "zero_points": [
+   0,
+   0,
+   0,
+   0
+  ],
+  "quant_dim": 3,
+  "crc32": 1094869596
+ },
+ {
+  "index": 97,
+  "name": "tower0/network/layer22/sepconv/BatchNorm/FusedBatchNormV3",
+  "dtype": "int32",
+  "shape": [
+   512
+  ],
+  "scales": [
+   0.00014742999337613583,
+   0.00014219849254004657,
+   1.0301250767952297e-05,
+   0.0001423309586243704
+  ],
+  "n_scales": 512,
+  "zero_points": [
+   0,
+   0,
+   0,
+   0
+  ],
+  "quant_dim": 0,
+  "crc32": 1460277814
+ },
+ {
+  "index": 98,
+  "name": "tower0/network/layer22/sepconv/Relu6;tower0/network/layer22/sepconv/BatchNorm/FusedBatchNormV3;tower0/network/layer24/sepconv/BatchNorm/FusedBatchNormV3;tower0/network/layer24/sepconv/depthwise;tower0/network/layer22/sepconv/depthwise",
+  "dtype": "int8",
+  "shape": [
+   1,
+   6,
+   4,
+   512
+  ],
+  "scales": [
+   0.0235294122248888
+  ],
+  "n_scales": 1,
+  "zero_points": [
+   -128
+  ],
+  "quant_dim": 0,
+  "crc32": 279890194
+ },
+ {
+  "index": 99,
+  "name": "tower0/network/layer23/conv/Conv2D",
+  "dtype": "int8",
+  "shape": [
+   512,
+   1,
+   1,
+   512
+  ],
+  "scales": [
+   0.0005840983940288424,
+   0.0007190810865722597,
+   0.0007779422448948026,
+   0.00044743207399733365
+  ],
+  "n_scales": 512,
+  "zero_points": [
+   0,
+   0,
+   0,
+   0
+  ],
+  "quant_dim": 0,
+  "crc32": 1883062558
+ },
+ {
+  "index": 100,
+  "name": "tower0/network/layer23/conv/BatchNorm/FusedBatchNormV3",
+  "dtype": "int32",
+  "shape": [
+   512
+  ],
+  "scales": [
+   1.3743491763307247e-05,
+   1.6919555491767824e-05,
+   1.8304523109691218e-05,
+   1.052781408361625e-05
+  ],
+  "n_scales": 512,
+  "zero_points": [
+   0,
+   0,
+   0,
+   0
+  ],
+  "quant_dim": 0,
+  "crc32": 3876266511
+ },
+ {
+  "index": 101,
+  "name": "tower0/network/layer23/conv/Relu6;tower0/network/layer23/conv/BatchNorm/FusedBatchNormV3;tower0/network/layer24/sepconv/BatchNorm/FusedBatchNormV3;tower0/network/layer24/sepconv/depthwise;tower0/network/layer23/conv/Conv2D",
+  "dtype": "int8",
+  "shape": [
+   1,
+   6,
+   4,
+   512
+  ],
+  "scales": [
+   0.020902719348669052
+  ],
+  "n_scales": 1,
+  "zero_points": [
+   -128
+  ],
+  "quant_dim": 0,
+  "crc32": 3600326815
+ },
+ {
+  "index": 102,
+  "name": "tower0/network/layer24/sepconv/BatchNorm/FusedBatchNormV3;tower0/network/layer24/sepconv/depthwise",
+  "dtype": "int8",
+  "shape": [
+   1,
+   3,
+   3,
+   512
+  ],
+  "scales": [
+   0.009148932062089443,
+   0.011972191743552685,
+   0.023148134350776672,
+   0.0011529583716765046
+  ],
+  "n_scales": 512,
+  "zero_points": [
+   0,
+   0,
+   0,
+   0
+  ],
+  "quant_dim": 3,
+  "crc32": 2761857736
+ },
+ {
+  "index": 103,
+  "name": "tower0/network/layer24/sepconv/BatchNorm/FusedBatchNormV3",
+  "dtype": "int32",
+  "shape": [
+   512
+  ],
+  "scales": [
+   0.00019123755919281393,
+   0.0002502513525541872,
+   0.00048385895206592977,
+   2.4099965230561793e-05
+  ],
+  "n_scales": 512,
+  "zero_points": [
+   0,
+   0,
+   0,
+   0
+  ],
+  "quant_dim": 0,
+  "crc32": 1930171225
+ },
+ {
+  "index": 104,
+  "name": "tower0/network/layer24/sepconv/Relu6;tower0/network/layer24/sepconv/BatchNorm/FusedBatchNormV3;tower0/network/layer24/sepconv/depthwise",
+  "dtype": "int8",
+  "shape": [
+   1,
+   3,
+   2,
+   512
+  ],
+  "scales": [
+   0.0235294122248888
+  ],
+  "n_scales": 1,
+  "zero_points": [
+   -128
+  ],
+  "quant_dim": 0,
+  "crc32": 538589125
+ },
+ {
+  "index": 105,
+  "name": "tower0/network/layer25/conv/Conv2D",
+  "dtype": "int8",
+  "shape": [
+   1024,
+   1,
+   1,
+   512
+  ],
+  "scales": [
+   0.0012126020155847073,
+   0.0009800127008929849,
+   0.0022464224603027105,
+   0.0006620531785301864
+  ],
+  "n_scales": 1024,
+  "zero_points": [
+   0,
+   0,
+   0,
+   0
+  ],
+  "quant_dim": 0,
+  "crc32": 2792946408
+ },
+ {
+  "index": 106,
+  "name": "tower0/network/layer25/conv/BatchNorm/FusedBatchNormV3",
+  "dtype": "int32",
+  "shape": [
+   1024
+  ],
+  "scales": [
+   2.8531812859000638e-05,
+   2.3059123122948222e-05,
+   5.285700171953067e-05,
+   1.5577721569570713e-05
+  ],
+  "n_scales": 1024,
+  "zero_points": [
+   0,
+   0,
+   0,
+   0
+  ],
+  "quant_dim": 0,
+  "crc32": 2648197591
+ },
+ {
+  "index": 107,
+  "name": "tower0/network/layer25/conv/Relu6;tower0/network/layer25/conv/BatchNorm/FusedBatchNormV3;tower0/network/layer26/sepconv/BatchNorm/FusedBatchNormV3;tower0/network/layer26/sepconv/depthwise;tower0/network/layer27/conv/Conv2D;tower0/network/layer25/conv/Conv2D",
+  "dtype": "int8",
+  "shape": [
+   1,
+   3,
+   2,
+   1024
+  ],
+  "scales": [
+   0.0235294122248888
+  ],
+  "n_scales": 1,
+  "zero_points": [
+   -128
+  ],
+  "quant_dim": 0,
+  "crc32": 253490764
+ },
+ {
+  "index": 108,
+  "name": "tower0/network/layer26/sepconv/BatchNorm/FusedBatchNormV3;tower0/network/layer26/sepconv/depthwise;tower0/network/layer27/conv/Conv2D",
+  "dtype": "int8",
+  "shape": [
+   1,
+   3,
+   3,
+   1024
+  ],
+  "scales": [
+   0.011337902396917343,
+   0.026323167607188225,
+   0.005001490470021963,
+   0.00047976733185350895
+  ],
+  "n_scales": 1024,
+  "zero_points": [
+   0,
+   0,
+   0,
+   0
+  ],
+  "quant_dim": 3,
+  "crc32": 220007442
+ },
+ {
+  "index": 109,
+  "name": "tower0/network/layer26/sepconv/BatchNorm/FusedBatchNormV3",
+  "dtype": "int32",
+  "shape": [
+   1024
+  ],
+  "scales": [
+   0.00026677417918108404,
+   0.000619368685875088,
+   0.00011768213153118268,
+   1.1288643690932076e-05
+  ],
+  "n_scales": 1024,
+  "zero_points": [
+   0,
+   0,
+   0,
+   0
+  ],
+  "quant_dim": 0,
+  "crc32": 3233259131
+ },
+ {
+  "index": 110,
+  "name": "tower0/network/layer26/sepconv/Relu6;tower0/network/layer26/sepconv/BatchNorm/FusedBatchNormV3;tower0/network/layer26/sepconv/depthwise;tower0/network/layer27/conv/Conv2D",
+  "dtype": "int8",
+  "shape": [
+   1,
+   3,
+   2,
+   1024
+  ],
+  "scales": [
+   0.0235294122248888
+  ],
+  "n_scales": 1,
+  "zero_points": [
+   -128
+  ],
+  "quant_dim": 0,
+  "crc32": 1623154807
+ },
+ {
+  "index": 111,
+  "name": "tower0/network/layer27/conv/Conv2D",
+  "dtype": "int8",
+  "shape": [
+   1024,
+   1,
+   1,
+   1024
+  ],
+  "scales": [
+   0.0010005560470744967,
+   0.0015356822405010462,
+   0.002637465950101614,
+   0.002920885570347309
+  ],
+  "n_scales": 1024,
+  "zero_points": [
+   0,
+   0,
+   0,
+   0
+  ],
+  "quant_dim": 0,
+  "crc32": 37955627
+ },
+ {
+  "index": 112,
+  "name": "tower0/network/layer27/conv/BatchNorm/FusedBatchNormV3",
+  "dtype": "int32",
+  "shape": [
+   1024
+  ],
+  "scales": [
+   2.3542495910078287e-05,
+   3.613370063249022e-05,
+   6.205802492331713e-05,
+   6.87267238390632e-05
+  ],
+  "n_scales": 1024,
+  "zero_points": [
+   0,
+   0,
+   0,
+   0
+  ],
+  "quant_dim": 0,
+  "crc32": 2717122258
+ },
+ {
+  "index": 113,
+  "name": "tower0/network/layer27/conv/Relu6;tower0/network/layer27/conv/BatchNorm/FusedBatchNormV3;tower0/network/layer26/sepconv/BatchNorm/FusedBatchNormV3;tower0/network/layer26/sepconv/depthwise;tower0/network/layer27/conv/Conv2D",
+  "dtype": "int8",
+  "shape": [
+   1,
+   3,
+   2,
+   1024
+  ],
+  "scales": [
+   0.0235294122248888
+  ],
+  "n_scales": 1,
+  "zero_points": [
+   -128
+  ],
+  "quant_dim": 0,
+  "crc32": 1557495861
+ },
+ {
+  "index": 114,
+  "name": "tower0/network/layer28/reduce_mean/reduction_indices",
+  "dtype": "int32",
+  "shape": [
+   2
+  ],
+  "scales": [],
+  "n_scales": 0,
+  "zero_points": [],
+  "quant_dim": 0,
+  "crc32": 58791804
+ },
+ {
+  "index": 115,
+  "name": "tower0/network/layer28/reduce_mean",
+  "dtype": "int8",
+  "shape": [
+   1,
+   1,
+   1,
+   1024
+  ],
+  "scales": [
+   0.022328350692987442
+  ],
+  "n_scales": 1,
+  "zero_points": [
+   -128
+  ],
+  "quant_dim": 0,
+  "crc32": 3056197684
+ },
+ {
+  "index": 116,
+  "name": "tower0/network/layer29/fc/MatMul",
+  "dtype": "int8",
+  "shape": [
+   521,
+   1024
+  ],
+  "scales": [
+   0.02734142355620861,
+   0.02734142355620861,
+   0.02734142355620861,
+   0.02734142355620861
+  ],
+  "n_scales": 521,
+  "zero_points": [
+   0
+  ],
+  "quant_dim": 0,
+  "crc32": 3987762890
+ },
+ {
+  "index": 117,
+  "name": "network/layer29/fc/biases",
+  "dtype": "int32",
+  "shape": [
+   521
+  ],
+  "scales": [
+   0.0006104888743720949
+  ],
+  "n_scales": 1,
+  "zero_points": [
+   0
+  ],
+  "quant_dim": 0,
+  "crc32": 2227376035
+ },
+ {
+  "index": 118,
+  "name": "tower0/network/layer29/fc/MatMul;tower0/network/layer29/fc/BiasAdd",
+  "dtype": "int8",
+  "shape": [
+   1,
+   521
+  ],
+  "scales": [
+   0.3471774756908417
+  ],
+  "n_scales": 1,
+  "zero_points": [
+   100
+  ],
+  "quant_dim": 0,
+  "crc32": 3685008920
+ },
+ {
+  "index": 119,
+  "name": "tower0/network/layer32/final_output1",
+  "dtype": "int8",
+  "shape": [
+   1,
+   521
+  ],
+  "scales": [
+   0.00390625
+  ],
+  "n_scales": 1,
+  "zero_points": [
+   -128
+  ],
+  "quant_dim": 0,
+  "crc32": 2846644211
+ },
+ {
+  "index": 120,
+  "name": "tower0/network/layer32/final_output",
+  "dtype": "float32",
+  "shape": [
+   1,
+   521
+  ],
+  "scales": [],
+  "n_scales": 0,
+  "zero_points": [],
+  "quant_dim": 0,
+  "crc32": 1109416820
+ },
+ {
+  "index": 121,
+  "name": "",
+  "dtype": "int32",
+  "shape": [
+   18
+  ],
+  "scales": [],
+  "n_scales": 0,
+  "zero_points": [],
+  "quant_dim": 0,
+  "crc32": 2193599080
+ },
+ {
+  "index": 122,
+  "name": "",
+  "dtype": "int64",
+  "shape": [
+   256
+  ],
+  "scales": [],
+  "n_scales": 0,
+  "zero_points": [],
+  "quant_dim": 0,
+  "crc32": 1153209742
+ }
+]

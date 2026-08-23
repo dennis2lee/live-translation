@@ -22,11 +22,13 @@ func openPrefs(t *testing.T, w *Window) *prefsDialog {
 		levelStop: make(chan struct{}),
 	}
 	// The tabs are what construct the widgets that collect() reads back.
-	p.apiTab()
-	p.audioTab()
-	p.networkTab()
+	p.connectionTab()
+	p.inputTab()
+	p.outputTab()
+	p.captionsTab()
+	p.coloursTab()
+	p.filterTab()
 	p.vocabularyTab()
-	p.appearanceTab()
 	p.behaviourTab()
 	t.Cleanup(p.close)
 	return p

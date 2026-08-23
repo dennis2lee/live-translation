@@ -14,6 +14,7 @@ import (
 
 	"github.com/dennis2lee/live-translation/src_go/internal/audio"
 	"github.com/dennis2lee/live-translation/src_go/internal/captions"
+	"github.com/dennis2lee/live-translation/src_go/internal/classify"
 	"github.com/dennis2lee/live-translation/src_go/internal/config"
 	"github.com/dennis2lee/live-translation/src_go/internal/logging"
 	"github.com/dennis2lee/live-translation/src_go/internal/platform"
@@ -105,6 +106,23 @@ type Window struct {
 	// the start/stop/reopen rules without opening a device — malgo opens real
 	// hardware, and a test that needs headphones plugged in is not a test.
 	newSpeaker func(deviceName string, sourceRate int) speaker
+	// speechMuted is the m key. It is a runtime override on the gain and is
+	// deliberately *not* persisted: Settings.SpeakTranslation is the durable
+	// switch, and a second durable switch for the same thing gives a silent
+	// launch no way to explain itself. A mute that outlived a restart is
+	// indistinguishable from the feature being broken.
+	speechMuted bool
+
+	// musicGate filters the send path for the running session; nil when the
+	// feature is off or the model could not be had. yamnet is the loaded
+	// model, kept across sessions — loading dequantizes 4 M weights, and a
+	// stop/start should not pay that twice.
+	musicGate *classify.Gate
+	yamnet    *classify.Model
+	// loadModel reads the model from disk. A field for the same reason
+	// newSpeaker is: the tests must not read the real app-support directory,
+	// and a test that needs a 4 MB download is not a unit test.
+	loadModel func() (*classify.Model, error)
 
 	state       translator.State
 	errorDetail string
@@ -207,6 +225,8 @@ func (w *Window) bindKeys() {
 			w.SetDirection(config.EnglishToKorean)
 		case '9':
 			w.ToggleCompletePhrases()
+		case 'm', 'M':
+			w.ToggleSpeechMute()
 		case 'f', 'F':
 			// Full screen hides the menu on the platforms that draw it in the
 			// window, so this is the way back out — and the only reliable one,
@@ -337,8 +357,18 @@ func (w *Window) applySessionChanges(old config.Settings) {
 		return
 	}
 	w.applySpeechChanges(old)
+	// Tuning moves without a restart — the gate reads it per frame. Only the
+	// on/off switch rebuilds the translator, below.
+	if w.musicGate != nil && next.MusicGate &&
+		(old.MusicGateThreshold != next.MusicGateThreshold || old.MusicGateHold != next.MusicGateHold) {
+		w.musicGate.SetTuning(classify.GateTuning{
+			Threshold:   next.MusicGateThreshold,
+			HoldSeconds: next.MusicGateHold,
+		})
+	}
 	if old.TargetLanguageCode != next.TargetLanguageCode ||
 		old.SilenceGate != next.SilenceGate ||
+		old.MusicGate != next.MusicGate ||
 		old.EchoTargetLanguage != next.EchoTargetLanguage ||
 		old.VocabularySource != next.VocabularySource ||
 		old.VocabularyCaptions != next.VocabularyCaptions {
@@ -366,6 +396,10 @@ func (w *Window) applySpeechChanges(old config.Settings) {
 
 	switch {
 	case !next.SpeakTranslation:
+		// Turning the feature off in Preferences is the durable decision, so
+		// the transient override has nothing left to override. Leaving it set
+		// would make the next Apply that turns speech back on produce silence.
+		w.speechMuted = false
 		w.stopPlayer()
 	case player == nil:
 		// Off→on, or a device that failed to open last time. Retrying on Apply
@@ -379,13 +413,17 @@ func (w *Window) applySpeechChanges(old config.Settings) {
 	case old.SpeechVolume != next.SpeechVolume:
 		// Never reopen for this. The gain is read per block, so the slider
 		// takes effect on the next one with no gap.
-		player.SetVolume(next.SpeechVolume)
+		player.SetVolume(w.speechGain())
 	}
 }
 
 // restartTranslator reopens only the translator session, keeping audio and the
 // transcript.
 func (w *Window) restartTranslator() {
+	// The old gate's Filter is captured in the old translator's options; a
+	// fresh translator needs a fresh gate or the toggle-off case would keep
+	// filtering for ever.
+	w.stopMusicGate()
 	if w.capture == nil {
 		return
 	}
@@ -405,17 +443,74 @@ func (w *Window) restartTranslator() {
 	}
 	tr, err := w.newTranslator(w.capture.Ring, apiKey)
 	if err != nil {
+		w.stopMusicGate()
 		w.failToStart(err.Error())
 		return
 	}
 	w.translator = tr
 	if err := tr.Start(); err != nil {
+		w.stopMusicGate()
 		w.failToStart(err.Error())
 		return
 	}
 	w.state = translator.StateConnecting
 	w.syncActions()
 	w.refreshOverlay()
+}
+
+// loadYamnet loads (once) the classifier model from the app-support copy.
+func (w *Window) loadYamnet() (*classify.Model, error) {
+	if w.yamnet != nil {
+		return w.yamnet, nil
+	}
+	load := w.loadModel
+	if load == nil {
+		load = func() (*classify.Model, error) {
+			return classify.LoadModel(classify.ModelPath(platform.AppSupportDir()))
+		}
+	}
+	model, err := load()
+	if err != nil {
+		return nil, err
+	}
+	w.yamnet = model
+	return model, nil
+}
+
+// musicFilter builds the session's music gate, or nil when the feature is off.
+//
+// A model that is missing or corrupt must not stop the session — captions are
+// the product, the gate is a refinement. It logs, says so in the caption
+// area, and the session runs ungated.
+func (w *Window) musicFilter() func([]byte) [][]byte {
+	if !w.settings.MusicGate {
+		return nil
+	}
+	model, err := w.loadYamnet()
+	if err != nil {
+		slog.Error("music gate unavailable", "err", err)
+		w.showNotice("Music filter unavailable — translating everything. Re-download the model in Preferences.")
+		return nil
+	}
+	w.musicGate = classify.NewGate(model, classify.GateTuning{
+		Threshold:   w.settings.MusicGateThreshold,
+		HoldSeconds: w.settings.MusicGateHold,
+	})
+	return w.musicGate.Filter
+}
+
+// stopMusicGate retires the session's gate and writes its verdict to the log.
+func (w *Window) stopMusicGate() {
+	if w.musicGate == nil {
+		return
+	}
+	gated, flushed := w.musicGate.GatedMS()
+	// gated−flushed is what was never sent — audio the session did not pay
+	// for. Flushed audio was sent late, by a reopening.
+	slog.Info("music gate closed out", "suppressed_ms", gated-flushed, "flushed_ms", flushed)
+	w.musicGate.Close()
+	w.musicGate = nil
+	w.view.SetMusicGated(false)
 }
 
 func (w *Window) newTranslator(ring *audio.Ring, apiKey string) (*translator.Translator, error) {
@@ -429,6 +524,7 @@ func (w *Window) newTranslator(ring *audio.Ring, apiKey string) (*translator.Tra
 			CaptionTerms:       w.settings.CaptionTerms(),
 		},
 		SilenceGate: w.settings.SilenceGate,
+		Filter:      w.musicFilter(),
 		Callbacks: translator.Callbacks{
 			// Every one of these arrives on a translator goroutine, so each
 			// hops to the UI goroutine before touching anything.
@@ -485,7 +581,9 @@ func (w *Window) startPlayer() {
 		return
 	}
 	player := w.newSpeaker(w.settings.OutputDeviceName, audio.TranslatedRate)
-	player.SetVolume(w.settings.SpeechVolume)
+	// Muted before the session started stays muted, or m would silently undo
+	// itself at every reconnect-shaped restart.
+	player.SetVolume(w.speechGain())
 	dev, err := player.Start()
 	if err != nil {
 		slog.Error("could not open the output device", "err", err)
@@ -497,6 +595,40 @@ func (w *Window) startPlayer() {
 		w.showNotice(w.settings.OutputDeviceName + " unavailable — playing through " + dev.Name)
 	}
 	w.player.Store(&playerRef{player})
+}
+
+// speechGain is the volume the player should actually run at. Every place that
+// sets a gain goes through here, so muting cannot be undone by an unrelated
+// Apply and unmuting cannot resurrect a stale volume.
+func (w *Window) speechGain() float64 {
+	if w.speechMuted {
+		return 0
+	}
+	return w.settings.SpeechVolume
+}
+
+// ToggleSpeechMute silences the spoken translation without closing the device.
+//
+// Gain rather than Stop: reopening an output device takes long enough to clip
+// the first word, and mute is pressed when someone walks in — it has to be
+// instant in both directions. Captions are unaffected, which is the point.
+func (w *Window) ToggleSpeechMute() {
+	if !w.settings.SpeakTranslation {
+		// Saying nothing here looks like the key is dead. It is not — there is
+		// simply nothing to mute.
+		w.showNotice("Speaking the translation is off — turn it on in Preferences → Audio")
+		return
+	}
+	w.speechMuted = !w.speechMuted
+	if player := w.player.Load(); player != nil {
+		player.SetVolume(w.speechGain())
+	}
+	slog.Info("speech mute toggled", "muted", w.speechMuted)
+	if w.speechMuted {
+		w.showNotice("Speech muted — press m to unmute")
+	} else {
+		w.showNotice("Speech unmuted")
+	}
 }
 
 // stopPlayer releases the output device. Safe when nothing is playing.
@@ -532,6 +664,9 @@ func (w *Window) StartTranslation() {
 
 	tr, err := w.newTranslator(capture.Ring, apiKey)
 	if err != nil {
+		// newTranslator may already have built the gate; its worker must not
+		// outlive the session that never was.
+		w.stopMusicGate()
 		capture.Stop()
 		w.capture = nil
 		w.failToStart(err.Error())
@@ -558,6 +693,7 @@ func (w *Window) StartTranslation() {
 	w.startPlayer()
 
 	if err := tr.Start(); err != nil {
+		w.stopMusicGate()
 		w.failToStart(err.Error())
 		return
 	}
@@ -589,6 +725,8 @@ func (w *Window) StopTranslation() {
 	if tr != nil {
 		guard("stopping the translator", tr.Stop)
 	}
+	// After the translator, so nothing is still calling Filter.
+	guard("stopping the music gate", w.stopMusicGate)
 	// After the translator, so nothing is still writing into it.
 	w.stopPlayer()
 	if capture != nil {
@@ -729,6 +867,7 @@ func (w *Window) onTick() {
 	if known {
 		w.checkInputLevel(peak)
 	}
+	w.view.SetMusicGated(w.musicGate != nil && w.musicGate.Closed())
 	// A notice expires on its own, so the overlay has to be refreshed even when
 	// nothing else changed.
 	if w.notice != "" && time.Now().After(w.noticeUntil) {

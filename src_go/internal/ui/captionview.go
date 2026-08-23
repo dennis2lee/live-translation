@@ -91,6 +91,10 @@ type CaptionView struct {
 	hintAlpha float32
 	indicator Indicator
 	dotAlpha  float32
+	// musicGated shows the ♪ beside the dot while the music gate is closed.
+	// Captions going quiet mid-session must be explainable from the screen —
+	// the same reasoning that put the error cause next to the red dot.
+	musicGated bool
 
 	boxFade  *fyne.Animation
 	hintFade *fyne.Animation
@@ -121,6 +125,7 @@ func (v *CaptionView) CreateRenderer() fyne.WidgetRenderer {
 	r.status = canvas.NewText("", colourStatus)
 	r.sourceLine = canvas.NewText("", colourSource)
 	r.dot = canvas.NewCircle(colourIdle)
+	r.musicNote = canvas.NewText("♪", colourStatus)
 	r.hint.Alignment = fyne.TextAlignTrailing
 	r.status.Alignment = fyne.TextAlignCenter
 	r.sourceLine.Alignment = fyne.TextAlignCenter
@@ -163,6 +168,19 @@ func (v *CaptionView) Clear() {
 
 // Indicator is the current dot state.
 func (v *CaptionView) Indicator() Indicator { return v.indicator }
+
+// SetMusicGated shows or hides the ♪ that explains a caption area gone quiet
+// because the music gate is holding audio back.
+func (v *CaptionView) SetMusicGated(gated bool) {
+	if v.musicGated == gated {
+		return
+	}
+	v.musicGated = gated
+	v.Refresh()
+}
+
+// MusicGated reports whether the ♪ is showing.
+func (v *CaptionView) MusicGated() bool { return v.musicGated }
 
 // SetIndicator blinks while connecting and holds steady otherwise.
 func (v *CaptionView) SetIndicator(state Indicator) {
@@ -285,6 +303,7 @@ type captionRenderer struct {
 	status     *canvas.Text
 	sourceLine *canvas.Text
 	dot        *canvas.Circle
+	musicNote  *canvas.Text
 }
 
 func (r *captionRenderer) Destroy() { r.view.StopAnimations() }
@@ -296,7 +315,7 @@ func (r *captionRenderer) Objects() []fyne.CanvasObject {
 	for _, t := range r.texts {
 		out = append(out, t)
 	}
-	return append(out, r.sourceLine, r.status, r.hint, r.dot)
+	return append(out, r.sourceLine, r.status, r.hint, r.musicNote, r.dot)
 }
 
 func (r *captionRenderer) Layout(size fyne.Size) { r.rebuild(size) }
@@ -449,6 +468,17 @@ func (r *captionRenderer) rebuild(size fyne.Size) {
 	r.dot.Resize(fyne.NewSize(radius*2, radius*2))
 	r.dot.Move(fyne.NewPos(anchorRight-radius*2, stripTop))
 	r.dot.Refresh()
+
+	if v.musicGated {
+		r.musicNote.TextSize = max(16, radius*4)
+		note := r.musicNote.MinSize()
+		r.musicNote.Move(fyne.NewPos(anchorRight-radius*2-note.Width-radius,
+			stripTop+radius-note.Height/2))
+		r.musicNote.Show()
+	} else {
+		r.musicNote.Hide()
+	}
+	r.musicNote.Refresh()
 
 	if v.hintAlpha > 0.001 && v.hintText != "" {
 		hintSize := max(16, fontSize*HintFontRatio)
