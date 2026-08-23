@@ -198,13 +198,16 @@ func (c *collector) detailContains(sub string) bool {
 func fastTiming(t *testing.T) {
 	t.Helper()
 	backoff, minSession, open, poll, grace := BackoffSeconds, MinSessionSeconds, OpenTimeout, idlePoll, backlogGrace
+	retire := RetireGrace
 	BackoffSeconds = []time.Duration{5 * time.Millisecond}
 	MinSessionSeconds = 20 * time.Millisecond
 	OpenTimeout = 500 * time.Millisecond
 	idlePoll = time.Millisecond
 	backlogGrace = 10 * time.Millisecond
+	RetireGrace = 50 * time.Millisecond
 	t.Cleanup(func() {
 		BackoffSeconds, MinSessionSeconds, OpenTimeout, idlePoll, backlogGrace = backoff, minSession, open, poll, grace
+		RetireGrace = retire
 	})
 }
 
@@ -410,7 +413,10 @@ func TestGoAwaySwapsTheSessionAndResumes(t *testing.T) {
 	if !c.sawState(StateReconnecting) {
 		t.Error("never reported reconnecting")
 	}
-	// The old session is closed only after the new one is ready.
+	// The old session outlives the swap on purpose — it covers the replacement's
+	// warm-up — and is closed once the replacement speaks, or after RetireGrace
+	// if it never does. This replacement has nothing to say, so it is the grace
+	// period that closes it here.
 	waitFor(t, "the old session to close", func() bool {
 		first.mu.Lock()
 		defer first.mu.Unlock()

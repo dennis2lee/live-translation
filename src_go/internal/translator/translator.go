@@ -106,6 +106,27 @@ func FatalReason(err error) string {
 	return ""
 }
 
+// RetireGrace bounds how long a replaced session is held open when its
+// replacement never speaks. A var so the tests can shorten it, like OpenTimeout.
+//
+// The replacement needs 3.3–5.2 s of input before it produces any audio, and if
+// nobody is talking it may produce none at all — so this cannot wait forever on
+// a sound that is not coming. 12 s is past twice the measured worst case, and
+// well inside the 50 s of grace the server gives after go_away, so the retiring
+// session is always closed by us rather than dropped by the far end.
+var RetireGrace = 12 * time.Second
+
+// SpeechGapSeconds is how long the translated speech has to stop before the gap
+// is worth recording.
+//
+// Measured, not guessed. Over an uninterrupted 103 s session the longest gap
+// between audio blobs was 0.38 s; a reconnect costs 3.6–4.2 s, because the
+// replacement session needs 3.3–5.2 s of input before it says anything and the
+// jitter buffer only ever holds about 0.57 s (spike v3_voiceid). This sits in
+// the empty space between those, so ordinary cadence records nothing and a real
+// hole records every time.
+const SpeechGapSeconds = 1.5
+
 // Stats is what the session did, for the transcript footer and the logs.
 type Stats struct {
 	Reconnects   int
@@ -113,6 +134,19 @@ type Stats struct {
 	ChunksSent   int
 	StartedAt    time.Time
 	MaxBacklogMS float64
+
+	// SpeechGaps counts stretches with no translated audio at all, and
+	// SwapSilenceMS totals the ones that straddled a reconnect.
+	//
+	// The distinction is the whole point of measuring this. A gap while nobody
+	// is speaking is the system working; a gap on either side of a session swap
+	// is the cost of the swap, and it is the one a listener complains about
+	// because the voice is different afterwards. Separating them is what lets a
+	// user answer "is this my network?" from the log instead of by guessing.
+	SpeechGaps     int
+	MaxSpeechGapMS float64
+	SwapSilenceMS  float64
+	SwapGaps       int
 }
 
 // Summary is the one-line form written to the log at stop.
@@ -131,7 +165,10 @@ func (s Stats) Summary() string {
 	}
 	return "elapsed=" + formatMinutes(elapsed) + "min reconnects=" + itoa(s.Reconnects) +
 		" gaps_ms=[" + gaps + "] chunks_sent=" + itoa(s.ChunksSent) +
-		" max_backlog=" + formatMS(s.MaxBacklogMS) + "ms"
+		" max_backlog=" + formatMS(s.MaxBacklogMS) + "ms" +
+		" speech_gaps=" + itoa(s.SpeechGaps) +
+		" max_speech_gap=" + formatMS(s.MaxSpeechGapMS) + "ms" +
+		" swap_silence=" + formatMS(s.SwapSilenceMS) + "ms/" + itoa(s.SwapGaps)
 }
 
 // Callbacks are delivered on the translator's own goroutines.
@@ -186,6 +223,14 @@ type Options struct {
 	SilenceGate bool
 	Callbacks   Callbacks
 
+	// Filter, when set, decides per chunk what actually goes to the API: the
+	// chunk, nothing, or several chunks (a gate reopening flushes what it had
+	// withheld). It sees every chunk regardless of the silence gate, which is
+	// applied after it — a classifier that goes deaf during silence cannot
+	// notice the music ending. Must not block: the send loop paces real-time
+	// audio.
+	Filter func(chunk []byte) [][]byte
+
 	// open is the session opener. Left nil, a genai-backed one is built from
 	// APIKey; the tests set it to a fake.
 	open sessionOpener
@@ -198,6 +243,7 @@ type Translator struct {
 	apiKey      string
 	sessionCfg  SessionConfig
 	silenceGate bool
+	filter      func(chunk []byte) [][]byte
 	cb          Callbacks
 	open        sessionOpener
 
@@ -205,7 +251,21 @@ type Translator struct {
 	state  State
 	stats  Stats
 	handle string
-	active *sessionHolder
+
+	// retiring is a session that has been replaced but is deliberately still
+	// open. See watchRetirement() for why.
+	retiring *sessionHolder
+	// retireWG tracks the watchdogs so a run does not outlive itself. Without
+	// it a watchdog kept running after Stop returned — harmless in production
+	// but a real loose end, and the race detector called it what it was.
+	retireWG sync.WaitGroup
+
+	// lastAudioAt and audioReconnects are how a silence is attributed. They
+	// belong to the run rather than to a session, because the gap that matters
+	// is exactly the one that spans two of them.
+	lastAudioAt     time.Time
+	audioReconnects int
+	active          *sessionHolder
 	// lastError is the most recent open failure, kept so the supervisor can
 	// decide whether it is worth retrying.
 	lastError error
@@ -334,6 +394,7 @@ func New(opts Options) (*Translator, error) {
 		apiKey:      opts.APIKey,
 		sessionCfg:  opts.Session,
 		silenceGate: opts.SilenceGate,
+		filter:      opts.Filter,
 		cb:          opts.Callbacks,
 		open:        open,
 		state:       StateIdle,
@@ -366,6 +427,11 @@ func (t *Translator) Start() error {
 	// A resumption handle only refers to a session of this run. Reusing one
 	// across a stop/start would ask the server to resume a dead session.
 	t.handle = ""
+	// Likewise the silence clock: the time between stopping and starting again
+	// is not a gap in anything.
+	t.lastAudioAt = time.Time{}
+	t.audioReconnects = 0
+	t.retiring = nil
 	t.lastError = nil
 	t.stats = Stats{StartedAt: time.Now()}
 	ctx, cancel := context.WithCancel(context.Background())
@@ -428,6 +494,23 @@ func (t *Translator) supervise(ctx context.Context) {
 	}()
 
 	defer func() {
+		// Whatever brought the supervisor back — Stop, a fatal error, or
+		// repeated failures — this run is over, so cancel it.
+		//
+		// Stop cancels before waiting, but the give-up paths do not: they set
+		// StateError and return with the context still live. sendLoop runs
+		// `for ctx.Err() == nil`, so senderDone.Wait() below then blocked for
+		// ever, and the session underneath it stayed open and kept being fed
+		// audio it was still being charged for, behind a window showing an
+		// error. Found by TestAFatalErrorClosesTheHeldBackSessionAtOnce, which
+		// was written for something else entirely.
+		t.mu.Lock()
+		cancel := t.cancel
+		t.mu.Unlock()
+		if cancel != nil {
+			cancel()
+		}
+
 		senderDone.Wait()
 		t.mu.Lock()
 		active := t.active
@@ -436,6 +519,11 @@ func (t *Translator) supervise(ctx context.Context) {
 		if active != nil {
 			t.closeSession(active)
 		}
+		// A session kept open across a swap is still ours to close.
+		t.retireAny("the translator is stopping")
+		// The watchdogs are already unblocked by the cancel above; this is
+		// what makes a stopped run leave nothing of itself behind.
+		t.retireWG.Wait()
 	}()
 
 	failures := 0
@@ -484,7 +572,21 @@ func (t *Translator) supervise(ctx context.Context) {
 		t.mu.Lock()
 		previous := t.active
 		t.active = holder // atomically swap the send target
+		// Marked retired in the same breath as the swap, not later. Between
+		// those two points the replaced session is still receiving, and the
+		// gate in noteHandle is what stops it writing a resumption handle for
+		// a session that is on its way out.
+		stale := t.retiring
+		if previous != nil {
+			t.retiring = previous
+		}
 		t.mu.Unlock()
+		if stale != nil {
+			// Two swaps inside one warm-up. Only one session can be held
+			// back, and the older of the two has nothing left to say.
+			slog.Info("closing a replaced session, replaced again before it finished")
+			t.closeSession(stale)
+		}
 		gapMS := float64(time.Since(gapStarted).Microseconds()) / 1000.0
 
 		if previous != nil {
@@ -495,7 +597,7 @@ func (t *Translator) supervise(ctx context.Context) {
 			t.mu.Unlock()
 			slog.Info("session swapped", "gap_ms", gapMS, "reconnect", count)
 			t.cb.reconnected()
-			t.closeSession(previous)
+			t.watchRetirement(ctx, previous)
 		}
 
 		t.setState(StateRunning, "")
@@ -625,11 +727,10 @@ func (t *Translator) sessionMain(ctx context.Context, holder *sessionHolder, han
 			holder.markGoAway()
 		}
 
-		// 2) Resumption handle — always keep the newest.
+		// 2) Resumption handle — always keep the newest the *active* session
+		// offered. See noteHandle.
 		if msg.ResumeHandle != "" {
-			t.mu.Lock()
-			t.handle = msg.ResumeHandle
-			t.mu.Unlock()
+			t.noteHandle(holder, msg.ResumeHandle)
 		}
 
 		// 3) Source-language transcription (hidden by default).
@@ -674,8 +775,155 @@ func (t *Translator) sessionMain(ctx context.Context, holder *sessionHolder, han
 		// read the audio stalls the stream — but playing it is: with nobody
 		// listening the callback is nil and the bytes go where they always
 		// went.
+		if len(msg.Audio) > 0 {
+			t.noteSpeech()
+			// The replacement is speaking, so the session it replaced has
+			// finished covering for it and can go.
+			if t.isActive(holder) {
+				t.retireAny("the replacement is speaking")
+			}
+		}
 		t.cb.audio(msg.Audio)
 	}
+}
+
+// noteSpeech records the arrival of translated audio and the silence before it.
+//
+// Called only when a message actually carried audio: the stream also delivers
+// transcription and handle updates, and counting those as speech would mean the
+// gap never appeared to open.
+func (t *Translator) noteSpeech() {
+	now := time.Now()
+	t.mu.Lock()
+	previous := t.lastAudioAt
+	acrossSwap := t.stats.Reconnects != t.audioReconnects
+	t.lastAudioAt = now
+	t.audioReconnects = t.stats.Reconnects
+
+	// The first blob of a run has no gap in front of it. Reporting one would
+	// count the time before anyone spoke as a fault.
+	if previous.IsZero() {
+		t.mu.Unlock()
+		return
+	}
+	gap := now.Sub(previous).Seconds()
+	if gap < SpeechGapSeconds {
+		t.mu.Unlock()
+		return
+	}
+	t.stats.SpeechGaps++
+	if ms := gap * 1000; ms > t.stats.MaxSpeechGapMS {
+		t.stats.MaxSpeechGapMS = ms
+	}
+	if acrossSwap {
+		t.stats.SwapGaps++
+		t.stats.SwapSilenceMS += gap * 1000
+	}
+	t.mu.Unlock()
+
+	// A gap around a swap is a finding; a gap in the middle of a session is
+	// usually just nobody talking, so it goes to debug and stays out of the way.
+	if acrossSwap {
+		slog.Info("the translation went silent across a reconnect",
+			"seconds", gap, "reconnects", t.audioReconnects)
+	} else {
+		slog.Debug("no translated speech for a while", "seconds", gap)
+	}
+}
+
+// watchRetirement closes the replaced session once it is no longer useful.
+//
+// The session is marked retired by the supervisor at the moment of the swap;
+// this only decides when it is closed.
+//
+// Closing it at the swap is what made a reconnect audible. Connecting takes
+// 250–390 ms, but the replacement then needs 3.3–5.2 s of input before it says
+// anything, and the jitter buffer holds 0.57 s — so the listener got 2.8–4.2 s
+// of silence at every reconnect, roughly every nine minutes. Measured in
+// spikes/v3_voiceid.
+//
+// A session that stops being fed does not stop working: it finishes translating
+// what it already heard. That tail is about as long as the replacement's
+// warm-up, so holding the old session open until the new one speaks covers the
+// hole exactly. With this in place the same spike measured 0.00 s of silence
+// across three swaps, and no gap at any swap point at all.
+//
+// The cost is one extra open connection for a few seconds per reconnect, which
+// is under 1% of a session, and the audio it produces was going to be paid for
+// either way — it was already generated before the swap.
+func (t *Translator) watchRetirement(ctx context.Context, previous *sessionHolder) {
+	grace := RetireGrace
+	t.retireWG.Add(1)
+	go func() {
+		defer t.retireWG.Done()
+		select {
+		case <-time.After(grace):
+			t.retireIf(previous, "the replacement never spoke")
+		case <-previous.closed:
+			// Already closed, by the audio arriving or by shutdown.
+		case <-ctx.Done():
+			t.retireIf(previous, "the translator is stopping")
+		}
+	}()
+}
+
+// retireAny closes whatever session is being held back, if any.
+func (t *Translator) retireAny(reason string) {
+	t.mu.Lock()
+	holder := t.retiring
+	t.retiring = nil
+	t.mu.Unlock()
+	if holder != nil {
+		slog.Info("closing the replaced session", "reason", reason)
+		t.closeSession(holder)
+	}
+}
+
+// retireIf closes the held-back session only if it is still the one expected.
+//
+// The watchdog fires on a timer, and by then the session it was watching may
+// already have been closed and a different one held back in its place. Closing
+// blind would take out the wrong one.
+func (t *Translator) retireIf(expected *sessionHolder, reason string) {
+	t.mu.Lock()
+	if t.retiring != expected {
+		t.mu.Unlock()
+		return
+	}
+	t.retiring = nil
+	t.mu.Unlock()
+	slog.Info("closing the replaced session", "reason", reason)
+	t.closeSession(expected)
+}
+
+// isActive reports whether this holder is the one being sent audio.
+func (t *Translator) isActive(holder *sessionHolder) bool {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	return t.active == holder
+}
+
+// noteHandle keeps the newest resumption handle, unless it came from a session
+// that has already been replaced.
+//
+// The gate is the whole point of the method. A retired session goes on
+// receiving for as long as it is held open, resumption updates included, and
+// letting it write here would hand the next reconnect a handle for a session
+// that is being closed.
+//
+// The test is "has this been replaced", not "is this the active one". They are
+// not the same: a session's receive loop starts before the supervisor adopts
+// it as active, and its first resumption update can arrive in that window. That
+// version of the gate dropped the first handle of every run — harmless in
+// practice, since updates arrive about once a second, but wrong, and
+// TestGoAwaySwapsTheSessionAndResumes caught it immediately.
+func (t *Translator) noteHandle(holder *sessionHolder, handle string) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	if t.retiring == holder {
+		return
+	}
+	t.handle = handle
 }
 
 func (t *Translator) closeSession(holder *sessionHolder) {
@@ -707,6 +955,8 @@ func (t *Translator) sendLoop(ctx context.Context) {
 	// speech every time a session ended uncleanly, while the log said the send
 	// would be retried.
 	var carried []byte
+	// oneChunk is the no-filter fast path's reusable one-element slice.
+	oneChunk := make([][]byte, 1)
 
 	for ctx.Err() == nil {
 		t.mu.Lock()
@@ -756,32 +1006,50 @@ func (t *Translator) sendLoop(ctx context.Context) {
 			}
 		}
 
-		if t.silenceGate {
-			now := time.Now()
-			if rms(chunk) < silenceRMSThreshold {
-				if silentSince.IsZero() {
-					silentSince = now
-				}
-				if now.Sub(silentSince) >= silenceHold {
-					continue // skip the send to save cost
-				}
-			} else {
-				silentSince = time.Time{}
-			}
+		// The music gate runs before the silence gate: it must hear every
+		// chunk (silence included, or it never notices a song ending), and it
+		// may return several chunks when a reopening flushes its pre-roll.
+		released := oneChunk
+		released[0] = chunk
+		if t.filter != nil {
+			released = t.filter(chunk)
 		}
 
-		if err := session.SendAudio(chunk); err != nil {
-			slog.Warn("send failed, will retry on the next session", "err", err)
-			carried = chunk // the retry the message promises
-			holder.markClosed()
-			if !sleepCtx(ctx, idlePoll) {
-				return
+	sendReleased:
+		for i, out := range released {
+			if t.silenceGate {
+				now := time.Now()
+				if rms(out) < silenceRMSThreshold {
+					if silentSince.IsZero() {
+						silentSince = now
+					}
+					if now.Sub(silentSince) >= silenceHold {
+						continue // skip the send to save cost
+					}
+				} else {
+					silentSince = time.Time{}
+				}
 			}
-			continue
+
+			if err := session.SendAudio(out); err != nil {
+				slog.Warn("send failed, will retry on the next session", "err", err)
+				carried = out // the retry the message promises
+				if rest := len(released) - i - 1; rest > 0 {
+					// A flush burst died mid-way. Only one chunk can be
+					// carried; the rest of the pre-roll is gone, and saying
+					// so beats a transcript hole with no explanation.
+					slog.Warn("dropping the rest of a flushed backlog", "chunks", rest)
+				}
+				holder.markClosed()
+				if !sleepCtx(ctx, idlePoll) {
+					return
+				}
+				break sendReleased
+			}
+			t.mu.Lock()
+			t.stats.ChunksSent++
+			t.mu.Unlock()
 		}
-		t.mu.Lock()
-		t.stats.ChunksSent++
-		t.mu.Unlock()
 	}
 }
 

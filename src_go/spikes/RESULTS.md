@@ -1361,13 +1361,19 @@ NoSuchVoiceZZ9              188 Hz
 
 **The ranges overlap completely.** A single Charon run at 162 Hz looked like a
 real effect until it was repeated: run-to-run variation on the same voice is
-larger than the gap between voices. There is one voice, and asking for another
-changes nothing.
+larger than the gap between voices.
 
 Do not add a voice control to Preferences on the strength of the SDK type. Add
 `SpeechConfig` to the list this preview model ignores, next to batch mode,
 caching, tools and structured output. Worth re-measuring when the model
 version changes; the spike is checked in for that.
+
+> **Corrected 2026-08-23.** This section originally ended "there is one voice,
+> and asking for another changes nothing". The second half holds; the first half
+> was wrong, and the evidence for it was sitting in the table above. Run-to-run
+> variation on the same voice name is not measurement error — **the model picks
+> a voice per session**, which is why the control varied too. See "The voice
+> changes at every reconnect" below.
 
 ### `echo_target_language` is inert too, and there is a feedback loop
 
@@ -1460,3 +1466,207 @@ Two smaller things the build settled:
   translator callback hops to the UI goroutine. `OnAudio` must not: it touches
   no widget, and ten blobs a second through the UI thread would make the sound
   hostage to a repaint.
+
+## The voice changes at every reconnect, and so does the silence (2026-08-23)
+
+Spike `v3_voiceid`, prompted by two reports from real use: the spoken
+translation changes voice partway through a session, and it drops into silence
+for a few seconds — with the voice usually different on the other side of the
+silence. The suspicion that these are one fault turns out to be right.
+
+### The 1.2.0 conclusion was half wrong
+
+That study measured `SpeechConfig` by median F0 across whole sessions and
+concluded "there is one voice, and asking for another changes nothing". The
+second half stands. **The first half does not: there are many voices, and the
+model picks one per session.** The control runs varied as much as the treatment
+runs did, and that variance was filed as measurement error when it was the
+finding. One short session per run cannot tell "the voice changed between runs"
+from "the voice changes within a run" — both produce the same number.
+
+### Calibrating the instrument first
+
+Median F0 alone cannot answer "same voice or not", so the fingerprint is median
+F0 plus spectral centroid over voiced frames, and the two are combined into a
+distance. The scale for that distance comes from a case where the answer is
+already known: macOS `say` reading a fixed passage as one voice, and a second
+file switching Fred → Kathy → Fred at known times.
+
+```
+within one voice          0.14 .. 1.16   (8 windows of 5 s)
+at a real voice change    7.76, 10.69    (both boundaries, and no others)
+```
+
+More than a factor of six of empty space, so `voiceChangeThreshold` is 3.0, in
+the middle of it. The detector found both true boundaries and invented none.
+**Do not read any distance below without this calibration in mind** — the first
+draft used 1.0 and flagged five "changes" inside a single uninterrupted session.
+
+### What the API actually does
+
+Input is a fixed 103 s macOS-TTS Korean fixture, byte-identical every run, so
+nothing about the speaker varies. Windows are 10 s of received audio.
+
+```
+run  reconnects  SpeechConfig   f0 across windows       silence
+A    none        none           200 .. 224 Hz  (24)     0.00 s
+B    every 30 s  none (resume)  163 .. 229 Hz  (65)     ~2.8 s per swap
+C    every 30 s  none (fresh)   198 .. 253 Hz  (54)     ~2.8 s per swap
+D    every 30 s  voice=Kore     153 .. 253 Hz  (100)    8.31 s over 3 swaps
+E    every 30 s  voice=Charon   172 .. 270 Hz  (98)     8.61 s over 3 swaps
+```
+
+- **An uninterrupted session is one stable voice and no silence at all.** Run A
+  produced no window pair above 2.32, and its longest gap between audio blobs
+  was 0.38 s against 0.57 s of buffer. Nothing to hear.
+- **Every reconnect changes the voice.** Runs B–E all cross the threshold at
+  session swaps. The spread across windows doubles or triples against the
+  control.
+- **The resumption handle does not preserve it** (B against C). Resumption keeps
+  the conversation, not the speaker.
+- **`SpeechConfig` is inert, now measured properly.** In run D all four sessions
+  were opened with `voice=Kore`; session 1 sat at 153–167 Hz and sessions 2–4 at
+  220–252 Hz. Run E asked for Charon, a documented deep voice, and got 270 Hz.
+  Same config, different voices, within the same run.
+
+### Where the silence comes from
+
+It is not the network, and no jitter buffer could have covered it. A
+replacement session needs **3.3–5.2 s of input before it says anything** — that
+number is from the 1.2.0 study and it is the fixed cost of a session, not a
+symptom. The application swaps the send target and closes the old session in the
+same breath, so for those seconds nothing is producing audio at all. The 0.57 s
+of buffer runs out almost immediately.
+
+```
+connect takes          243 .. 391 ms      (never the problem)
+first audio after that 2.8 .. 4.2 s       (always the problem)
+```
+
+The first cut of this measurement tracked a running reserve and reported ~147 s
+of silence in a 110 s run, because a reserve that goes negative once stays
+negative and every later gap re-reported the whole backlog. A player does not
+accumulate a debt: it goes quiet, and starts again from the next blob. The
+model is now an `availableUntil` instant, and the numbers above come from it.
+
+### `turn_complete` does not arrive during a continuous stream
+
+The 103 s control run produced exactly one turn. Any analysis that segments by
+turn will therefore average a whole session into a single number — which is
+part of how the 1.2.0 study missed this. Segment by time.
+
+### Overlapping the swap removes the silence entirely
+
+The old session was closed the moment the replacement connected. But a session
+that stops being fed does not stop working — it finishes translating what it
+already heard, and that tail is about as long as the replacement's warm-up.
+`-overlap` holds the replaced session open until the new one produces audio:
+
+```
+                      silence per swap     across 3 swaps
+close at the swap     2.8 - 4.2 s          8.3 - 8.6 s
+overlap               —                    0.00 s
+```
+
+With the overlap on, the swap points do not appear in the gap list at all: the
+largest arrival gap anywhere in the run was 0.39 s, indistinguishable from the
+uninterrupted control. Shipped in `internal/translator` as retire/watchRetirement,
+with `RetireGrace` (12 s) bounding the case where nobody is speaking and the
+replacement therefore never says anything.
+
+The voice still changes at the swap — the overlap fixes the hole, not the
+speaker. There is nothing client-side left to fix that with.
+
+## The music gate: a pure-Go YAMNet, verified against the reference (2026-08-23)
+
+Spikes Y1 (model provenance + goldens) and y3_gatecal (threshold calibration),
+and the `internal/classify` package they gate.
+
+### Getting the model
+
+TF Hub is dead — the tfhub.dev URL and the tfhub-lite-models bucket both answer
+403/404 anonymously. Kaggle's model API serves it with **no authentication**,
+but the slug is case-sensitive: the `tflite` casing answers 200, the `tfLite`
+casing Kaggle's own UI shows answers 404. The bundle is a tar.gz, 3 240 957
+bytes, byte-identical across fetches; inside is one file, `1.tflite`,
+4 126 810 bytes, sha256 `10c95e…17de` — pinned in `classify.ModelSHA256`.
+
+### What is inside the file
+
+Not what the docs imply. The frontend (framing 400/160, Hann, rfft 512, a
+64×257 mel matrix, +0.001, ln) is *in the graph as float ops with constant
+tensors*, so the port extracts the window and the mel matrix from the file
+rather than re-deriving them — the whole "does my mel formula match" bug class
+gone. The MobileNet tower is **int8-quantized, per-channel**, 27 layers; the
+head is mean-pool, fc to 521, sigmoid, dequant.
+
+### The port and its proof
+
+Pure Go: a ~200-line flatbuffer reader (hash-pinned to this one file), the
+frontend, and a float tower with weights dequantized at load and every
+activation snapped to its stored int8 grid. Verified three ways against the
+reference interpreter (ai-edge-litert 2.2.0):
+
+- 73 constant tensors byte-identical (CRC32) to what the interpreter sees;
+- frontend log-mel within 4.1e-4 of the reference on six synthetic inputs;
+- final scores on those inputs: **four of six bit-identical**, worst 0.082 —
+  under one logit grid step (0.347) — and every top class agrees.
+
+The quantize clamps never bind on audio: log-mel spans −6.91..+3.5 against a
+grid reaching 5.33, full-scale input included. Measured before believing the
+snap did anything; it is kept for fidelity, and the mutation that removes it
+is recorded as unobservable at tolerance.
+
+**52 ms per patch** (M-series, one core), against a 480 ms decision cadence —
+11% of a core. This is why there is no cgo, no TFLite dylib, no ONNX runtime:
+the soxr precedent, reconfirmed.
+
+### Where the gate defaults come from (y3_gatecal)
+
+Per-hop family scores, `speech` = max(Speech family), `music` = max(Singing ∪
+Music blocks):
+
+```
+material                        speech(median)  music(median)
+Korean TTS fixture, 103 s        0.992           0.000  (max 0.004)
+synth band (chords+bass+hats)    0.000           0.996
+speech mixed over it  x0.5       0.004           0.891
+                      x1.0       0.020           0.801
+                      x2.0       0.109           0.500
+                      x4.0       0.586           0.199
+piano transition (real, Apple)   0.004           0.668  (p25 0.414)
+bugle (real, Apple)              0.000           0.891
+```
+
+Threshold **0.5** is the x2.0 crossover: a speaker at least twice as loud as
+the backing music keeps translating; music-dominant audio gates. The 0.05
+margin and the 2.0 s hold come off the same table. Quiet, sparse music (the
+piano's decay tails, p25 0.414) will flap the gate open — deliberately the
+conservative direction: it leaks translation, it never eats speech.
+
+Known limit, stated rather than hidden: **sung vocals were not measured** —
+there is no synthesizable singing fixture. The live classifier test in
+Preferences exists exactly so the defaults can be checked against the user's
+real material.
+
+### Y4 — the gate against the live API, end to end (2026-08-23)
+
+Spike `y4_gate_live`: a real translator session with the real gate wired in,
+fed 20 s of the Korean fixture, 25 s of synth music, 20 s more speech, at
+real-time pace.
+
+```
+phase      chunks fed   chunks sent   caption bytes
+speech #1      200          199            297
+music          250           31             11
+speech #2      200          205            271
+
+gate closed during music: yes; gated 23.0 s, flushed back 1.5 s
+max_backlog: 200 ms  (the filter did not stall the send loop)
+```
+
+The 31 music chunks that got through are the 3.1 s before the gate closed —
+the 2.0 s hold plus ~1 s of patch fill, exactly as designed, and the reason
+the hold exists. Speech #2's 205 > 200 is the pre-roll flush arriving on top.
+Captions stopped for the music and resumed with the speech, mid-sentence
+recognisable from the fixture script.
