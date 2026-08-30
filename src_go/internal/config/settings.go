@@ -6,6 +6,7 @@
 package config
 
 import (
+	"reflect"
 	"strconv"
 	"strings"
 
@@ -176,6 +177,18 @@ type Settings struct {
 	Fullscreen     bool `json:"fullscreen"`
 	SilenceGate    bool `json:"silence_gate"`
 
+	// SpeechVoices is the voice that speaks the translation, per target
+	// language. Absent or empty means the model's own audio, whose voice
+	// changes at every reconnect and cannot be pinned — measured 2026-08-30,
+	// three sessions all requesting "Charon" came back at 228.6, 154.8 and
+	// 233.0 Hz median f0. A name here is a voice installed on this machine,
+	// and it never changes.
+	//
+	// Per language rather than one name, because the direction keys switch
+	// the target between "en" and "ko" while the app runs, and an English
+	// voice reading Korean is not a voice the user chose either.
+	SpeechVoices map[string]string `json:"speech_voices"`
+
 	// MusicGate skips sending audio the local YAMNet classifier calls music,
 	// so songs are not translated. Off by default: it needs a one-time model
 	// download, and a gate nobody asked for that eats a sentence would be a
@@ -189,6 +202,12 @@ type Settings struct {
 	MusicGateThreshold float64 `json:"music_gate_threshold"`
 	// MusicGateHold is how many seconds of continuous music close the gate.
 	MusicGateHold float64 `json:"music_gate_hold"`
+	// MusicGateRelease is how many seconds of continuous non-music reopen it.
+	// 1.5 is measured: the classifier dips below the threshold for a single
+	// frame constantly inside real music, and 1.5 s is where the leak stops
+	// falling — 19.5 s of music leaked at 1.0 s, 5.5 s at 1.5 s, 5.0 s at
+	// 2.0 s (spike y5_flap). The pre-roll makes the wait cost no speech.
+	MusicGateRelease float64 `json:"music_gate_release"`
 
 	// Terms to bias speech recognition towards, one per line. Two lists,
 	// because they are genuinely different: what the model should hear in the
@@ -228,10 +247,62 @@ func Default() Settings {
 		SpeechVolume:       1.0,
 		MusicGateThreshold: 0.5,
 		MusicGateHold:      2.0,
+		MusicGateRelease:   1.5,
 		TargetLanguageCode: "en",
 		CaptionPolicy:      string(captions.PolicyIncremental),
 	}
 }
+
+// Equal compares two Settings.
+//
+// It exists because SpeechVoices made the struct uncomparable with ==, and the
+// alternative — one voice for every direction — would put an English voice on
+// Korean captions. reflect rather than a field-by-field list: this runs once
+// when a dialog closes, never in a loop, and a hand-written comparison would
+// silently stop covering the next field somebody adds.
+func (s Settings) Equal(other Settings) bool {
+	return reflect.DeepEqual(s, other)
+}
+
+// VoiceFor is the chosen voice for a target language, or "" for the model's.
+func (s Settings) VoiceFor(languageCode string) string {
+	return s.SpeechVoices[voiceKey(languageCode)]
+}
+
+// WithVoiceFor returns a copy with one language's voice set; an empty name
+// removes the entry rather than storing a blank.
+func (s Settings) WithVoiceFor(languageCode, voice string) Settings {
+	out := s
+	out.SpeechVoices = map[string]string{}
+	for k, v := range s.SpeechVoices {
+		out.SpeechVoices[k] = v
+	}
+	key := voiceKey(languageCode)
+	if strings.TrimSpace(voice) == "" {
+		delete(out.SpeechVoices, key)
+	} else {
+		out.SpeechVoices[key] = strings.TrimSpace(voice)
+	}
+	if len(out.SpeechVoices) == 0 {
+		out.SpeechVoices = nil
+	}
+	return out
+}
+
+// voiceKey normalises a language code to the bare lowercase language, so
+// "en", "EN" and "en-US" all name the same voice.
+func voiceKey(languageCode string) string {
+	code := strings.ToLower(strings.TrimSpace(languageCode))
+	if i := strings.IndexAny(code, "-_"); i > 0 {
+		code = code[:i]
+	}
+	return code
+}
+
+// maxSpeechVoices bounds a hand-edited settings file. There are only ever a
+// couple of directions in play; anything past this is a corrupt file, not a
+// preference.
+const maxSpeechVoices = 32
 
 // Clamped returns a copy with every value forced back into its documented
 // range. A settings file edited by hand cannot break the application.
@@ -271,6 +342,25 @@ func (s Settings) Clamped() Settings {
 		out.MusicGateHold = 2.0
 	} else {
 		out.MusicGateHold = clamp(s.MusicGateHold, 0.5, 10)
+	}
+	out.SpeechVoices = nil
+	if len(s.SpeechVoices) > 0 {
+		out.SpeechVoices = map[string]string{}
+		for lang, voice := range s.SpeechVoices {
+			key, name := voiceKey(lang), strings.TrimSpace(voice)
+			if key == "" || name == "" || len(out.SpeechVoices) >= maxSpeechVoices {
+				continue
+			}
+			out.SpeechVoices[key] = name
+		}
+		if len(out.SpeechVoices) == 0 {
+			out.SpeechVoices = nil
+		}
+	}
+	if s.MusicGateRelease == 0 {
+		out.MusicGateRelease = 1.5
+	} else {
+		out.MusicGateRelease = clamp(s.MusicGateRelease, 0.5, 5)
 	}
 	if strings.TrimSpace(s.TranscriptDir) == "" {
 		out.TranscriptDir = transcript.DefaultDir

@@ -1670,3 +1670,161 @@ the 2.0 s hold plus ~1 s of patch fill, exactly as designed, and the reason
 the hold exists. Speech #2's 205 > 200 is the pre-roll flush arriving on top.
 Captions stopped for the music and resumed with the speech, mid-sentence
 recognisable from the fixture script.
+
+## Why the gate flapped, and what stopped it (y5_flap, 2026-08-30)
+
+Reported from use: the filter works, but music leaks through in bursts. Y3
+predicted this and called it the safe direction — "quiet, sparse music will
+flap the gate open ... it leaks translation, it never eats speech". It is not
+the safe direction. Measured, the 1.3.0 policy leaks *everything*.
+
+### The failure mode
+
+The gate opened on the **first** clear frame. Inside real music a single
+sub-threshold frame is the commonest event there is. Ten pieces, per-hop music
+scores, and the run-lengths of consecutive sub-threshold frames inside each:
+
+```
+material                     frames  musicP50  clear-runs inside      top classes
+Piano Strings Transition 1       32     0.668  4x1 1x3                Gong, Timpani, Music
+Bell Church                      38     0.738  3x1 2x2 1x4            Bell, Church bell
+Clock Tower Chimes               41     0.414  3x2 1x3 1x14           Music, Tubular bells
+Marching Band                    78     0.109  3x1 1x2 1x3 1x4 1x16 1x26   Music, Speech, Percussion
+Orchestra Warm Up               177     0.586  7x1 6x2 1x3 2x5 1x7 2x9 1x11  Music, Speech, Orchestra
+Bugle Taps                       75     0.891  2x1 2x2                Music, Trumpet
+Drone Bells 01                   74     0.891  1x1 1x10               Music, Ambient music
+Chimes 1                         16     0.500  2x1 1x4                Music, Chime
+```
+
+Runs of **one frame are the mode in every piece**. Each one used to reopen the
+gate *and* flush the 1.5 s pre-roll, so one misread sent about 3.5 s of song
+to be translated, and it repeated whenever the music thinned out.
+
+Two incidental findings worth keeping. Real acoustic music recorded in a room
+fires **Speech** strongly as well (Marching Band 30/78 frames, Orchestra Warm
+Up 81/177) — the `music >= speech + Margin` term is doing real work. And a
+marching band recorded outdoors medians 0.109: diffuse, low-confidence
+everywhere. The gate will not close on material like that at any threshold
+this side of useless, which is a limit to state rather than to tune away.
+
+### The sweep
+
+Timeline: speech 20 s / gap / music 30 s / gap / speech 20 s, ground truth from
+the construction, leaked = music sent, clipped = speech suppressed and never
+flushed. Identical at gaps of 0, 0.5 and 1.0 s:
+
+```
+policy                                  leaked    clipped   spurious opens
+1.3.0: open on one clear frame        24 000 ms      0 ms        4
+hysteresis 0.15 only                  14 000 ms      0 ms        2
+release 1.0 s                         19 500 ms      0 ms        2
+release 1.5 s                          5 500 ms      0 ms        1
+release 2.0 s                          5 000 ms      0 ms        1
+release 3.0 s                          4 000 ms      0 ms        1
+hysteresis 0.15 + release 1.5 s        5 500 ms      0 ms        1
+```
+
+**A release hold is the whole fix, and hysteresis earns nothing on top of it** —
+the last two rows are identical. A Schmitt band was drafted and is not shipped,
+for the same reason the chime's attack envelope is not: it was measured and it
+changed nothing. `ReleaseSeconds` defaults to **1.5**, the knee.
+
+Why waiting is free is the user's own observation: a song and the speech after
+it are never butt-joined, and the countdown runs during the pause. The pre-roll
+covers the case where there is no pause at all:
+
+```
+pre-roll at release 1.5 s      leaked    clipped   (gap 0 s — the adversarial case)
+10 chunks (1.0 s)            3 400 ms    900 ms
+15 chunks (1.5 s)            3 400 ms    400 ms
+20 chunks (2.0 s)            3 500 ms      0 ms
+40 chunks (4.0 s)            5 500 ms      0 ms
+```
+
+**20 chunks is the knee** and it is also what the arithmetic says: hold back
+exactly the countdown, 4 frames x 480 ms. `prerollFor` derives it from the
+release hold rather than fixing it, so raising "Reopen after" in Preferences
+grows the pre-roll with it instead of quietly starting to eat words. Bigger is
+strictly worse — every extra chunk is music flushed back in.
+
+### What the shipped gate does
+
+`TestTheShippedGateDoesNotLeakOnMisreads` runs a real timeline through the real
+`classify.Gate`. The synthetic music needed care: quiet bars move the
+classifier not at all (amplitude is not what it reads, 0.80 either way), and
+the first version of the test passed unchanged under the old policy. 900 ms of
+silence every 3 s reproduces the real failure mode — one isolated frame at
+**0.41**, within 0.004 of the piano's measured p25.
+
+```
+                       music fed   leaked      speech eaten
+1.3.0 policy            18 000 ms  18 000 ms      0 ms      <- all of it
+1.4.0 release hold      18 000 ms   3 000 ms      0 ms      <- the close latency
+```
+
+### Sung vocals: still not measured
+
+Pitch-modulated `say` was tried as a singing fixture and is not one. Both a
+Korean and an English "sung" line came back top-classed **Speech** (music p50
+0.059 and 0.000). That is a true result about pitched speech — YAMNet needs
+musical structure, not just a moving f0 — but it is not a measurement of
+singing, and the gap Y3 recorded stays open. Real sung vocals still have to be
+checked with the live classifier test in Preferences → Filter.
+
+## The voice still cannot be pinned (v3_voiceid re-run, 2026-08-30)
+
+Re-measured because the switching was reported as still happening. Three
+sessions in one run, every one opened with `speech_config` prebuilt voice
+`"Charon"`, fingerprinted in 8 s windows:
+
+```
+window          at    voiced  f0_median  centroid   dist
+s01_t01_w01    0.0s     60%      228.6      1196    0.00
+s02_t01_w01   24.0s     52%      154.8      1034    3.97   <- session swap
+s03_t01_w01   48.0s     61%      233.0      1251    8.35   <- session swap
+f0 across windows: 144.6 .. 233.0 Hz
+```
+
+Asking for a voice changes nothing; the model draws a new one per session and
+a reconnect is not optional. The 1.2.0 conclusion stands, now with a second
+independent run behind it. Two qualifications on the instrument, both against
+over-reading it: within-*session* windows on this material moved by up to 2.84
+and 4.04, above the 3.0 threshold calibrated against macOS `say`, so the
+"changed mid-session" flags are not trustworthy — only the swap-aligned jumps
+are. And the swap silence stayed fixed: **0.04 s** total attributable to
+arrival across two swaps, against the 2.8–4.2 s of 1.2.0.
+
+The consequence is a design decision, not a workaround: a voice the user picks
+and keeps has to be synthesized locally. See "Choosing the voice" in CLAUDE.md.
+
+## What the model's audio actually sounds like underneath (2026-08-30)
+
+Reported: an electronic quality in the background of the spoken translation,
+with a request not to add signal processing for it. The three session
+recordings above were analysed for tonal artefacts in their quiet frames
+(2048-point Hann, quiet = the bottom quartile of frame RMS):
+
+```
+session   frame dB p25   quiet-frame tonal peaks           sub-60 Hz
+s01          -34.7       23.4 Hz +17.6 dB, 187.5 Hz +12.9   +15.5 dB
+s02          -51.5       58.6 Hz +48.5 dB, then 246/363/421/480/527 Hz   +37.7 dB
+s03         -200.0       none — the pauses are digital silence   +0.0 dB
+```
+
+Three sessions of the same model on the same input produced three different
+noise floors, one of them exact zeros. **The artefact is in the generated
+audio, not in the playback path** — which is a pure-Go Kaiser sinc at −91 dB
+stopband (soxr on macOS), with starvation counted rather than guessed at, and
+the arrival analysis above showing 0.04 s of gap in 66 s. There is nothing to
+fix downstream, and a filter would be treating a symptom that varies per
+session anyway.
+
+The answer is the same as the voice's: speaking the translation with a local
+voice takes the model's audio out of the output path entirely. One change,
+both complaints.
+
+**Caveat on the diagnosis**: the sessions were fed the Korean TTS fixture, not
+a live room, and "quiet frames" are selected by energy, so some of what is
+measured there is speech tail rather than background. What the numbers support
+is "the model's own audio differs session to session and is not always clean";
+they do not identify a specific tone to point at.

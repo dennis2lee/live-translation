@@ -20,6 +20,7 @@ import (
 	"github.com/dennis2lee/live-translation/src_go/internal/platform"
 	"github.com/dennis2lee/live-translation/src_go/internal/transcript"
 	"github.com/dennis2lee/live-translation/src_go/internal/translator"
+	"github.com/dennis2lee/live-translation/src_go/internal/tts"
 )
 
 const (
@@ -117,6 +118,13 @@ type Window struct {
 	// feature is off or the model could not be had. yamnet is the loaded
 	// model, kept across sessions — loading dequantizes 4 M weights, and a
 	// stop/start should not pay that twice.
+	// voice speaks the translation locally when the user has chosen a voice.
+	// voiceActive is read from the translator's receive goroutine, which is
+	// why it is atomic and the pointer is not: everything that touches the
+	// pointer runs on the UI goroutine.
+	voice       *tts.Speaker
+	voiceActive atomic.Bool
+
 	musicGate *classify.Gate
 	yamnet    *classify.Model
 	// loadModel reads the model from disk. A field for the same reason
@@ -360,10 +368,13 @@ func (w *Window) applySessionChanges(old config.Settings) {
 	// Tuning moves without a restart — the gate reads it per frame. Only the
 	// on/off switch rebuilds the translator, below.
 	if w.musicGate != nil && next.MusicGate &&
-		(old.MusicGateThreshold != next.MusicGateThreshold || old.MusicGateHold != next.MusicGateHold) {
+		(old.MusicGateThreshold != next.MusicGateThreshold ||
+			old.MusicGateHold != next.MusicGateHold ||
+			old.MusicGateRelease != next.MusicGateRelease) {
 		w.musicGate.SetTuning(classify.GateTuning{
-			Threshold:   next.MusicGateThreshold,
-			HoldSeconds: next.MusicGateHold,
+			Threshold:      next.MusicGateThreshold,
+			HoldSeconds:    next.MusicGateHold,
+			ReleaseSeconds: next.MusicGateRelease,
 		})
 	}
 	if old.TargetLanguageCode != next.TargetLanguageCode ||
@@ -410,6 +421,19 @@ func (w *Window) applySpeechChanges(old config.Settings) {
 			"from", old.OutputDeviceName, "to", next.OutputDeviceName)
 		w.stopPlayer()
 		w.startPlayer()
+	case old.VoiceFor(old.TargetLanguageCode) != next.VoiceFor(next.TargetLanguageCode):
+		// Switching between two local voices is not worth a device restart —
+		// the next line simply comes out in the new voice. Switching to or
+		// from the model's voice changes which source feeds the player, so
+		// the speaker has to come or go.
+		switch chosen := next.VoiceFor(next.TargetLanguageCode); {
+		case chosen == "":
+			w.stopVoice()
+		case w.voice == nil:
+			w.startVoice()
+		default:
+			w.voice.SetVoice(chosen)
+		}
 	case old.SpeechVolume != next.SpeechVolume:
 		// Never reopen for this. The gain is read per block, so the slider
 		// takes effect on the next one with no gap.
@@ -493,8 +517,9 @@ func (w *Window) musicFilter() func([]byte) [][]byte {
 		return nil
 	}
 	w.musicGate = classify.NewGate(model, classify.GateTuning{
-		Threshold:   w.settings.MusicGateThreshold,
-		HoldSeconds: w.settings.MusicGateHold,
+		Threshold:      w.settings.MusicGateThreshold,
+		HoldSeconds:    w.settings.MusicGateHold,
+		ReleaseSeconds: w.settings.MusicGateRelease,
 	})
 	return w.musicGate.Filter
 }
@@ -552,8 +577,59 @@ func (w *Window) newTranslator(ring *audio.Ring, apiKey string) (*translator.Tra
 // With no player — speech switched off, or a device that would not open — the
 // bytes go where they went before 1.2.0, which is nowhere.
 func (w *Window) speakAudio(pcm []byte) {
+	// With a chosen voice the model's audio is dropped here rather than never
+	// requested: it is generated whether or not anyone listens, and failing to
+	// *read* it stalls the stream. Reading and discarding is the contract.
+	if w.voiceActive.Load() {
+		return
+	}
 	if p := w.player.Load(); p != nil {
 		p.Write(pcm)
+	}
+}
+
+// startVoice attaches the local synthesizer to the open player, when the user
+// has chosen a voice instead of the model's.
+//
+// Failure is never fatal, and it is never silent either: falling back to the
+// model's voice without saying so would look like the setting did nothing.
+func (w *Window) startVoice() {
+	want := w.settings.VoiceFor(w.settings.TargetLanguageCode)
+	if w.voice != nil || want == "" {
+		return
+	}
+	if !tts.Available() {
+		slog.Warn("local speech synthesis unavailable — using the model's voice")
+		w.showNotice("This machine has no local speech synthesis — using the model's voice")
+		return
+	}
+	w.voice = tts.NewSpeaker(want, func(pcm []byte) {
+		if p := w.player.Load(); p != nil {
+			p.Write(pcm)
+		}
+	})
+	w.voiceActive.Store(true)
+	slog.Info("speaking the translation locally", "voice", want,
+		"target", w.settings.TargetLanguageCode)
+}
+
+// stopVoice detaches it, and hands the output path back to the model's audio.
+func (w *Window) stopVoice() {
+	w.voiceActive.Store(false)
+	if w.voice != nil {
+		guard("stopping local speech", w.voice.Stop)
+		w.voice = nil
+	}
+}
+
+// speakLines sends newly committed caption lines to the local voice. Called
+// with every drain, so the queue's own bound is what keeps it from growing.
+func (w *Window) speakLines(lines []string) {
+	if w.voice == nil {
+		return
+	}
+	for _, line := range lines {
+		w.voice.Say(line)
 	}
 }
 
@@ -595,6 +671,7 @@ func (w *Window) startPlayer() {
 		w.showNotice(w.settings.OutputDeviceName + " unavailable — playing through " + dev.Name)
 	}
 	w.player.Store(&playerRef{player})
+	w.startVoice()
 }
 
 // speechGain is the volume the player should actually run at. Every place that
@@ -633,6 +710,9 @@ func (w *Window) ToggleSpeechMute() {
 
 // stopPlayer releases the output device. Safe when nothing is playing.
 func (w *Window) stopPlayer() {
+	// The voice first: it writes into the player, and stopping the device out
+	// from under a goroutine that is mid-utterance is the shape of bug M3.
+	w.stopVoice()
 	if player := w.player.Swap(nil); player != nil {
 		guard("stopping audio playback", player.Stop)
 	}
@@ -792,6 +872,10 @@ func (w *Window) onTargetText(text string) {
 // let them pile up for as long as the application runs.
 func (w *Window) recordNewLines() {
 	lines := w.buffer.DrainNewCommits()
+	// Spoken before the writer check: draining is unconditional, and so is
+	// speaking. Returning early on a missing writer is what once let
+	// _new_commits grow for as long as the application ran.
+	w.speakLines(lines)
 	if w.writer == nil {
 		return // taken and discarded, so nothing accumulates
 	}

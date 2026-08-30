@@ -23,9 +23,10 @@ import (
 	"github.com/dennis2lee/live-translation/src_go/internal/netcheck"
 	"github.com/dennis2lee/live-translation/src_go/internal/platform"
 	"github.com/dennis2lee/live-translation/src_go/internal/translator"
+	"github.com/dennis2lee/live-translation/src_go/internal/tts"
 )
 
-// prefsDialog is the six-tab Preferences window.
+// prefsDialog is the eight-tab Preferences window.
 //
 // Three buttons, three meanings — the contract the Python build settled on:
 //
@@ -127,10 +128,17 @@ type prefsDialog struct {
 	musicGate      *widget.Check
 	musicThreshold *widget.Slider
 	musicHold      *widget.Slider
-	modelStatus    *widget.Label
-	modelButton    *widget.Button
-	clsButton      *widget.Button
-	clsStatus      *widget.Label
+	musicRelease   *widget.Slider
+
+	voiceSelect  *widget.Select
+	voiceNames   []string // parallel to voiceSelect.Options; "" is the model
+	voiceSamples []string
+	voiceButton  *widget.Button
+	voiceNote    *widget.Label
+	modelStatus  *widget.Label
+	modelButton  *widget.Button
+	clsButton    *widget.Button
+	clsStatus    *widget.Label
 	// clsCapture is the classifier test's own microphone, opened only when no
 	// session is running — the same conflict rule as the level meter. clsStop
 	// ends its goroutine; when a gated session is live the test observes the
@@ -376,6 +384,8 @@ func (p *prefsDialog) outputTab() fyne.CanvasObject {
 		}
 	}
 
+	p.voiceRow()
+
 	p.speechVolume = widget.NewSlider(0, 1)
 	p.speechVolume.Step = 0.05
 	p.speechVolume.Value = p.working.SpeechVolume
@@ -408,16 +418,163 @@ func (p *prefsDialog) outputTab() fyne.CanvasObject {
 		}
 	})
 
-	return container.NewVBox(
-		p.speakAloud,
-		warning,
-		widget.NewLabel("Output device"),
-		p.outputSelect,
-		container.NewBorder(nil, nil, widget.NewLabel("Volume"), volumeLabel, p.speechVolume),
-		muteHint,
-		container.NewHBox(p.toneButton),
-		p.toneStatus,
+	// A form rather than stacked label/widget pairs: three labelled rows cost
+	// three rows here and six there, and the tab is measured against
+	// prefsContentHeight by TestNoTabOverflowsTheDialog.
+	form := widget.NewForm(
+		widget.NewFormItem("Output device", p.outputSelect),
+		widget.NewFormItem("Voice",
+			container.NewBorder(nil, nil, nil, p.voiceButton, p.voiceSelect)),
+		widget.NewFormItem("Volume",
+			container.NewBorder(nil, nil, nil, volumeLabel, p.speechVolume)),
 	)
+
+	rows := []fyne.CanvasObject{p.speakAloud, warning, form}
+	// The note is only worth a row when it has something unusual to say; in
+	// the ordinary case the dropdown's own first entry says it.
+	if p.voiceNote.Text != "" {
+		rows = append(rows, p.voiceNote)
+	}
+	rows = append(rows, muteHint, container.NewHBox(p.toneButton), p.toneStatus)
+	return container.NewVBox(rows...)
+}
+
+// voiceRow builds the voice picker and its Preview button.
+//
+// The list is filtered to the target language: the direction keys switch the
+// target while the app runs, the setting is stored per language, and an
+// English voice reading Korean is not a choice anyone makes on purpose.
+func (p *prefsDialog) voiceRow() {
+	target := p.working.TargetLanguageCode
+
+	labels := []string{modelVoiceLabel}
+	p.voiceNames = []string{""}
+	p.voiceSamples = []string{""}
+
+	note := ""
+	if !tts.Available() {
+		note = "This machine has no local speech synthesis, so only the model's " +
+			"voice is available."
+	} else {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		voices, err := tts.Voices(ctx)
+		cancel()
+		if err != nil {
+			note = "Could not list the installed voices: " + err.Error()
+		}
+		for _, v := range voices {
+			if !v.Matches(target) {
+				continue
+			}
+			labels = append(labels, fmt.Sprintf("%s (%s)", v.Name, v.Language))
+			p.voiceNames = append(p.voiceNames, v.Name)
+			p.voiceSamples = append(p.voiceSamples, v.Sample)
+		}
+		if len(p.voiceNames) == 1 {
+			note = "No voices are installed for " + strings.ToUpper(target) +
+				". Add one in System Settings → Accessibility → Spoken Content."
+		}
+	}
+
+	p.voiceNote = widget.NewLabel(note)
+	p.voiceNote.Wrapping = fyne.TextWrapWord
+
+	p.voiceSelect = widget.NewSelect(labels, nil)
+	p.voiceSelect.SetSelectedIndex(0)
+	chosen := p.working.VoiceFor(target)
+	for i, name := range p.voiceNames {
+		if name != "" && name == chosen {
+			p.voiceSelect.SetSelectedIndex(i)
+		}
+	}
+	p.voiceSelect.OnChanged = func(string) {
+		if p.voiceButton != nil {
+			p.voiceButton.Enable()
+		}
+	}
+
+	p.voiceButton = widget.NewButton("Preview", p.previewVoice)
+	if len(p.voiceNames) == 1 {
+		p.voiceButton.Disable()
+	}
+}
+
+const modelVoiceLabel = "Model voice — changes at every reconnect"
+
+// selectedVoice is the voice name the dropdown is on, "" for the model's.
+func (p *prefsDialog) selectedVoice() (name, sample string) {
+	i := p.voiceSelect.SelectedIndex()
+	if i < 0 || i >= len(p.voiceNames) {
+		return "", ""
+	}
+	return p.voiceNames[i], p.voiceSamples[i]
+}
+
+// previewVoice speaks the voice's own sample sentence through the output
+// device the dialog has selected — so it answers "what does it sound like"
+// and "does it come out of the right box" in one press.
+func (p *prefsDialog) previewVoice() {
+	name, sample := p.selectedVoice()
+	if name == "" {
+		p.toneStatus.SetText("The model's voice cannot be previewed — it is chosen per session.")
+		return
+	}
+	if sample == "" {
+		sample = "This is the voice that will speak the translation."
+	}
+	p.stopTone()
+
+	device := ""
+	if i := p.outputSelect.SelectedIndex(); i >= 0 && i < len(p.outputNames) {
+		device = p.outputNames[i]
+	}
+	player := audio.NewPlayer(device, tts.Rate)
+	player.SetVolume(p.speechVolume.Value)
+	dev, err := player.Start()
+	if err != nil {
+		p.toneStatus.SetText("Could not open the device: " + err.Error())
+		return
+	}
+
+	p.voiceButton.Disable()
+	p.toneStatus.SetText("Previewing " + name + " through " + dev.Name + "…")
+
+	go func() {
+		defer player.Stop()
+		ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+		defer cancel()
+		pcm, err := tts.Synthesize(ctx, name, sample)
+		done := func(text string) {
+			fyne.Do(func() {
+				if p.toneStatus != nil {
+					p.toneStatus.SetText(text)
+				}
+				if p.voiceButton != nil {
+					p.voiceButton.Enable()
+				}
+			})
+		}
+		if err != nil {
+			done("Could not speak with " + name + ": " + err.Error())
+			return
+		}
+		// Paced into the player the same way the session paces it, because the
+		// ring is the same size here as it is there.
+		speaker := tts.NewSpeaker(name, player.Write)
+		speaker.Say(sample)
+		_ = pcm
+		deadline := time.Now().Add(20 * time.Second)
+		for time.Now().Before(deadline) {
+			if spoken, _, failed := speaker.Stats(); spoken+failed > 0 {
+				break
+			}
+			time.Sleep(20 * time.Millisecond)
+		}
+		// Let the ring drain before the device closes, or the tail is clipped.
+		time.Sleep(time.Duration(audio.PlayPrebufferMS+300) * time.Millisecond)
+		speaker.Stop()
+		done("Not running.")
+	}()
 }
 
 func outputDeviceLabel(d audio.OutputDevice) string {
@@ -787,6 +944,11 @@ func (p *prefsDialog) collect() config.Settings {
 	s.MusicGate = p.musicGate.Checked
 	s.MusicGateThreshold = p.musicThreshold.Value
 	s.MusicGateHold = p.musicHold.Value
+	s.MusicGateRelease = p.musicRelease.Value
+	if p.voiceSelect != nil {
+		name, _ := p.selectedVoice()
+		s = s.WithVoiceFor(s.TargetLanguageCode, name)
+	}
 	s.VocabularySource = p.vocabSource.Text
 	s.VocabularyCaptions = p.vocabCaption.Text
 	s.FontSize = int(p.fontSize.Value)
@@ -1211,32 +1373,44 @@ func (p *prefsDialog) filterTab() fyne.CanvasObject {
 	p.modelButton = widget.NewButton("Download Model (4 MB)", p.downloadModel)
 	p.refreshModelStatus()
 
-	p.musicThreshold = widget.NewSlider(0.1, 0.9)
-	p.musicThreshold.Step = 0.05
-	p.musicThreshold.SetValue(p.working.MusicGateThreshold)
-	thresholdLabel := widget.NewLabel("")
-	setThreshold := func(v float64) {
-		// Low sensitivity = a high score needed = only unmistakable music is
-		// gated. The label speaks the user's direction, the value the model's.
-		thresholdLabel.SetText(fmt.Sprintf("%.2f", v))
+	// A slider with a readout, and a Step small enough that the arrow keys
+	// reach any value: Fyne's Slider is focusable and steps by Step, so fine
+	// control is a matter of choosing one, not of adding a second widget.
+	slider := func(minV, maxV, step float64, format string, value float64) (*widget.Slider, fyne.CanvasObject) {
+		sl := widget.NewSlider(minV, maxV)
+		sl.Step = step
+		sl.SetValue(value)
+		read := widget.NewLabel("")
+		sl.OnChanged = func(v float64) { read.SetText(fmt.Sprintf(format, v)) }
+		sl.OnChanged(sl.Value)
+		// A fixed-width readout, or the slider resizes as the digits change.
+		read.Alignment = fyne.TextAlignTrailing
+		return sl, container.NewBorder(nil, nil, nil,
+			container.NewGridWrap(fyne.NewSize(52, read.MinSize().Height), read), sl)
 	}
-	p.musicThreshold.OnChanged = setThreshold
-	setThreshold(p.musicThreshold.Value)
 
-	p.musicHold = widget.NewSlider(0.5, 10)
-	p.musicHold.Step = 0.5
-	p.musicHold.SetValue(p.working.MusicGateHold)
-	holdLabel := widget.NewLabel("")
-	setHold := func(v float64) { holdLabel.SetText(fmt.Sprintf("%.1f s", v)) }
-	p.musicHold.OnChanged = setHold
-	setHold(p.musicHold.Value)
+	// 0.01 steps over the full usable range. The material this has to
+	// separate spans 0.109 (a marching band recorded outdoors) to 0.891 (a
+	// solo bugle), so 0.05 steps were too coarse to sit between two pieces of
+	// the user's own music — see spikes/RESULTS.md.
+	thresholdRow := fyne.CanvasObject(nil)
+	p.musicThreshold, thresholdRow = slider(0.05, 0.95, 0.01, "%.2f", p.working.MusicGateThreshold)
+	holdRow := fyne.CanvasObject(nil)
+	p.musicHold, holdRow = slider(0.5, 10, 0.1, "%.1f s", p.working.MusicGateHold)
+	releaseRow := fyne.CanvasObject(nil)
+	p.musicRelease, releaseRow = slider(0.5, 5, 0.1, "%.1f s", p.working.MusicGateRelease)
 
 	form := widget.NewForm(
-		widget.NewFormItem("Music threshold",
-			container.NewBorder(nil, nil, nil, thresholdLabel, p.musicThreshold)),
-		widget.NewFormItem("Gate after",
-			container.NewBorder(nil, nil, nil, holdLabel, p.musicHold)),
+		widget.NewFormItem("Music threshold", thresholdRow),
+		widget.NewFormItem("Gate after", holdRow),
+		widget.NewFormItem("Reopen after", releaseRow),
 	)
+
+	tuningNote := widget.NewLabel(
+		"Waiting to reopen costs nothing — the audio from just before is kept " +
+			"and sent — and it is what stops a momentary misread leaking a song.")
+	tuningNote.Wrapping = fyne.TextWrapWord
+	tuningNote.TextStyle = fyne.TextStyle{Italic: true}
 
 	p.clsStatus = widget.NewLabel("Not running.")
 	p.clsStatus.Wrapping = fyne.TextWrapWord
@@ -1254,6 +1428,7 @@ func (p *prefsDialog) filterTab() fyne.CanvasObject {
 		container.NewHBox(p.modelButton),
 		p.modelStatus,
 		form,
+		tuningNote,
 		container.NewHBox(p.clsButton),
 		p.clsStatus,
 	)

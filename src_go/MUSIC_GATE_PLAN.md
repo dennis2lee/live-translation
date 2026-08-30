@@ -6,7 +6,19 @@ YAMNet, downloaded once and run locally. The feature is off by default, has its
 own switch in Preferences, no shortcut key, and the classification must be
 tunable from the settings window.
 
-Status: **implemented through phase 5, 2026-08-23.** Every *measure* below was
+Status: **implemented through phase 5, 2026-08-23; revised 2026-08-30 after
+use.** Phase 6 ran informally — the user reported the gate working but leaking
+in bursts — and it found a real defect in the release policy rather than a
+tuning problem. The gate opened on the *first* clear frame, and a single
+sub-threshold frame is the commonest event inside real music; measured end to
+end, that policy leaked 18 000 ms of 18 000 ms. A release hold (1.5 s,
+`Settings.MusicGateRelease`) plus a pre-roll derived from it brings that to
+3 000 ms, which is the close latency, with no speech eaten. The sweep and the
+run-length tables are in `spikes/RESULTS.md` ("Why the gate flapped"); the
+spike is `spikes/y5_flap`. Sung vocals are **still** unmeasured — pitch-modulated
+`say` was tried and reads as Speech, so it is not a singing fixture.
+
+Original status: **implemented through phase 5, 2026-08-23.** Every *measure* below was
 produced; the results live in `spikes/RESULTS.md` ("The music gate") and the
 decisions they forced are recorded there. Phase 6 — real music, real
 microphone, the user's ear — is the only open line. Notable deltas from this

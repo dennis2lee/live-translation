@@ -71,12 +71,12 @@ func TestCancelUndoesAnApply(t *testing.T) {
 	p.fontSize.SetValue(96)
 	p.completeOnly.SetChecked(!before.CompletePhrasesOnly)
 	p.apply()
-	if w.settings == before {
+	if w.settings.Equal(before) {
 		t.Fatal("Apply changed nothing, so Cancel has nothing to undo")
 	}
 
 	p.cancel()
-	if w.settings != before {
+	if !w.settings.Equal(before) {
 		t.Errorf("Cancel left the settings at\n %+v\nwant\n %+v", w.settings, before)
 	}
 }
@@ -92,7 +92,7 @@ func TestCancelWithoutApplyIsANoOp(t *testing.T) {
 	p.fontSize.SetValue(24) // typed, never applied
 	p.cancel()
 
-	if w.settings != before {
+	if !w.settings.Equal(before) {
 		t.Error("Cancel changed the settings although Apply was never pressed")
 	}
 	if got := config.StoredAPIKey(); got != "original-key" {

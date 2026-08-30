@@ -13,12 +13,20 @@ package classify
 //   - The gate closes slowly: only after HoldSeconds of *consecutive* musical
 //     frames. A verse's first bars getting translated is a nuisance; a
 //     sentence's first words getting eaten is a defect.
-//   - It opens instantly, and retroactively: the first non-musical frame
-//     reopens it, and the pre-roll — the last PrerollChunks of suppressed
-//     audio — is flushed to the session first, because the words that
-//     triggered the reopening are up to a patch length in the past. The
-//     server has always been fine with a burst; the reconnect path flushes an
-//     accumulated ring the same way.
+//   - It opens deliberately, and retroactively: ReleaseSeconds of consecutive
+//     *clear* frames reopen it, and the pre-roll — the last PrerollChunks of
+//     suppressed audio — is flushed to the session first, so the delay costs
+//     no words. The server has always been fine with a burst; the reconnect
+//     path flushes an accumulated ring the same way.
+//
+// Until 1.4.0 the gate opened on the *first* clear frame. That was wrong, and
+// wrong in the expensive direction: the classifier drops below the threshold
+// for one frame all the time inside real music — measured on ten real pieces,
+// isolated one-frame dips are the single commonest event (spike y5_flap) — and
+// each one reopened the gate *and* flushed 1.5 s of music into the session.
+// A release hold is affordable because a song and the speech after it are
+// never butt-joined; there is always a pause, and the countdown runs during
+// it. The pre-roll is sized for the case where there is not.
 
 import (
 	"sync"
@@ -32,6 +40,9 @@ type GateTuning struct {
 	Threshold float64
 	// HoldSeconds of consecutive musical frames close the gate.
 	HoldSeconds float64
+	// ReleaseSeconds of consecutive clear frames reopen it. The pre-roll
+	// makes the wait free; see PrerollChunks.
+	ReleaseSeconds float64
 }
 
 // Margin is how far the music score must sit above the speech score, on top
@@ -48,9 +59,15 @@ const (
 	// the model's own patch hop.
 	hopSamples = 7680
 	// PrerollChunks is how much suppressed audio is kept for the retroactive
-	// flush — 1.5 s covers the decision latency (up to one patch, ~1 s) with
-	// margin.
-	PrerollChunks = 15
+	// flush at the default release hold. The rule is prerollFor: hold back
+	// exactly the countdown, so nothing suppressed while the gate makes up its
+	// mind is lost. Measured against a song cut straight into speech with no
+	// pause at all — the adversarial case the user's own description says does
+	// not occur — 20 chunks eat 0 ms of speech where 15 eat 400 ms and 10 eat
+	// 900 ms (y5_flap). Bigger is not better: every extra chunk is music
+	// flushed back into the session, so 40 chunks leak 2.0 s more than 20 do
+	// and clip exactly as little.
+	PrerollChunks = 20
 )
 
 // Verdict is one classification frame, as shown in the settings live test.
@@ -66,10 +83,13 @@ type Verdict struct {
 // --- the pure machine ------------------------------------------------------
 
 type gateMachine struct {
-	holdFrames int
-	closed     bool
-	musicalRun int
-	preroll    [][]byte
+	holdFrames    int
+	releaseFrames int
+	prerollCap    int
+	closed        bool
+	musicalRun    int
+	clearRun      int
+	preroll       [][]byte
 
 	// Counters for the session summary. Chunks, because chunks are the unit
 	// everything else in the pipeline counts in.
@@ -77,16 +97,22 @@ type gateMachine struct {
 	flushedChunks int64
 }
 
-// onFrame consumes one verdict.
+// onFrame consumes one verdict. Both directions need a confirmed run: the
+// single-frame misread is the commonest classifier event there is, and acting
+// on one in either direction is what made the gate flap.
 func (m *gateMachine) onFrame(musical bool) {
-	if !musical {
-		m.musicalRun = 0
-		m.closed = false
+	if musical {
+		m.clearRun = 0
+		m.musicalRun++
+		if m.musicalRun >= m.holdFrames {
+			m.closed = true
+		}
 		return
 	}
-	m.musicalRun++
-	if m.musicalRun >= m.holdFrames {
-		m.closed = true
+	m.musicalRun = 0
+	m.clearRun++
+	if m.clearRun >= m.releaseFrames {
+		m.closed = false
 	}
 }
 
@@ -100,7 +126,7 @@ func (m *gateMachine) onChunk(chunk []byte) [][]byte {
 		// outlives the call.
 		kept := append([]byte(nil), chunk...)
 		m.preroll = append(m.preroll, kept)
-		if len(m.preroll) > PrerollChunks {
+		for len(m.preroll) > m.prerollCap {
 			m.preroll = m.preroll[1:]
 		}
 		return nil
@@ -112,6 +138,15 @@ func (m *gateMachine) onChunk(chunk []byte) [][]byte {
 		return out
 	}
 	return [][]byte{chunk}
+}
+
+// retune sets the three frame counts a tuning implies. Shrinking the pre-roll
+// does not discard what is already held: onChunk trims to the new cap on the
+// next chunk, so a slider moved mid-song cannot drop audio on the spot.
+func (m *gateMachine) retune(t GateTuning) {
+	m.holdFrames = framesFor(t.HoldSeconds)
+	m.releaseFrames = framesFor(t.ReleaseSeconds)
+	m.prerollCap = prerollFor(m.releaseFrames)
 }
 
 // --- the streaming wrapper -------------------------------------------------
@@ -136,18 +171,12 @@ type Gate struct {
 // TTS fixture and real recorded loops — see spikes/RESULTS.md for the score
 // tables these numbers are read from.
 func DefaultTuning() GateTuning {
-	return GateTuning{Threshold: 0.5, HoldSeconds: 2.0}
+	return GateTuning{Threshold: 0.5, HoldSeconds: 2.0, ReleaseSeconds: 1.5}
 }
 
 // NewGate starts the classification worker.
 func NewGate(model *Model, tuning GateTuning) *Gate {
-	def := DefaultTuning()
-	if tuning.Threshold <= 0 {
-		tuning.Threshold = def.Threshold
-	}
-	if tuning.HoldSeconds <= 0 {
-		tuning.HoldSeconds = def.HoldSeconds
-	}
+	tuning = withDefaults(tuning)
 	g := &Gate{
 		model:  model,
 		tuning: tuning,
@@ -155,14 +184,46 @@ func NewGate(model *Model, tuning GateTuning) *Gate {
 		kick:   make(chan struct{}, 1),
 		done:   make(chan struct{}),
 	}
-	g.machine.holdFrames = holdFramesFor(tuning.HoldSeconds)
+	g.machine.retune(tuning)
 	go g.worker()
 	return g
 }
 
-// holdFramesFor converts seconds to consecutive frames at the 0.48 s cadence,
-// rounding up — the hold is a promise of at *least* that much music.
-func holdFramesFor(seconds float64) int {
+// withDefaults replaces unset fields. A zero here means "an older settings
+// file", never a choice: the sliders stop well short of zero in both
+// directions.
+func withDefaults(t GateTuning) GateTuning {
+	def := DefaultTuning()
+	if t.Threshold <= 0 {
+		t.Threshold = def.Threshold
+	}
+	if t.HoldSeconds <= 0 {
+		t.HoldSeconds = def.HoldSeconds
+	}
+	if t.ReleaseSeconds <= 0 {
+		t.ReleaseSeconds = def.ReleaseSeconds
+	}
+	return t
+}
+
+// prerollFor sizes the held-back audio from the release hold, in chunks:
+// everything suppressed while the gate is counting down to reopen has to be
+// recoverable, or the wait would cost the words it was meant to protect. At
+// the default 1.5 s release that is 4 frames x 480 ms = 20 chunks, which is
+// exactly where the measured clipping reaches zero — so the derivation and
+// the measurement agree, and raising the release in Preferences grows the
+// pre-roll with it instead of silently starting to eat speech.
+func prerollFor(releaseFrames int) int {
+	n := (releaseFrames*hopSamples/(chunkMS*SampleRate/1000) + 1)
+	if n < 1 {
+		n = 1
+	}
+	return n
+}
+
+// framesFor converts seconds to consecutive frames at the 0.48 s cadence,
+// rounding up — a hold is a promise of at *least* that much evidence.
+func framesFor(seconds float64) int {
 	frameSeconds := float64(hopSamples) / SampleRate
 	n := int(seconds/frameSeconds + 0.999)
 	if n < 1 {
@@ -174,16 +235,10 @@ func holdFramesFor(seconds float64) int {
 // SetTuning applies slider changes to the running gate. Takes effect on the
 // next frame; no session restart.
 func (g *Gate) SetTuning(t GateTuning) {
-	def := DefaultTuning()
-	if t.Threshold <= 0 {
-		t.Threshold = def.Threshold
-	}
-	if t.HoldSeconds <= 0 {
-		t.HoldSeconds = def.HoldSeconds
-	}
+	t = withDefaults(t)
 	g.mu.Lock()
 	g.tuning = t
-	g.machine.holdFrames = holdFramesFor(t.HoldSeconds)
+	g.machine.retune(t)
 	g.mu.Unlock()
 }
 

@@ -16,6 +16,7 @@
 /v3_voiceid
 /y3_gatecal
 /y4_gate_live
+/y5_flap
 
 # The YAMNet model is downloaded, never committed — see spikes/fixtures/fetch_yamnet.sh
 *.tflite

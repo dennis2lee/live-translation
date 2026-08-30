@@ -98,7 +98,7 @@ func TestClampingPullsEverythingIntoRange(t *testing.T) {
 }
 
 func TestDefaultsSurviveClamping(t *testing.T) {
-	if got := Default().Clamped(); got != Default() {
+	if got := Default().Clamped(); !got.Equal(Default()) {
 		t.Errorf("clamping changed the defaults:\n got %+v\nwant %+v", got, Default())
 	}
 }
@@ -195,14 +195,14 @@ func TestSaveThenLoadRoundTrips(t *testing.T) {
 	if err := Save(want); err != nil {
 		t.Fatal(err)
 	}
-	if got := Load(); got != want {
+	if got := Load(); !got.Equal(want) {
 		t.Errorf("round trip lost something:\n got %+v\nwant %+v", got, want)
 	}
 }
 
 func TestLoadWithNoFileGivesDefaults(t *testing.T) {
 	isolate(t)
-	if got := Load(); got != Default() {
+	if got := Load(); !got.Equal(Default()) {
 		t.Errorf("Load with no file = %+v", got)
 	}
 }
@@ -213,7 +213,7 @@ func TestCorruptSettingsFileFallsBackToDefaults(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(dir, Filename), []byte("{not json"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	if got := Load(); got != Default() {
+	if got := Load(); !got.Equal(Default()) {
 		t.Errorf("Load of a corrupt file = %+v, want defaults", got)
 	}
 }
@@ -289,10 +289,10 @@ func TestResetForgetsEverything(t *testing.T) {
 	if err := Save(changed); err != nil {
 		t.Fatal(err)
 	}
-	if got := Reset(); got != Default() {
+	if got := Reset(); !got.Equal(Default()) {
 		t.Errorf("Reset returned %+v", got)
 	}
-	if got := Load(); got != Default() {
+	if got := Load(); !got.Equal(Default()) {
 		t.Errorf("Load after Reset = %+v", got)
 	}
 }

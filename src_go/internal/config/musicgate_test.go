@@ -41,3 +41,23 @@ func TestMusicGateTuningIsClamped(t *testing.T) {
 		t.Errorf("MusicGateHold = %v, want the 10 s ceiling", got.MusicGateHold)
 	}
 }
+
+// A settings file written before the release hold existed must come back with
+// the measured default, not a zero that would reopen the gate on the first
+// clear frame — the exact defect 1.4.0 fixed.
+func TestAnOlderSettingsFileGetsTheReleaseDefault(t *testing.T) {
+	got := Settings{MusicGate: true, MusicGateThreshold: 0.5, MusicGateHold: 2.0}.Clamped()
+	if got.MusicGateRelease != 1.5 {
+		t.Errorf("MusicGateRelease = %v, want the measured 1.5", got.MusicGateRelease)
+	}
+}
+
+func TestTheReleaseIsClampedToTheSliderRange(t *testing.T) {
+	for _, tc := range []struct{ in, want float64 }{
+		{0.1, 0.5}, {1.5, 1.5}, {5, 5}, {900, 5},
+	} {
+		if got := (Settings{MusicGateRelease: tc.in}).Clamped().MusicGateRelease; got != tc.want {
+			t.Errorf("release %v normalised to %v, want %v", tc.in, got, tc.want)
+		}
+	}
+}
