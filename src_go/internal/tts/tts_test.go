@@ -357,3 +357,84 @@ func TestTheRealSynthesizerProducesTheRateThePlayerExpects(t *testing.T) {
 		t.Skip()
 	}
 }
+
+// Clear drops what is queued but not yet spoken. A session that has stopped
+// must not keep talking: the captions are already gone from the screen, so a
+// sentence arriving afterwards has nothing on screen to belong to.
+func TestClearDropsWhatHasNotBeenSpoken(t *testing.T) {
+	var mu sync.Mutex
+	var said []string
+	release := make(chan struct{})
+	var once sync.Once
+	letGo := func() { once.Do(func() { close(release) }) }
+
+	s := newSpeakerWith("V", func([]byte) {}, func(_ context.Context, _, text string) ([]byte, error) {
+		mu.Lock()
+		said = append(said, text)
+		mu.Unlock()
+		<-release // hold the worker inside the first utterance
+		return make([]byte, 10*Rate/1000*2), nil
+	})
+	defer func() { letGo(); s.Stop() }()
+
+	s.Say("first")
+	waitFor(t, func() bool { mu.Lock(); defer mu.Unlock(); return len(said) == 1 }, "the worker to start")
+	s.Say("second")
+	s.Say("third")
+
+	s.Clear()
+	s.mu.Lock()
+	queued := len(s.queue)
+	s.mu.Unlock()
+	if queued != 0 {
+		t.Fatalf("%d lines still queued after Clear", queued)
+	}
+
+	// The one already in flight finishes; nothing behind it is spoken.
+	letGo()
+	waitFor(t, func() bool { spoken, _, _ := s.Stats(); return spoken == 1 }, "the in-flight line to finish")
+
+	mu.Lock()
+	defer mu.Unlock()
+	if len(said) != 1 || said[0] != "first" {
+		t.Errorf("synthesized %v, want only the line already in flight", said)
+	}
+}
+
+// Clear is not Stop: the speaker keeps working, because a session can stop and
+// start again without rebuilding it.
+func TestClearLeavesTheSpeakerUsable(t *testing.T) {
+	var mu sync.Mutex
+	var said []string
+	s := newSpeakerWith("V", func([]byte) {}, fakeSynth(5, &said, &mu, nil))
+	defer s.Stop()
+
+	s.Clear()
+	s.Say("after")
+	waitFor(t, func() bool { spoken, _, _ := s.Stats(); return spoken == 1 }, "a line after Clear")
+
+	mu.Lock()
+	defer mu.Unlock()
+	if len(said) != 1 || said[0] != "V|after" {
+		t.Errorf("synthesized %v after Clear, want the new line", said)
+	}
+}
+
+// Voice reports what the next line will use — the Preferences dialog reads it
+// back to show which entry is selected.
+func TestVoiceReportsWhatWasSet(t *testing.T) {
+	s := newSpeakerWith("Yuna", func([]byte) {}, fakeSynth(1, nil, nil, nil))
+	defer s.Stop()
+
+	if got := s.Voice(); got != "Yuna" {
+		t.Errorf("Voice() = %q, want the one it was built with", got)
+	}
+	s.SetVoice("Samantha")
+	if got := s.Voice(); got != "Samantha" {
+		t.Errorf("Voice() = %q after SetVoice", got)
+	}
+	s.SetVoice("")
+	if got := s.Voice(); got != "" {
+		t.Errorf("Voice() = %q, want the model's voice back", got)
+	}
+}
