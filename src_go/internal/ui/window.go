@@ -163,7 +163,15 @@ func NewWindow(app fyne.App, settings config.Settings) *Window {
 	w.buffer = newBuffer(settings)
 	w.view = NewCaptionView(settings)
 
-	w.win = app.NewWindow(AppName)
+	// The version is in the title because a screenshot of a bug report is
+	// often all there is to say which build produced it, and the About box is
+	// two clicks away from a window that may already be misbehaving.
+	w.win = app.NewWindow(WindowTitle())
+	// Explicitly, on the app rather than the window, so dialogs carry it too.
+	// See icon.go for why leaving it unset does not fall back to the icon
+	// compiled into the executable.
+	app.SetIcon(AppIcon())
+	w.win.SetIcon(AppIcon())
 	// No inner padding. Fyne insets the content by theme.Padding() on all four
 	// sides by default and paints the exposed strip with the canvas background,
 	// which follows the OS light/dark setting. On a Mac in dark mode that strip

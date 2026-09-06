@@ -30,7 +30,7 @@ import (
 const Rate = 24000
 
 // ErrUnsupported is returned by the platform calls where `say` does not exist.
-var ErrUnsupported = errors.New("tts: local speech synthesis is macOS-only")
+var ErrUnsupported = errors.New("tts: local speech synthesis is not available on this platform")
 
 // Voice is one voice installed on the machine.
 type Voice struct {
@@ -98,8 +98,13 @@ func parseVoiceList(out string) []Voice {
 }
 
 // looksLikeLocale keeps a stray line of prose from being read as a voice.
+// Both separators, because `say` prints en_US and SAPI prints en-US.
 func looksLikeLocale(s string) bool {
-	lang, region, hasRegion := strings.Cut(s, "_")
+	sep := strings.IndexAny(s, "-_")
+	lang, region, hasRegion := s, "", false
+	if sep >= 0 {
+		lang, region, hasRegion = s[:sep], s[sep+1:], true
+	}
 	if len(lang) < 2 || len(lang) > 3 || !allLetters(lang) {
 		return false
 	}

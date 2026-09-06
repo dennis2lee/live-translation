@@ -472,7 +472,7 @@ func (p *prefsDialog) voiceRow() {
 		}
 		if len(p.voiceNames) == 1 {
 			note = "No voices are installed for " + strings.ToUpper(target) +
-				". Add one in System Settings → Accessibility → Spoken Content."
+				". " + platform.VoiceInstallHint()
 		}
 	}
 

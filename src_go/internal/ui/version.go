@@ -12,3 +12,6 @@ const (
 	Author      = "Pyeongwoo Lee"
 	AuthorEmail = "dennis2.lee@gmail.com"
 )
+
+// WindowTitle is what the title bar shows: the name and the version.
+func WindowTitle() string { return AppName + " " + Version }

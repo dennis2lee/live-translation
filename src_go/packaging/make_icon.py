@@ -189,9 +189,23 @@ def main() -> None:
     rows = grid()
 
     (here / "AppIcon.png").write_bytes(png(rows, 1024))
+
+    # The window icon, embedded in the binary by internal/ui/icon.go.
+    #
+    # It has to be set explicitly or GLFW never sets one: GLFW looks the
+    # executable up for a resource *named* GLFW_ICON, and rsrc writes the .ico
+    # under a numeric id, so GLFW falls through to Windows' generic default
+    # while Explorer reads the real icon straight out of the binary. That is
+    # the mismatch — the desktop was right and the title bar was not.
+    #
+    # 128 because the art is a 32x32 grid: 128 is 4x it exactly, and the sizes
+    # Windows actually asks for (16, 32, 64) are exact halvings of that, so
+    # nothing the scaler does can soften a pixel that was drawn deliberately.
+    (here.parent / "internal" / "ui" / "appicon.png").write_bytes(png(rows, 128))
     (here / "AppIcon.ico").write_bytes(
         ico({s: png(rows, s) for s in (16, 32, 48, 64, 128, 256)}))
-    print(f"wrote {here/'AppIcon.png'} and {here/'AppIcon.ico'}")
+    print(f"wrote {here/'AppIcon.png'}, {here/'AppIcon.ico'} "
+          f"and {here.parent/'internal'/'ui'/'appicon.png'}")
 
     iconset = here / "AppIcon.iconset"
     subprocess.run(["rm", "-rf", str(iconset)], check=True)
