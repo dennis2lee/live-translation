@@ -58,8 +58,9 @@ import (
 	"sync"
 	"time"
 
-	"github.com/zalando/go-keyring"
 	"google.golang.org/genai"
+
+	"github.com/dennis2lee/live-translation/src_go/internal/config"
 )
 
 const (
@@ -72,26 +73,7 @@ const (
 	// gapFloor is the arrival gap worth recording. Blobs arrive about ten times
 	// a second, so anything under this is the normal cadence.
 	gapFloor = 0.30
-
-	keyringService = "LiveCap"
-	keyringUser    = "gemini-api-key"
 )
-
-var apiKeyVars = []string{"GEMINI_API_KEY", "GOOGLE_API_KEY"}
-
-func loadAPIKey() (key, source string) {
-	for _, name := range apiKeyVars {
-		if v := strings.TrimSpace(os.Getenv(name)); v != "" {
-			return v, "environment (" + name + ")"
-		}
-	}
-	if v, err := keyring.Get(keyringService, keyringUser); err == nil {
-		if v = strings.TrimSpace(v); v != "" {
-			return v, "macOS Keychain"
-		}
-	}
-	return "", ""
-}
 
 // --- fixture io -------------------------------------------------------------
 
@@ -351,12 +333,16 @@ func main() {
 		return
 	}
 
-	key, source := loadAPIKey()
+	// The application's own chain — environment, encrypted store, Keychain.
+	// This spike carried a shortened copy that skipped the encrypted store,
+	// which is where Preferences actually puts the key, so a machine with a
+	// working application could not run the spike.
+	key := config.LoadAPIKey()
 	if key == "" {
-		fmt.Fprintln(os.Stderr, "no API key: set GEMINI_API_KEY, or store one in the Keychain")
+		fmt.Fprintln(os.Stderr, "no API key: set GEMINI_API_KEY, or enter one in LiveCap Preferences")
 		os.Exit(1)
 	}
-	fmt.Printf("api key from %s\n", source)
+	fmt.Printf("api key from %s\n", config.APIKeySource())
 
 	pcm, err := readWAV(*fixture)
 	if err != nil {

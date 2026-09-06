@@ -24,27 +24,15 @@ import (
 	"sync"
 	"time"
 
-	"github.com/zalando/go-keyring"
-
 	"github.com/dennis2lee/live-translation/src_go/internal/audio"
 	"github.com/dennis2lee/live-translation/src_go/internal/classify"
+	"github.com/dennis2lee/live-translation/src_go/internal/config"
 	"github.com/dennis2lee/live-translation/src_go/internal/translator"
 )
 
-func loadAPIKey() string {
-	for _, name := range []string{"GEMINI_API_KEY", "GOOGLE_API_KEY"} {
-		if v := strings.TrimSpace(os.Getenv(name)); v != "" {
-			return v
-		}
-	}
-	if v, err := keyring.Get("LiveCap", "gemini-api-key"); err == nil {
-		return strings.TrimSpace(v)
-	}
-	return ""
-}
-
 func main() {
-	key := loadAPIKey()
+	// The application's chain, encrypted store included — see v3_voiceid.
+	key := config.LoadAPIKey()
 	if key == "" {
 		fmt.Fprintln(os.Stderr, "no API key")
 		os.Exit(1)
