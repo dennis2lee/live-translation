@@ -2,6 +2,7 @@ package ui
 
 import (
 	"image/color"
+	"math"
 	"strings"
 	"time"
 
@@ -32,9 +33,12 @@ const (
 )
 
 var (
-	colourLive   = color.NRGBA{R: 0x34, G: 0xC7, B: 0x59, A: 0xFF}
-	colourIdle   = color.NRGBA{R: 0x6E, G: 0x6E, B: 0x6E, A: 0xFF}
-	colourError  = color.NRGBA{R: 0xFF, G: 0x3B, B: 0x30, A: 0xFF}
+	colourLive  = color.NRGBA{R: 0x34, G: 0xC7, B: 0x59, A: 0xFF}
+	colourIdle  = color.NRGBA{R: 0x6E, G: 0x6E, B: 0x6E, A: 0xFF}
+	colourError = color.NRGBA{R: 0xFF, G: 0x3B, B: 0x30, A: 0xFF}
+	// A deeper red than colourError, so a muted live session and a broken one
+	// are not the same red on the same dot.
+	colourMuted  = color.NRGBA{R: 0xD7, G: 0x26, B: 0x1C, A: 0xFF}
 	colourStatus = color.NRGBA{R: 0x6E, G: 0x6E, B: 0x6E, A: 0xFF}
 	colourSource = color.NRGBA{R: 0x9A, G: 0x9A, B: 0x9A, A: 0xFF}
 )
@@ -48,6 +52,24 @@ func dotColour(i Indicator) color.NRGBA {
 	default:
 		return colourLive
 	}
+}
+
+// dotHalves is the colour of each half of the status dot.
+//
+// Muting is a second, independent fact about the session: the translation can
+// be live, connecting or broken while the sound is off, and one dot cannot say
+// two things with one colour. So the left half carries the mute and the right
+// half goes on saying exactly what it said before — grey idle, green live,
+// green blinking while connecting, red on error. Unmuted, both halves are the
+// status colour and the dot looks as it always has.
+//
+// Left for the mute because it is read first: "silenced, and live".
+func dotHalves(i Indicator, muted bool) (left, right color.NRGBA) {
+	right = dotColour(i)
+	if muted {
+		return colourMuted, right
+	}
+	return right, right
 }
 
 const (
@@ -91,6 +113,9 @@ type CaptionView struct {
 	hintAlpha float32
 	indicator Indicator
 	dotAlpha  float32
+	// speechMuted turns the left half of the dot red. Runtime-only, like the
+	// gain override it mirrors — see Window.ToggleSpeechMute.
+	speechMuted bool
 	// musicGated shows the ♪ beside the dot while the music gate is closed.
 	// Captions going quiet mid-session must be explainable from the screen —
 	// the same reasoning that put the error cause next to the red dot.
@@ -124,7 +149,12 @@ func (v *CaptionView) CreateRenderer() fyne.WidgetRenderer {
 	r.hint = canvas.NewText("", colourStatus)
 	r.status = canvas.NewText("", colourStatus)
 	r.sourceLine = canvas.NewText("", colourSource)
-	r.dot = canvas.NewCircle(colourIdle)
+	// A raster rather than a canvas.Circle: the dot has to be able to show two
+	// colours split down the middle, and no Fyne primitive draws half a disc.
+	// It is a handful of pixels, so drawing it per-pixel costs nothing.
+	r.dot = canvas.NewRasterWithPixels(func(x, y, w, h int) color.Color {
+		return r.dotPixel(x, y, w, h)
+	})
 	r.musicNote = canvas.NewText("♪", colourStatus)
 	r.hint.Alignment = fyne.TextAlignTrailing
 	r.status.Alignment = fyne.TextAlignCenter
@@ -181,6 +211,20 @@ func (v *CaptionView) SetMusicGated(gated bool) {
 
 // MusicGated reports whether the ♪ is showing.
 func (v *CaptionView) MusicGated() bool { return v.musicGated }
+
+// SetSpeechMuted colours the left half of the status dot, so the m key has a
+// standing consequence on screen. The notice it prints scrolls away; a muted
+// session that outlives the notice must still be readable from the box.
+func (v *CaptionView) SetSpeechMuted(muted bool) {
+	if v.speechMuted == muted {
+		return
+	}
+	v.speechMuted = muted
+	v.Refresh()
+}
+
+// SpeechMuted reports whether the dot is showing the mute half.
+func (v *CaptionView) SpeechMuted() bool { return v.speechMuted }
 
 // SetIndicator blinks while connecting and holds steady otherwise.
 func (v *CaptionView) SetIndicator(state Indicator) {
@@ -302,7 +346,7 @@ type captionRenderer struct {
 	hint       *canvas.Text
 	status     *canvas.Text
 	sourceLine *canvas.Text
-	dot        *canvas.Circle
+	dot        *canvas.Raster
 	musicNote  *canvas.Text
 }
 
@@ -462,9 +506,6 @@ func (r *captionRenderer) rebuild(size fyne.Size) {
 	stripTop := min(nominalBottom+HintGap, size.Height-radius*2)
 	anchorRight := AnchorRight(s, size.Width)
 
-	dotColor := dotColour(v.indicator)
-	dotColor.A = uint8(clamp01(v.dotAlpha) * 255)
-	r.dot.FillColor = dotColor
 	r.dot.Resize(fyne.NewSize(radius*2, radius*2))
 	r.dot.Move(fyne.NewPos(anchorRight-radius*2, stripTop))
 	r.dot.Refresh()
@@ -605,4 +646,44 @@ func clamp01(v float32) float32 {
 		return 1
 	}
 	return v
+}
+
+// dotPixel draws the status dot: a disc, split down the middle when the
+// speech is muted.
+//
+// w and h are device pixels, so this is called at the display's real
+// resolution and the edge is antialiased against whatever is behind it rather
+// than against an assumed background — the strip below the box is the caption
+// background, which the user can colour.
+//
+// The alpha carries the pulse, and it carries it on both halves. The dot has
+// always breathed as one object while connecting; a red half holding still
+// against a breathing green one reads as two indicators that happen to touch.
+func (r *captionRenderer) dotPixel(x, y, w, h int) color.NRGBA {
+	if w <= 0 || h <= 0 {
+		return color.NRGBA{}
+	}
+	v := r.view
+	left, right := dotHalves(v.indicator, v.speechMuted)
+	fill := right
+	// Pixel centres, so the split lands between columns rather than through
+	// one, and an odd width does not favour a side.
+	px, py := float64(x)+0.5, float64(y)+0.5
+	cx, cy := float64(w)/2, float64(h)/2
+	if px < cx {
+		fill = left
+	}
+
+	// Coverage of the disc at this pixel, eased over one pixel of radius so
+	// the edge does not stair-step. Both axes, because the dot is square but
+	// the raster need not be.
+	rx, ry := cx, cy
+	dx, dy := (px-cx)/rx, (py-cy)/ry
+	dist := math.Sqrt(dx*dx+dy*dy) * math.Min(rx, ry)
+	edge := math.Min(rx, ry)
+	coverage := clamp01(float32(edge - dist))
+
+	alpha := clamp01(v.dotAlpha) * coverage
+	fill.A = uint8(float32(fill.A) * alpha)
+	return fill
 }

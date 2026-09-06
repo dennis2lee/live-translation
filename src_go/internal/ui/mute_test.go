@@ -1,6 +1,10 @@
 package ui
 
-import "testing"
+import (
+	"testing"
+
+	"github.com/dennis2lee/live-translation/src_go/internal/config"
+)
 
 // lastVolume is the gain the player is actually running at.
 func lastVolume(t *testing.T, f *fakeSpeaker) float64 {
@@ -152,5 +156,147 @@ func TestMuteWithNoPlayerRunning(t *testing.T) {
 
 	if got := lastVolume(t, factory.last()); got != 0 {
 		t.Errorf("gain = %v, want 0 — the mute was set before the player existed", got)
+	}
+}
+
+// --- the dot's mute half ---------------------------------------------------
+
+// Unmuted, the dot is what it has always been: one colour, decided by the
+// session state alone.
+func TestAnUnmutedDotIsOneColour(t *testing.T) {
+	for _, i := range []Indicator{IndicatorIdle, IndicatorBusy, IndicatorLive, IndicatorError} {
+		left, right := dotHalves(i, false)
+		if left != right {
+			t.Errorf("%s unmuted: halves differ (%v vs %v), want one colour", i, left, right)
+		}
+		if want := dotColour(i); right != want {
+			t.Errorf("%s unmuted: dot = %v, want %v", i, right, want)
+		}
+	}
+}
+
+// Muting is a second fact about the session, so it takes the half the status
+// is not using. The status half must go on saying exactly what it said before.
+func TestMutingColoursOnlyTheLeftHalf(t *testing.T) {
+	for _, i := range []Indicator{IndicatorIdle, IndicatorBusy, IndicatorLive, IndicatorError} {
+		left, right := dotHalves(i, true)
+		if left != colourMuted {
+			t.Errorf("%s muted: left half = %v, want the mute red %v", i, left, colourMuted)
+		}
+		if want := dotColour(i); right != want {
+			t.Errorf("%s muted: right half = %v, want the unchanged status %v", i, right, want)
+		}
+	}
+}
+
+// A muted live session and a broken one must not be the same red on the same
+// dot, or muting would look like a failure.
+func TestTheMuteRedIsNotTheErrorRed(t *testing.T) {
+	if colourMuted == colourError {
+		t.Fatal("the mute half and the error dot are the same colour")
+	}
+	mutedLive, _ := dotHalves(IndicatorLive, true)
+	if mutedLive == dotColour(IndicatorError) {
+		t.Error("a muted live session paints the error colour")
+	}
+}
+
+// m has to leave something on screen. The notice it prints scrolls away; a
+// session muted ten minutes ago must still be readable from the box.
+func TestMutingShowsOnTheDot(t *testing.T) {
+	w, _ := speakingWindow(t)
+	w.startPlayer()
+
+	if w.view.SpeechMuted() {
+		t.Fatal("setup: the dot started muted")
+	}
+	w.ToggleSpeechMute()
+	if !w.view.SpeechMuted() {
+		t.Error("m muted the sound but not the dot")
+	}
+	w.ToggleSpeechMute()
+	if w.view.SpeechMuted() {
+		t.Error("m unmuted the sound but left the dot red")
+	}
+}
+
+// Turning the feature off in Preferences clears the override on the gain. The
+// dot has to follow, or it would claim a mute that no longer exists — and no
+// key would clear it, because m refuses to act when speech is off.
+func TestTurningSpeechOffClearsTheMuteHalf(t *testing.T) {
+	w, _ := speakingWindow(t)
+	w.startPlayer()
+	w.ToggleSpeechMute()
+	if !w.view.SpeechMuted() {
+		t.Fatal("setup: the dot is not showing the mute")
+	}
+
+	old := w.settings
+	w.settings.SpeakTranslation = false
+	w.applySpeechChanges(old)
+
+	if w.speechMuted {
+		t.Error("the gain override survived speech being turned off")
+	}
+	if w.view.SpeechMuted() {
+		t.Error("the dot still claims a mute that no key can now clear")
+	}
+}
+
+// The renderer draws the split. Centre-left and centre-right are the two
+// halves; a corner is outside the disc and must stay transparent, or the dot
+// would be a square.
+func TestTheDotIsDrawnAsASplitDisc(t *testing.T) {
+	v := NewCaptionView(config.Default())
+	v.indicator = IndicatorLive
+	r := &captionRenderer{view: v}
+
+	const n = 32
+	leftPix := r.dotPixel(n/4, n/2, n, n)
+	rightPix := r.dotPixel(3*n/4, n/2, n, n)
+	corner := r.dotPixel(0, 0, n, n)
+
+	if corner.A != 0 {
+		t.Errorf("the dot's corner is painted (alpha %d) — it is a square, not a disc", corner.A)
+	}
+	if leftPix.A == 0 || rightPix.A == 0 {
+		t.Fatalf("the dot's middle is transparent: left %v right %v", leftPix, rightPix)
+	}
+	if leftPix != rightPix {
+		t.Errorf("unmuted halves differ: %v vs %v", leftPix, rightPix)
+	}
+
+	v.speechMuted = true
+	leftPix = r.dotPixel(n/4, n/2, n, n)
+	rightPix = r.dotPixel(3*n/4, n/2, n, n)
+	if leftPix == rightPix {
+		t.Fatal("muted, the dot is still one colour")
+	}
+	if leftPix.R != colourMuted.R || leftPix.G != colourMuted.G || leftPix.B != colourMuted.B {
+		t.Errorf("left half = %v, want the mute red", leftPix)
+	}
+	live := dotColour(IndicatorLive)
+	if rightPix.R != live.R || rightPix.G != live.G || rightPix.B != live.B {
+		t.Errorf("right half = %v, want the live green", rightPix)
+	}
+}
+
+// The pulse is the dot's, not one half's. A red half holding still against a
+// breathing green one reads as two indicators that happen to touch.
+func TestThePulseDimsBothHalves(t *testing.T) {
+	v := NewCaptionView(config.Default())
+	v.indicator = IndicatorBusy
+	v.speechMuted = true
+	v.dotAlpha = 0.5
+	r := &captionRenderer{view: v}
+
+	const n = 32
+	left := r.dotPixel(n/4, n/2, n, n)
+	right := r.dotPixel(3*n/4, n/2, n, n)
+	if left.A == 0xFF || right.A == 0xFF {
+		t.Fatalf("the pulse did not reach the dot: left %v right %v", left, right)
+	}
+	if left.A != right.A {
+		t.Errorf("halves pulse apart: left alpha %d, right alpha %d", left.A, right.A)
 	}
 }

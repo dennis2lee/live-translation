@@ -419,6 +419,7 @@ func (w *Window) applySpeechChanges(old config.Settings) {
 		// the transient override has nothing left to override. Leaving it set
 		// would make the next Apply that turns speech back on produce silence.
 		w.speechMuted = false
+		w.view.SetSpeechMuted(false)
 		w.stopPlayer()
 	case player == nil:
 		// Off→on, or a device that failed to open last time. Retrying on Apply
@@ -708,6 +709,7 @@ func (w *Window) ToggleSpeechMute() {
 	if player := w.player.Load(); player != nil {
 		player.SetVolume(w.speechGain())
 	}
+	w.view.SetSpeechMuted(w.speechMuted)
 	slog.Info("speech mute toggled", "muted", w.speechMuted)
 	if w.speechMuted {
 		w.showNotice("Speech muted — press m to unmute")
