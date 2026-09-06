@@ -199,6 +199,9 @@ func fastTiming(t *testing.T) {
 	t.Helper()
 	backoff, minSession, open, poll, grace := BackoffSeconds, MinSessionSeconds, OpenTimeout, idlePoll, backlogGrace
 	retire := RetireGrace
+	reserve, prep := PrepReserve, prepPoll
+	PrepReserve = 10 * time.Millisecond
+	prepPoll = time.Millisecond
 	BackoffSeconds = []time.Duration{5 * time.Millisecond}
 	MinSessionSeconds = 20 * time.Millisecond
 	OpenTimeout = 500 * time.Millisecond
@@ -208,6 +211,7 @@ func fastTiming(t *testing.T) {
 	t.Cleanup(func() {
 		BackoffSeconds, MinSessionSeconds, OpenTimeout, idlePoll, backlogGrace = backoff, minSession, open, poll, grace
 		RetireGrace = retire
+		PrepReserve, prepPoll = reserve, prep
 	})
 }
 

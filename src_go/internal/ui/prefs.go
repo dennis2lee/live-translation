@@ -102,6 +102,7 @@ type prefsDialog struct {
 	saveScript    *widget.Check
 	transcriptDir *widget.Entry
 	debugLogging  *widget.Check
+	adaptivePrep  *widget.Check
 
 	// meter is the dialog's own capture, opened only when there is no session
 	// to observe; observing says the meter is watching the session's capture
@@ -907,6 +908,15 @@ func (p *prefsDialog) behaviourTab() fyne.CanvasObject {
 	p.debugLogging = widget.NewCheck("Debug logging", nil)
 	p.debugLogging.SetChecked(p.working.DebugLogging)
 
+	p.adaptivePrep = widget.NewCheck("Adaptive session prep", nil)
+	p.adaptivePrep.SetChecked(p.working.AdaptiveSessionPrep)
+	prepHint := widget.NewLabel(
+		"The server ends a session about every nine minutes and warns first. " +
+			"This spends the warning waiting for the music filter to close, " +
+			"so the changeover lands where nothing is being translated. With " +
+			"the music filter off it does nothing.")
+	prepHint.Wrapping = fyne.TextWrapWord
+
 	// Where the log is, because it is not obvious and there is no terminal
 	// behind an installed .app. The level takes effect on Apply, in this
 	// process — no relaunch.
@@ -924,7 +934,8 @@ func (p *prefsDialog) behaviourTab() fyne.CanvasObject {
 		widget.NewFormItem("Line hold", p.lineHold),
 		widget.NewFormItem("Transcript folder", p.transcriptDir),
 	)
-	return container.NewVBox(form, p.completeOnly, p.saveScript, p.debugLogging, logHint)
+	return container.NewVBox(form, p.completeOnly, p.saveScript,
+		p.adaptivePrep, prepHint, p.debugLogging, logHint)
 }
 
 // --- buttons --------------------------------------------------------------
@@ -945,6 +956,9 @@ func (p *prefsDialog) collect() config.Settings {
 	s.MusicGateThreshold = p.musicThreshold.Value
 	s.MusicGateHold = p.musicHold.Value
 	s.MusicGateRelease = p.musicRelease.Value
+	if p.adaptivePrep != nil {
+		s.AdaptiveSessionPrep = p.adaptivePrep.Checked
+	}
 	if p.voiceSelect != nil {
 		name, _ := p.selectedVoice()
 		s = s.WithVoiceFor(s.TargetLanguageCode, name)

@@ -116,6 +116,25 @@ func FatalReason(err error) string {
 // session is always closed by us rather than dropped by the far end.
 var RetireGrace = 12 * time.Second
 
+// PrepReserve is how much of the server's go_away grace adaptive session prep
+// refuses to spend. Whatever is left over is how long it may wait for a quiet
+// moment.
+//
+// The swap needs the connect (243–391 ms measured) plus the replacement's
+// warm-up before it speaks (3.3–5.2 s), and RetireGrace (12 s) bounds the case
+// where it never speaks at all — so 20 s covers the worst measured path with
+// the whole retirement window inside it. Against the 50 s the server gives,
+// that leaves about 30 s of window-shopping. Erring large is right: waiting
+// too long means the far end hangs up mid-swap, which is the 2.8–4.2 s hole
+// that 1.3.0 was built to remove, while waiting too little only means the swap
+// happens where it used to.
+var PrepReserve = 20 * time.Second
+
+// prepPoll is how often the supervisor asks whether the moment has come. The
+// window it is waiting for is a song, which lasts tens of seconds, so this
+// costs nothing and does not need to be fine.
+var prepPoll = 250 * time.Millisecond
+
 // SpeechGapSeconds is how long the translated speech has to stop before the gap
 // is worth recording.
 //
@@ -129,11 +148,18 @@ const SpeechGapSeconds = 1.5
 
 // Stats is what the session did, for the transcript footer and the logs.
 type Stats struct {
-	Reconnects   int
-	GapsMS       []float64
-	ChunksSent   int
-	StartedAt    time.Time
-	MaxBacklogMS float64
+	Reconnects int
+	GapsMS     []float64
+	// PreppedSwaps is how many reconnects adaptive session prep placed in a
+	// quiet window, PrepWaitsMS how long each waited, and UnpreppedSwaps how
+	// many gave up and swapped on the server's schedule. Together they answer
+	// "did this feature do anything" from the transcript footer alone.
+	PreppedSwaps   int
+	PrepWaitsMS    []float64
+	UnpreppedSwaps int
+	ChunksSent     int
+	StartedAt      time.Time
+	MaxBacklogMS   float64
 
 	// SpeechGaps counts stretches with no translated audio at all, and
 	// SwapSilenceMS totals the ones that straddled a reconnect.
@@ -168,7 +194,9 @@ func (s Stats) Summary() string {
 		" max_backlog=" + formatMS(s.MaxBacklogMS) + "ms" +
 		" speech_gaps=" + itoa(s.SpeechGaps) +
 		" max_speech_gap=" + formatMS(s.MaxSpeechGapMS) + "ms" +
-		" swap_silence=" + formatMS(s.SwapSilenceMS) + "ms/" + itoa(s.SwapGaps)
+		" swap_silence=" + formatMS(s.SwapSilenceMS) + "ms/" + itoa(s.SwapGaps) +
+		" prepped_swaps=" + itoa(s.PreppedSwaps) + "/" +
+		itoa(s.PreppedSwaps+s.UnpreppedSwaps)
 }
 
 // Callbacks are delivered on the translator's own goroutines.
@@ -231,6 +259,18 @@ type Options struct {
 	// audio.
 	Filter func(chunk []byte) [][]byte
 
+	// AdaptiveSessionPrep holds a reconnect's session swap back until
+	// QuietMoment says nobody is listening. See waitForSwapWindow.
+	AdaptiveSessionPrep bool
+
+	// QuietMoment reports whether audio is being withheld right now, so a
+	// swap would be inaudible — in the application, the music gate being
+	// closed. Nil means there is no such window to wait for and adaptive prep
+	// does nothing, which is what makes it safe to leave on by default.
+	//
+	// Called from the supervisor on a poll, never from the send loop.
+	QuietMoment func() bool
+
 	// open is the session opener. Left nil, a genai-backed one is built from
 	// APIKey; the tests set it to a fake.
 	open sessionOpener
@@ -239,13 +279,15 @@ type Options struct {
 // Translator pushes PCM from the ring buffer to the Live API and emits
 // transcriptions.
 type Translator struct {
-	ring        *audio.Ring
-	apiKey      string
-	sessionCfg  SessionConfig
-	silenceGate bool
-	filter      func(chunk []byte) [][]byte
-	cb          Callbacks
-	open        sessionOpener
+	ring         *audio.Ring
+	apiKey       string
+	sessionCfg   SessionConfig
+	silenceGate  bool
+	filter       func(chunk []byte) [][]byte
+	adaptivePrep bool
+	quietMoment  func() bool
+	cb           Callbacks
+	open         sessionOpener
 
 	mu     sync.Mutex
 	state  State
@@ -288,6 +330,12 @@ type sessionHolder struct {
 	mu      sync.Mutex
 	err     error
 	session liveSession
+	// goAwayAt and goAwayLeft record the shutdown warning: when it arrived
+	// and how long the server said was left. Adaptive session prep spends
+	// that grace looking for a quiet moment, so it has to know how much
+	// there is rather than assume the measured 50 s.
+	goAwayAt   time.Time
+	goAwayLeft time.Duration
 	// abandoned is set when the supervisor gives up waiting for this holder.
 	// A session that opens afterwards has no owner and must not run — see
 	// adopt.
@@ -304,7 +352,26 @@ func newSessionHolder() *sessionHolder {
 
 func (h *sessionHolder) markReady()  { h.readyOnce.Do(func() { close(h.ready) }) }
 func (h *sessionHolder) markClosed() { h.closeOnce.Do(func() { close(h.closed) }) }
-func (h *sessionHolder) markGoAway() { h.goAwayOnce.Do(func() { close(h.goAway) }) }
+func (h *sessionHolder) markGoAway(left time.Duration) {
+	h.goAwayOnce.Do(func() {
+		h.mu.Lock()
+		h.goAwayAt, h.goAwayLeft = time.Now(), left
+		h.mu.Unlock()
+		close(h.goAway)
+	})
+}
+
+// graceLeft is how much of the server's warning remains. Zero when no warning
+// has arrived, or when the server did not say how long it was giving us.
+func (h *sessionHolder) graceLeft() time.Duration {
+	h.mu.Lock()
+	at, left := h.goAwayAt, h.goAwayLeft
+	h.mu.Unlock()
+	if at.IsZero() || left <= 0 {
+		return 0
+	}
+	return left - time.Since(at)
+}
 
 func (h *sessionHolder) setErr(err error) {
 	h.mu.Lock()
@@ -390,14 +457,16 @@ func New(opts Options) (*Translator, error) {
 		}
 	}
 	return &Translator{
-		ring:        opts.Ring,
-		apiKey:      opts.APIKey,
-		sessionCfg:  opts.Session,
-		silenceGate: opts.SilenceGate,
-		filter:      opts.Filter,
-		cb:          opts.Callbacks,
-		open:        open,
-		state:       StateIdle,
+		ring:         opts.Ring,
+		apiKey:       opts.APIKey,
+		sessionCfg:   opts.Session,
+		silenceGate:  opts.SilenceGate,
+		filter:       opts.Filter,
+		adaptivePrep: opts.AdaptiveSessionPrep,
+		quietMoment:  opts.QuietMoment,
+		cb:           opts.Callbacks,
+		open:         open,
+		state:        StateIdle,
 	}, nil
 }
 
@@ -611,6 +680,10 @@ func (t *Translator) supervise(ctx context.Context) {
 			return
 		}
 
+		// Spend what the server gave us looking for a moment when the swap
+		// cannot be heard. Returns at once unless everything lines up.
+		t.waitForSwapWindow(ctx, holder)
+
 		// A session that opened and died immediately is a failure too, or a
 		// server dropping every connection becomes a hot loop.
 		lifetime := time.Since(openedAt)
@@ -724,7 +797,7 @@ func (t *Translator) sessionMain(ctx context.Context, holder *sessionHolder, han
 		// is set: this session must keep receiving until the swap completes.
 		if msg.GoAway && !holder.sawGoAway() {
 			slog.Info("go_away received — opening replacement", "time_left", msg.GoAwayLeft)
-			holder.markGoAway()
+			holder.markGoAway(msg.GoAwayLeft)
 		}
 
 		// 2) Resumption handle — always keep the newest the *active* session
@@ -1090,4 +1163,87 @@ func rms(pcm []byte) float64 {
 		acc += v * v
 	}
 	return math.Sqrt(acc / float64(n))
+}
+
+// waitForSwapWindow holds a reconnect back until the swap would be inaudible.
+//
+// The server ends a session about every nine minutes and warns 50 s ahead. The
+// swap itself needs a fraction of that, so the remainder is time the server
+// gave us to choose a moment — and until now it was thrown away: the
+// replacement opened within 300 ms of the warning, every time, whatever was
+// being said.
+//
+// A swap made while the music gate is closed costs the listener nothing. No
+// audio is going out, so none is coming back, and the crossover that would
+// otherwise interrupt a sentence interrupts a silence instead.
+//
+// Four things end the wait, and three of them are refusals:
+//
+//   - the quiet moment arrives — the point of the exercise;
+//   - the reserve runs out, so the swap happens where it always did;
+//   - the session dies early, which the supervisor must handle immediately;
+//   - the run is stopping.
+//
+// It can only choose *when* a swap happens, never whether. A session is
+// replaced on the server's schedule either way.
+func (t *Translator) waitForSwapWindow(ctx context.Context, holder *sessionHolder) {
+	if !t.adaptivePrep || t.quietMoment == nil || !holder.sawGoAway() {
+		return
+	}
+	// Already quiet: take it without burning a poll interval.
+	if t.quietMoment() {
+		t.notePreppedSwap(0)
+		return
+	}
+	budget := holder.graceLeft() - PrepReserve
+	if budget <= 0 {
+		// Either the server did not say how long it was giving us, or it gave
+		// less than the swap needs. Neither is a case for gambling.
+		return
+	}
+	slog.Info("waiting for a quiet moment to swap sessions", "budget", budget)
+
+	started := time.Now()
+	deadline := time.After(budget)
+	ticker := time.NewTicker(prepPoll)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-holder.closed:
+			slog.Info("the session ended before a quiet moment came")
+			return
+		case <-deadline:
+			slog.Info("no quiet moment came — swapping anyway",
+				"waited", time.Since(started).Round(time.Millisecond))
+			t.noteUnpreppedSwap()
+			return
+		case <-ticker.C:
+			if t.quietMoment() {
+				waited := time.Since(started)
+				slog.Info("quiet moment — swapping now",
+					"waited", waited.Round(time.Millisecond))
+				t.notePreppedSwap(waited)
+				return
+			}
+		}
+	}
+}
+
+// notePreppedSwap records a swap that landed in a quiet window, and how long
+// it waited for one. Counted because "is this feature doing anything" is
+// otherwise unanswerable from a log.
+func (t *Translator) notePreppedSwap(waited time.Duration) {
+	t.mu.Lock()
+	t.stats.PreppedSwaps++
+	t.stats.PrepWaitsMS = append(t.stats.PrepWaitsMS,
+		float64(waited.Microseconds())/1000.0)
+	t.mu.Unlock()
+}
+
+func (t *Translator) noteUnpreppedSwap() {
+	t.mu.Lock()
+	t.stats.UnpreppedSwaps++
+	t.mu.Unlock()
 }

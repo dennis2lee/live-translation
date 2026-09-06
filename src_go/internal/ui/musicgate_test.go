@@ -3,9 +3,11 @@ package ui
 import (
 	"errors"
 	"os"
+	"reflect"
 	"testing"
 
 	"github.com/dennis2lee/live-translation/src_go/internal/classify"
+	"github.com/dennis2lee/live-translation/src_go/internal/config"
 	"github.com/dennis2lee/live-translation/src_go/internal/translator"
 )
 
@@ -156,5 +158,102 @@ func TestStopTranslationRetiresTheGate(t *testing.T) {
 
 	if w.musicGate != nil {
 		t.Error("StopTranslation left the gate running")
+	}
+}
+
+// --- adaptive session prep -------------------------------------------------
+
+// With no music gate there is no window to wait for, so the predicate must be
+// nil rather than a function that always says no: a translator handed one
+// would sit out the whole reserve at every reconnect for nothing. This is what
+// makes the feature safe to ship switched on.
+func TestWithNoGateThereIsNoQuietPredicate(t *testing.T) {
+	w := newTestWindow(t)
+	w.musicGate = nil
+	if w.gateClosed() != nil {
+		t.Error("gateClosed returned a predicate with no gate running")
+	}
+}
+
+// A running gate gives a predicate that reads it. Whether it tracks the gate
+// as the gate changes is Gate.Closed's own contract, tested in classify; what
+// is tested here is that the window hands over the live gate rather than a
+// snapshot of its state taken when the translator was built.
+func TestARunningGateGivesAPredicate(t *testing.T) {
+	w := newTestWindow(t)
+	gate := &classify.Gate{}
+	w.musicGate = gate
+	quiet := w.gateClosed()
+	if quiet == nil {
+		t.Fatal("no predicate with a gate running")
+	}
+	if quiet() != gate.Closed() {
+		t.Error("the predicate does not report what the gate reports")
+	}
+	// A fresh gate is open, so comparing return values cannot tell the live
+	// method from a wrapper that always says no — and that wrapper is the
+	// mistake worth catching, because it would sit out the whole reserve at
+	// every reconnect and look like the feature simply never fires. The gate
+	// cannot be closed from this package without a test-only door in
+	// classify, so pin the handover itself: the predicate must *be* the
+	// gate's method, not a closure over a value read once.
+	want := reflect.ValueOf(gate.Closed).Pointer()
+	if got := reflect.ValueOf(quiet).Pointer(); got != want {
+		t.Error("the predicate is a wrapper, not the gate's own Closed method")
+	}
+}
+
+// Every option the session is opened with has to force a rebuild, or the
+// setting silently does nothing until the next restart.
+func TestTheSettingsThatNeedAFreshSession(t *testing.T) {
+	base := config.Default()
+	for name, change := range map[string]func(config.Settings) config.Settings{
+		"adaptive session prep": func(s config.Settings) config.Settings {
+			s.AdaptiveSessionPrep = !s.AdaptiveSessionPrep
+			return s
+		},
+		"music gate":   func(s config.Settings) config.Settings { s.MusicGate = !s.MusicGate; return s },
+		"silence gate": func(s config.Settings) config.Settings { s.SilenceGate = !s.SilenceGate; return s },
+		"target language": func(s config.Settings) config.Settings {
+			s.TargetLanguageCode = "ko"
+			return s
+		},
+		"source vocabulary": func(s config.Settings) config.Settings {
+			s.VocabularySource = "새 단어"
+			return s
+		},
+	} {
+		if !sessionNeedsRestart(base, change(base)) {
+			t.Errorf("%s changed without asking for a fresh session", name)
+		}
+	}
+}
+
+// And the ones that must not: a rebuild punches a hole in the audio, so
+// anything that reaches a running session has to stay out of that list.
+func TestTheSettingsThatMustNotRestartTheSession(t *testing.T) {
+	base := config.Default()
+	for name, change := range map[string]func(config.Settings) config.Settings{
+		"speech volume":  func(s config.Settings) config.Settings { s.SpeechVolume = 0.1; return s },
+		"font size":      func(s config.Settings) config.Settings { s.FontSize = 99; return s },
+		"gate threshold": func(s config.Settings) config.Settings { s.MusicGateThreshold = 0.9; return s },
+		"gate release":   func(s config.Settings) config.Settings { s.MusicGateRelease = 4; return s },
+		"debug logging":  func(s config.Settings) config.Settings { s.DebugLogging = !s.DebugLogging; return s },
+		"clear on silence": func(s config.Settings) config.Settings {
+			s.ClearAfterSeconds = 9
+			return s
+		},
+	} {
+		if sessionNeedsRestart(base, change(base)) {
+			t.Errorf("%s asked for a fresh session — every Apply would cut the audio", name)
+		}
+	}
+}
+
+// Nothing changed, nothing to do.
+func TestUnchangedSettingsNeedNoRestart(t *testing.T) {
+	s := config.Default()
+	if sessionNeedsRestart(s, s) {
+		t.Error("identical settings asked for a restart")
 	}
 }

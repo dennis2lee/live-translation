@@ -385,12 +385,7 @@ func (w *Window) applySessionChanges(old config.Settings) {
 			ReleaseSeconds: next.MusicGateRelease,
 		})
 	}
-	if old.TargetLanguageCode != next.TargetLanguageCode ||
-		old.SilenceGate != next.SilenceGate ||
-		old.MusicGate != next.MusicGate ||
-		old.EchoTargetLanguage != next.EchoTargetLanguage ||
-		old.VocabularySource != next.VocabularySource ||
-		old.VocabularyCaptions != next.VocabularyCaptions {
+	if sessionNeedsRestart(old, next) {
 		if old.TargetLanguageCode != next.TargetLanguageCode {
 			if w.writer != nil {
 				w.writer.NoteDirection(config.DirectionLabelFor(next.TargetLanguageCode),
@@ -400,6 +395,30 @@ func (w *Window) applySessionChanges(old config.Settings) {
 		}
 		w.restartTranslator()
 	}
+}
+
+// sessionNeedsRestart reports whether a settings change reaches something the
+// live session was opened with, and so cannot be applied to the session in
+// front of us.
+//
+// Pure, and separate from applySessionChanges, because it is a list that keeps
+// growing: every option read once at open has to be added here, and a list
+// that can be read at a glance and tested directly is the difference between
+// noticing that and shipping a setting that silently does nothing until the
+// next restart.
+//
+// What is *not* here matters as much. Caption appearance, the music gate's
+// tuning sliders, speech volume and the log level all reach a running session
+// without a rebuild, and adding one of them here would punch a hole in the
+// audio on every Apply.
+func sessionNeedsRestart(old, next config.Settings) bool {
+	return old.TargetLanguageCode != next.TargetLanguageCode ||
+		old.SilenceGate != next.SilenceGate ||
+		old.MusicGate != next.MusicGate ||
+		old.AdaptiveSessionPrep != next.AdaptiveSessionPrep ||
+		old.EchoTargetLanguage != next.EchoTargetLanguage ||
+		old.VocabularySource != next.VocabularySource ||
+		old.VocabularyCaptions != next.VocabularyCaptions
 }
 
 // applySpeechChanges brings the player into line with the settings, doing the
@@ -548,6 +567,14 @@ func (w *Window) stopMusicGate() {
 }
 
 func (w *Window) newTranslator(ring *audio.Ring, apiKey string) (*translator.Translator, error) {
+	// Built here, not inline below: musicFilter is what creates the gate that
+	// gateClosed then reads, so the order is load-bearing. Inside a struct
+	// literal it would be held up only by the lexical evaluation order, and
+	// reordering two fields would silently leave adaptive prep with no window
+	// to wait for.
+	filter := w.musicFilter()
+	quiet := w.gateClosed()
+
 	return translator.New(translator.Options{
 		Ring:   ring,
 		APIKey: apiKey,
@@ -558,7 +585,11 @@ func (w *Window) newTranslator(ring *audio.Ring, apiKey string) (*translator.Tra
 			CaptionTerms:       w.settings.CaptionTerms(),
 		},
 		SilenceGate: w.settings.SilenceGate,
-		Filter:      w.musicFilter(),
+		Filter:      filter,
+		// With the gate off, quiet is nil: adaptive prep then does nothing
+		// rather than waiting for a window that can never come.
+		AdaptiveSessionPrep: w.settings.AdaptiveSessionPrep,
+		QuietMoment:         quiet,
 		Callbacks: translator.Callbacks{
 			// Every one of these arrives on a translator goroutine, so each
 			// hops to the UI goroutine before touching anything.
@@ -1181,4 +1212,20 @@ func nowSeconds() float64 { return time.Since(processStart).Seconds() }
 func deviceLabel(d audio.InputDevice) string {
 	return fmt.Sprintf("%s  —  %dch / %.0f Hz", strings.TrimSpace(d.Name),
 		d.Channels, d.DefaultSampleRate)
+}
+
+// gateClosed is the predicate adaptive session prep waits on: the music gate
+// holding audio back, which is when a session swap cannot be heard.
+//
+// Nil when there is no gate, which is what makes the feature safe to leave on
+// by default — with the music filter off, a swap happens exactly when it
+// always did.
+//
+// Read from the supervisor goroutine; Gate.Closed takes the gate's own lock.
+func (w *Window) gateClosed() func() bool {
+	gate := w.musicGate
+	if gate == nil {
+		return nil
+	}
+	return gate.Closed
 }

@@ -209,6 +209,22 @@ type Settings struct {
 	// 2.0 s (spike y5_flap). The pre-roll makes the wait cost no speech.
 	MusicGateRelease float64 `json:"music_gate_release"`
 
+	// AdaptiveSessionPrep delays a reconnect's session swap until the music
+	// gate is holding audio back, so the swap lands where nobody is listening.
+	//
+	// The server ends a session about every nine minutes and says so 50 s in
+	// advance; the swap itself needs only a fraction of that, so the rest is
+	// time the server gave us to pick a moment. A swap made while a song is
+	// playing costs the listener nothing, because no audio is going out and
+	// none is coming back. If no such moment arrives before the reserve runs
+	// out, the swap happens anyway — this can only choose *when*, never
+	// whether.
+	//
+	// Opportunistic: with the music gate off there is no window to wait for
+	// and the swap is immediate, exactly as before. Default on for that
+	// reason — it cannot make an ungated session worse.
+	AdaptiveSessionPrep bool `json:"adaptive_session_prep"`
+
 	// Terms to bias speech recognition towards, one per line. Two lists,
 	// because they are genuinely different: what the model should hear in the
 	// source language, and how names should come out in the captions. They must
@@ -248,8 +264,11 @@ func Default() Settings {
 		MusicGateThreshold: 0.5,
 		MusicGateHold:      2.0,
 		MusicGateRelease:   1.5,
-		TargetLanguageCode: "en",
-		CaptionPolicy:      string(captions.PolicyIncremental),
+		// On: with the music gate off it does nothing, and Load unmarshals
+		// over the defaults so an older settings file keeps this true.
+		AdaptiveSessionPrep: true,
+		TargetLanguageCode:  "en",
+		CaptionPolicy:       string(captions.PolicyIncremental),
 	}
 }
 
