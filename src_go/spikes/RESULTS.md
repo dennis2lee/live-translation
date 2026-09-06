@@ -5,7 +5,7 @@ discipline as the Python build's `spikes/RESULTS.md`: numbers, not impressions,
 and the gaps named as gaps.
 
 Stack under test: Fyne v2.8.0, malgo v0.11.25 (miniaudio), libsoxr 0.1.3
-(Homebrew), google.golang.org/genai v1.67.0, fernet-go, go-keyring.
+(Homebrew), google.golang.org/genai v1.71.0, fernet-go, go-keyring.
 
 | Spike | Verdict |
 |---|---|

@@ -102,7 +102,11 @@ func readWAV(path string) ([]byte, error) {
 func main() {
 	fixture := flag.String("fixture", "../spikes/fixtures/ko_fixture.wav", "16 kHz mono WAV to stream")
 	seconds := flag.Float64("seconds", 30, "how much of the fixture to send")
-	target := flag.String("target", "en-US", "target language code")
+	// A bare code. The API accepts "en-US" at connect and then closes the
+	// socket with "invalid argument" a moment after setupComplete, which
+	// reads exactly like an SDK fault — this default sent every SDK bump
+	// looking for a regression that was not there. See CLAUDE.md.
+	target := flag.String("target", "en", "target language code, bare (en, ko)")
 	bisect := flag.Bool("bisect", false, "find which config field the server rejects")
 	flag.Parse()
 

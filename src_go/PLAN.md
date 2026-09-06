@@ -23,7 +23,7 @@ assumed. Everything else that could gate a decision is assigned to a spike in
 Every hard rule in `CLAUDE.md` applies to the Go code with only the SDK name
 translated:
 
-- SDK is `google.golang.org/genai` (v1.67.0 **[verified]** — the official Go
+- SDK is `google.golang.org/genai` (v1.71.0 **[verified]** — the official Go
   Gen AI SDK). Model name exactly `gemini-3.5-live-translate-preview`.
 - `ResponseModalities` must be `["AUDIO"]`; never send text input; received
   audio is consumed and discarded, or the stream stalls.
@@ -58,7 +58,7 @@ Checked directly, output on file in the session log:
 
 - **Go 1.26.5 darwin/arm64 installed** [verified]; `libsoxr` present via
   Homebrew [verified].
-- **`google.golang.org/genai` v1.67.0 has the complete Live surface this app
+- **`google.golang.org/genai` v1.71.0 has the complete Live surface this app
   needs** [verified via `go doc`]:
   - `LiveConnectConfig` with `TranslationConfig` (exactly two fields:
     `TargetLanguageCode`, `EchoTargetLanguage` — same as Python, no source
@@ -107,7 +107,7 @@ see `src_go/spikes/RESULTS.md`.
 
 | Concern | Python today | Go choice | Alternatives considered |
 |---|---|---|---|
-| Live API | `google-genai` | `google.golang.org/genai` v1.67.0, pinned | Raw WebSocket (escape hatch only) |
+| Live API | `google-genai` | `google.golang.org/genai` v1.71.0, pinned | Raw WebSocket (escape hatch only) |
 | GUI | PyQt6 | **Fyne v2** (decided — see §3.1) | DarwinKit (rejected: macOS-only, and Windows full-screen is a requirement), Gio (last resort: no menu system) |
 | Audio capture | sounddevice/PortAudio | **`github.com/gen2brain/malgo`** (miniaudio; cgo but vendors its own C — no external install) | `gordonklaus/portaudio` (needs brew portaudio + dylib bundling) |
 | Resampling | soxr | **libsoxr via cgo on macOS, pure-Go windowed sinc elsewhere**, chosen by build tag. Both measured in one test run; with the rolloff corrected the pure-Go filter matches libsoxr (`spikes/RESULTS.md`) | Shipping a cross-built libsoxr DLL on Windows — rejected, it would turn a one-file installer into two |
@@ -846,7 +846,7 @@ in the same session, so the spec never forks.
 | ~~Fyne Korean rendering unacceptable~~ | **closed** | F1 measured: renders with the bundled font, untouched |
 | Fyne native-menu gaps (roles, check-state) | low–medium | F2 spike; fall back to in-window menu on macOS (Windows behaviour anyway) |
 | Windows full-screen not covering the taskbar | low (documented GLFW behaviour) | cannot be tested from this Mac; first item of the Windows phase, on real hardware |
-| genai Go SDK "Preview" surface changes under us | medium over time | pin v1.67.0; L1 smoke re-run on every bump; raw-WS escape hatch documented. L1 proved the surface works, so a regression is now detectable in one command |
+| genai Go SDK "Preview" surface changes under us | medium over time | pin v1.71.0; L1 smoke re-run on every bump; raw-WS escape hatch documented. L1 proved the surface works, so a regression is now detectable in one command |
 | malgo device quirks vs PortAudio (X3!) | low–medium | A1 spike uses the exact device that bit us before — **still to be run**, the X3 was not connected on 2026-08-05 |
 | libsoxr bundling friction | low | rpath fix in build script; R1's pure-Go fallback, now measured rather than assumed |
 | Unsigned Go binary re-prompts Keychain after every rebuild | certain, dev-only | known annoyance; documented; goes away with codesigning |

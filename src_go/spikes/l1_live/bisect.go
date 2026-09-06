@@ -36,7 +36,7 @@ func bisectConfig(ctx context.Context, client *genai.Client, audio []byte) {
 			OutputAudioTranscription: &genai.AudioTranscriptionConfig{},
 			InputAudioTranscription:  &genai.AudioTranscriptionConfig{},
 			TranslationConfig: &genai.TranslationConfig{
-				TargetLanguageCode: "en-US",
+				TargetLanguageCode: bisectTarget,
 				EchoTargetLanguage: &echo,
 			},
 		}},
@@ -45,7 +45,7 @@ func bisectConfig(ctx context.Context, client *genai.Client, audio []byte) {
 			OutputAudioTranscription: &genai.AudioTranscriptionConfig{},
 			InputAudioTranscription:  &genai.AudioTranscriptionConfig{},
 			TranslationConfig: &genai.TranslationConfig{
-				TargetLanguageCode: "en-US",
+				TargetLanguageCode: bisectTarget,
 				EchoTargetLanguage: &echo,
 			},
 			ContextWindowCompression: &genai.ContextWindowCompressionConfig{
@@ -57,7 +57,7 @@ func bisectConfig(ctx context.Context, client *genai.Client, audio []byte) {
 			OutputAudioTranscription: &genai.AudioTranscriptionConfig{},
 			InputAudioTranscription:  &genai.AudioTranscriptionConfig{},
 			TranslationConfig: &genai.TranslationConfig{
-				TargetLanguageCode: "en-US",
+				TargetLanguageCode: bisectTarget,
 				EchoTargetLanguage: &echo,
 			},
 			ContextWindowCompression: &genai.ContextWindowCompressionConfig{
@@ -119,3 +119,9 @@ func probeSetup(ctx context.Context, client *genai.Client, cfg *genai.LiveConnec
 		return fmt.Sprintf("ok — %d messages, no transcription yet", count)
 	}
 }
+
+// bisectTarget is a bare language code on purpose. With "en-US" here the
+// server rejects every variant from "+ translation" onwards, so the bisector
+// blames the translation config whatever the real cause is — the one thing a
+// bisector must never do.
+const bisectTarget = "en"
