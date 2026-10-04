@@ -241,9 +241,11 @@ func (w *Window) bindKeys() {
 			w.SetDirection(config.EnglishToKorean)
 		case '9':
 			w.ToggleCompletePhrases()
-		case 'm', 'M':
+		// ㅡ and ㄹ are what the m and f keys type under the Korean input
+		// source, where the rune is the jamo and never 'm' or 'f'.
+		case 'm', 'M', 'ㅡ':
 			w.ToggleSpeechMute()
-		case 'f', 'F':
+		case 'f', 'F', 'ㄹ':
 			// Full screen hides the menu on the platforms that draw it in the
 			// window, so this is the way back out — and the only reliable one,
 			// since Escape was measured not to arrive in full screen. Never
