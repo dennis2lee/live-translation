@@ -270,3 +270,20 @@ func TestTheTailMustAlreadyBeQueued(t *testing.T) {
 		t.Errorf("trimmed on silence that had not arrived: %d bytes", got)
 	}
 }
+
+// One chunk skipped per chunk played, so a pause plays at no more than double
+// speed. Skipping two per call would collapse pauses at triple speed and
+// still pass every other test here.
+func TestAtMostOneChunkIsSkippedPerCallback(t *testing.T) {
+	p, st := trimmingPlayer(2)
+	st.ring.Write(samples(fill(TranslatedRate/2, 0)...)) // 500 ms of silence, far over the threshold
+	block := 960                                         // 20 ms
+	before := st.ring.Available()
+	p.onPlayback(make([]byte, block), nil, uint32(block/BytesPerSample))
+	if got := st.ring.Trimmed(); got != int64(block) {
+		t.Errorf("trimmed %d bytes in one callback, want exactly one block (%d)", got, block)
+	}
+	if used := before - st.ring.Available(); used != 2*block {
+		t.Errorf("one callback consumed %d bytes, want one played and one skipped (%d)", used, 2*block)
+	}
+}

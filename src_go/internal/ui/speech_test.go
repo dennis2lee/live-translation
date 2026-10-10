@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"github.com/dennis2lee/live-translation/src_go/internal/audio"
+	"github.com/dennis2lee/live-translation/src_go/internal/config"
 	"github.com/dennis2lee/live-translation/src_go/internal/translator"
 )
 
@@ -20,6 +21,10 @@ type fakeSpeaker struct {
 	stops   int
 	volumes []float64
 	written [][]byte
+
+	speechWrites int
+	resets       int
+	sessionMarks int
 }
 
 func (f *fakeSpeaker) Start() (audio.OutputDevice, error) {
@@ -46,6 +51,35 @@ func (f *fakeSpeaker) Write(pcm []byte) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.written = append(f.written, append([]byte(nil), pcm...))
+}
+
+// WriteSpeech records like Write, and counts separately, so a test can tell
+// the model's path (gated) from a local voice's (not).
+func (f *fakeSpeaker) WriteSpeech(pcm []byte) {
+	f.mu.Lock()
+	f.speechWrites++
+	f.mu.Unlock()
+	f.Write(pcm)
+}
+
+// MarkSessionStart counts calls.
+func (f *fakeSpeaker) MarkSessionStart() {
+	f.mu.Lock()
+	f.sessionMarks++
+	f.mu.Unlock()
+}
+
+// ResetSpeech counts calls.
+func (f *fakeSpeaker) ResetSpeech() {
+	f.mu.Lock()
+	f.resets++
+	f.mu.Unlock()
+}
+
+func (f *fakeSpeaker) speechCounts() (speech, resets int) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.speechWrites, f.resets
 }
 
 func (f *fakeSpeaker) SetVolume(v float64) {
@@ -414,5 +448,91 @@ func TestApplyingAnUnrelatedSettingKeepsSpeaking(t *testing.T) {
 	}
 	if _, stops := player.counts(); stops != 0 {
 		t.Errorf("Stop called %d times for a layout change", stops)
+	}
+}
+
+// --- the freeze gate's wiring -------------------------------------------------
+
+// The model's audio goes through the freeze gate; a local voice does not.
+// Swap either and the ui tests used to pass regardless, because the fake
+// treated both methods as one.
+func TestOnlyTheModelsVoiceIsGated(t *testing.T) {
+	w, factory := speakingWindow(t)
+	w.startPlayer()
+	player := factory.last()
+
+	w.speakAudio(make([]byte, 480))
+	if speech, _ := player.speechCounts(); speech != 1 {
+		t.Errorf("the model's audio went through WriteSpeech %d times, want 1", speech)
+	}
+
+	w.playLocalVoice(make([]byte, 480))
+	if speech, _ := player.speechCounts(); speech != 1 {
+		t.Error("a local voice went through the freeze gate")
+	}
+	if got := len(player.writes()); got != 2 {
+		t.Errorf("%d writes reached the player, want 2", got)
+	}
+}
+
+// Switching back from a local voice to the model must drop the model audio
+// the gate held from before the switch, or it plays first.
+func TestReturningToTheModelsVoiceDropsTheHeldTail(t *testing.T) {
+	w, factory := speakingWindow(t)
+	w.startPlayer()
+	player := factory.last()
+
+	w.stopVoice()
+	if _, resets := player.speechCounts(); resets != 1 {
+		t.Errorf("ResetSpeech called %d times on the switch back, want 1", resets)
+	}
+}
+
+// A restart keeps the player and replaces the model's stream, so the gate's
+// held tail from the old session has to go — otherwise it plays in front of
+// the new session's first words, possibly in the other language.
+func TestARestartDropsTheHeldTail(t *testing.T) {
+	w, factory := speakingWindow(t)
+	w.startPlayer()
+	player := factory.last()
+	defer config.SetEnvForTests(func(name string) string {
+		if name == "GEMINI_API_KEY" {
+			return "AIza-test-key-not-real"
+		}
+		return ""
+	})()
+	w.buildTranslator = func(*audio.Ring, string) (*translator.Translator, error) {
+		return nil, errors.New("no network in tests")
+	}
+
+	w.restartTranslator()
+	if _, resets := player.speechCounts(); resets != 1 {
+		t.Errorf("ResetSpeech called %d times on a restart, want 1", resets)
+	}
+}
+
+// The translator's session-start signal has to reach the player, directly
+// and in order with the audio: the player removes a session's opening buzz
+// whole only if it knows where the session opened.
+func TestASessionStartReachesThePlayer(t *testing.T) {
+	w, factory := speakingWindow(t)
+	w.startPlayer()
+	player := factory.last()
+
+	cb := w.translatorCallbacks()
+	if cb.OnSessionStart == nil {
+		t.Fatal("the translator is given no way to report a session start")
+	}
+	cb.OnSessionStart()
+	cb.OnAudio(make([]byte, 480))
+
+	player.mu.Lock()
+	marks := player.sessionMarks
+	player.mu.Unlock()
+	if marks != 1 {
+		t.Errorf("the player saw %d session starts, want 1", marks)
+	}
+	if speech, _ := player.speechCounts(); speech != 1 {
+		t.Errorf("the model's audio reached WriteSpeech %d times, want 1", speech)
 	}
 }

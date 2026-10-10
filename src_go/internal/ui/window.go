@@ -107,6 +107,10 @@ type Window struct {
 	// the start/stop/reopen rules without opening a device — malgo opens real
 	// hardware, and a test that needs headphones plugged in is not a test.
 	newSpeaker func(deviceName string, sourceRate int) speaker
+	// buildTranslator makes the translator a session runs on. Tests replace
+	// it so a restart can be driven without opening a socket; nil means
+	// newTranslator.
+	buildTranslator func(ring *audio.Ring, apiKey string) (*translator.Translator, error)
 	// speechMuted is the m key. It is a runtime override on the gain and is
 	// deliberately *not* persisted: Settings.SpeakTranslation is the durable
 	// switch, and a second durable switch for the same thing gives a silent
@@ -495,7 +499,11 @@ func (w *Window) restartTranslator() {
 		w.translator.Stop()
 		w.translator = nil
 	}
-	tr, err := w.newTranslator(w.capture.Ring, apiKey)
+	// The player outlives the translator here. Without this the old
+	// session's last 210 ms, held by the freeze gate, would play in front of
+	// the new session's first words — possibly in the other language.
+	w.resetSpeech()
+	tr, err := w.makeTranslator(w.capture.Ring, apiKey)
 	if err != nil {
 		w.stopMusicGate()
 		w.failToStart(err.Error())
@@ -592,19 +600,7 @@ func (w *Window) newTranslator(ring *audio.Ring, apiKey string) (*translator.Tra
 		// rather than waiting for a window that can never come.
 		AdaptiveSessionPrep: w.settings.AdaptiveSessionPrep,
 		QuietMoment:         quiet,
-		Callbacks: translator.Callbacks{
-			// Every one of these arrives on a translator goroutine, so each
-			// hops to the UI goroutine before touching anything.
-			OnSource: func(text string) { fyne.Do(func() { w.view.SetSourceText(text) }) },
-			OnTarget: func(text string) { fyne.Do(func() { w.onTargetText(text) }) },
-			OnState: func(s translator.State, detail string) {
-				fyne.Do(func() { w.onStateChanged(s, detail) })
-			},
-			OnReconnect:    func() { fyne.Do(w.onReconnected) },
-			OnTurnComplete: func() { fyne.Do(w.onTurnComplete) },
-			// The exception to the rule above, deliberately — see speakAudio.
-			OnAudio: w.speakAudio,
-		},
+		Callbacks:           w.translatorCallbacks(),
 	})
 }
 
@@ -626,7 +622,7 @@ func (w *Window) speakAudio(pcm []byte) {
 		return
 	}
 	if p := w.player.Load(); p != nil {
-		p.Write(pcm)
+		p.WriteSpeech(pcm)
 	}
 }
 
@@ -645,18 +641,70 @@ func (w *Window) startVoice() {
 		w.showNotice("This machine has no local speech synthesis — using the model's voice")
 		return
 	}
-	w.voice = tts.NewSpeaker(want, func(pcm []byte) {
-		if p := w.player.Load(); p != nil {
-			p.Write(pcm)
-		}
-	})
+	w.voice = tts.NewSpeaker(want, w.playLocalVoice)
 	w.voiceActive.Store(true)
 	slog.Info("speaking the translation locally", "voice", want,
 		"target", w.settings.TargetLanguageCode)
 }
 
 // stopVoice detaches it, and hands the output path back to the model's audio.
+// translatorCallbacks is how the translator reaches the window. A method of
+// its own so the wiring — which callback hops to the UI goroutine and which
+// must not — can be tested without a session.
+func (w *Window) translatorCallbacks() translator.Callbacks {
+	return translator.Callbacks{
+		// Every one of these arrives on a translator goroutine, so each
+		// hops to the UI goroutine before touching anything.
+		OnSource: func(text string) { fyne.Do(func() { w.view.SetSourceText(text) }) },
+		OnTarget: func(text string) { fyne.Do(func() { w.onTargetText(text) }) },
+		OnState: func(s translator.State, detail string) {
+			fyne.Do(func() { w.onStateChanged(s, detail) })
+		},
+		OnReconnect:    func() { fyne.Do(w.onReconnected) },
+		OnTurnComplete: func() { fyne.Do(w.onTurnComplete) },
+		// The exception to the rule above, deliberately — see speakAudio.
+		OnAudio: w.speakAudio,
+		// The same exception: it has to reach the player in order with
+		// the audio, which a hop through fyne.Do would not guarantee.
+		OnSessionStart: w.markSessionStart,
+	}
+}
+
+func (w *Window) makeTranslator(ring *audio.Ring, apiKey string) (*translator.Translator, error) {
+	if w.buildTranslator != nil {
+		return w.buildTranslator(ring, apiKey)
+	}
+	return w.newTranslator(ring, apiKey)
+}
+
+// playLocalVoice plays a chosen local voice. Write, not WriteSpeech: the
+// freeze gate is for the model's audio, and a synthesized voice's fading
+// final syllable is exactly the shape it removes.
+func (w *Window) playLocalVoice(pcm []byte) {
+	if p := w.player.Load(); p != nil {
+		p.Write(pcm)
+	}
+}
+
+// markSessionStart tells the player a new session's first audio is next.
+// Called on the receive goroutine, like speakAudio, and touches no widget.
+func (w *Window) markSessionStart() {
+	if p := w.player.Load(); p != nil {
+		p.MarkSessionStart()
+	}
+}
+
+// resetSpeech drops model audio the player is holding for the freeze gate.
+func (w *Window) resetSpeech() {
+	if p := w.player.Load(); p != nil {
+		p.ResetSpeech()
+	}
+}
+
 func (w *Window) stopVoice() {
+	// Model audio from before the local voice took over is still held by the
+	// freeze gate; it must not play first when the model's voice comes back.
+	w.resetSpeech()
 	w.voiceActive.Store(false)
 	if w.voice != nil {
 		guard("stopping local speech", w.voice.Stop)
@@ -680,6 +728,14 @@ type speaker interface {
 	Start() (audio.OutputDevice, error)
 	Stop()
 	Write(pcm []byte)
+	// WriteSpeech is Write for the model's own audio, which goes through the
+	// freeze gate. A local voice uses Write.
+	WriteSpeech(pcm []byte)
+	// ResetSpeech drops model audio held for the freeze gate, before the
+	// model's stream is replaced.
+	ResetSpeech()
+	// MarkSessionStart says the next WriteSpeech opens a new session.
+	MarkSessionStart()
 	SetVolume(v float64)
 }
 
@@ -785,7 +841,7 @@ func (w *Window) StartTranslation() {
 		w.showNotice(w.settings.AudioDeviceName + " unavailable — using " + dev.Name)
 	}
 
-	tr, err := w.newTranslator(capture.Ring, apiKey)
+	tr, err := w.makeTranslator(capture.Ring, apiKey)
 	if err != nil {
 		// newTranslator may already have built the gate; its worker must not
 		// outlive the session that never was.

@@ -143,6 +143,11 @@ type Player struct {
 	devRate   int
 	devChan   int
 
+	// freeze removes the model's frozen-and-fading buzz; see freeze.go. Only
+	// WriteSpeech goes through it — a test chime is a decaying sine, exactly
+	// the shape it removes.
+	freeze *freezeGate
+
 	// Scratch, owned by Write once running.
 	mono        []float32
 	interleaved []byte
@@ -229,6 +234,8 @@ func (p *Player) Start() (OutputDevice, error) {
 		return OutputDevice{}, err
 	}
 
+	p.freeze = newFreezeGate(p.sourceRate)
+
 	// One 100 ms blob's worth, with room for the converter's expansion.
 	srcFrames := p.sourceRate / 10
 	p.mono = make([]float32, 0, srcFrames)
@@ -301,7 +308,9 @@ func (p *Player) Stop() {
 		starved, starvedBytes, dropped := state.ring.Stats()
 		slog.Info("audio playback stopped",
 			"starved_callbacks", starved, "silence_ms", p.msOf(starvedBytes),
-			"dropped_ms", p.msOf(dropped), "trimmed_ms", p.msOf(state.ring.Trimmed()))
+			"dropped_ms", p.msOf(dropped), "trimmed_ms", p.msOf(state.ring.Trimmed()),
+			"freezes_removed", len(p.freeze.runStarts),
+			"freeze_muted_ms", p.freeze.Muted()*1000/int64(max(p.sourceRate, 1)))
 	}
 }
 
@@ -318,7 +327,38 @@ func (p *Player) msOf(bytes int64) int64 {
 // It is called from the translator's receive goroutine. Writing to a stopped
 // player is not an error — a session can outlive the device, and speech with
 // nowhere to go is simply dropped.
-func (p *Player) Write(pcm []byte) {
+func (p *Player) Write(pcm []byte) { p.write(pcm, false) }
+
+// WriteSpeech queues the model's translated speech. It is Write with the
+// freeze gate in the path, which delays it by 210 ms and removes the
+// buzz the far end's synthesis makes at session boundaries. Everything that
+// is not the model's audio — a chosen local voice, the test chime — goes
+// through Write and is never touched.
+func (p *Player) WriteSpeech(pcm []byte) { p.write(pcm, true) }
+
+// ResetSpeech drops the model audio the freeze gate is holding. Call it when
+// the model's stream is about to be replaced — a translator restart, a switch
+// between a local voice and the model — or the last 210 ms of the old stream
+// plays seconds later, in front of the new one.
+func (p *Player) ResetSpeech() {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if p.freeze != nil {
+		p.freeze.Reset()
+	}
+}
+
+// MarkSessionStart tells the freeze gate that the next WriteSpeech is a new
+// session's first audio. See freezeGate.opensSession.
+func (p *Player) MarkSessionStart() {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if p.freeze != nil {
+		p.freeze.MarkSessionStart()
+	}
+}
+
+func (p *Player) write(pcm []byte, gated bool) {
 	if len(pcm) < BytesPerSample {
 		return
 	}
@@ -332,16 +372,25 @@ func (p *Player) Write(pcm []byte) {
 
 	gain := float32(math.Float64frombits(p.gain.Load()))
 
+	// Decoded at unity gain: the freeze gate's level thresholds are about
+	// the model's audio, not about where the volume slider sits.
 	p.mono = p.mono[:0]
 	for i := 0; i+1 < len(pcm); i += BytesPerSample {
 		s := int16(binary.LittleEndian.Uint16(pcm[i : i+2]))
-		p.mono = append(p.mono, float32(s)/32768.0*gain)
+		p.mono = append(p.mono, float32(s)/32768.0)
 	}
-	if len(p.mono) == 0 {
+	samples := p.mono
+	if gated && p.freeze != nil {
+		samples = p.freeze.Process(samples)
+	}
+	if len(samples) == 0 {
 		return
 	}
+	for i := range samples {
+		samples[i] *= gain
+	}
 
-	converted, err := p.resampler.Process(p.mono)
+	converted, err := p.resampler.Process(samples)
 	if err != nil {
 		// Nobody to raise this to, and dropping a blob is survivable where
 		// stalling the receive loop is not.
