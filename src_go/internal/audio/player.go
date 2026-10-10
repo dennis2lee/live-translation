@@ -363,7 +363,14 @@ func (p *Player) Flush() {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	if p.freeze != nil {
+		// Reset ends the watch over a session's opening. If one was being
+		// watched it starts again from here, or an unmute in the first
+		// second of a session let its buzz through.
+		watching := p.freeze.active
 		p.freeze.Reset()
+		if watching {
+			p.freeze.MarkSessionStart()
+		}
 	}
 	// The converter keeps a few tens of milliseconds in its filter, which
 	// the next write would push out ahead of whatever comes next. A fresh one

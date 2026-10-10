@@ -226,7 +226,11 @@ func (h *sessionHolder) noteOutput(msg Message) {
 	}
 	if msg.TargetText != "" {
 		h.lastVoice.Store(now)
-		h.sentenceEnded.Store(endsSentence(msg.TargetText))
+		// A fragment of nothing but space says nothing about where the
+		// sentence is; it must not undo the sentence end before it.
+		if strings.TrimSpace(msg.TargetText) != "" {
+			h.sentenceEnded.Store(endsSentence(msg.TargetText))
+		}
 		h.noteText(msg.TargetText)
 		if h.warming.Load() && slog.Default().Enabled(context.Background(), slog.LevelDebug) {
 			slog.Debug("warming caption", "text", msg.TargetText)

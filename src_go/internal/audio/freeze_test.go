@@ -1098,3 +1098,20 @@ func TestFlushDropsWhatIsQueued(t *testing.T) {
 		t.Errorf("held audio came out after Flush (RMS %.4f)", rms)
 	}
 }
+
+// A flush during a session's opening keeps the opening watched: unmuting in
+// the first second of a session must not let its buzz through.
+func TestFlushKeepsAnOpeningWatched(t *testing.T) {
+	p, _ := runningPlayer(t)
+	p.MarkSessionStart()
+	p.WriteSpeech(toPCM(natural(0.3)))
+	p.Flush()
+	if !p.freeze.active {
+		t.Error("the flush ended the watch over the session's opening")
+	}
+	q, _ := runningPlayer(t)
+	q.Flush()
+	if q.freeze.active {
+		t.Error("a flush outside an opening started a watch")
+	}
+}

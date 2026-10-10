@@ -7,6 +7,7 @@ import (
 	"fyne.io/fyne/v2"
 	"fyne.io/fyne/v2/driver/desktop"
 
+	"github.com/dennis2lee/live-translation/src_go/internal/platform"
 	"github.com/dennis2lee/live-translation/src_go/internal/translator"
 )
 
@@ -23,12 +24,18 @@ func press(t *testing.T, w *Window, r rune) {
 	typed(r)
 }
 
-// pressKey delivers a physical key the way the driver does: the key-down
-// handler, then the key-up.
+// pressKey delivers one press the way the desktop driver does: the key-down,
+// the typed key, then the character the key types. The test canvas reports no
+// key-downs of its own, so the window is told it can expect them.
 func pressKey(t *testing.T, w *Window, k fyne.KeyName) {
 	t.Helper()
-	w.win.Canvas().OnTypedKey()(&fyne.KeyEvent{Name: k})
-	w.keyUp(&fyne.KeyEvent{Name: k})
+	w.keysArmable = true
+	ev := &fyne.KeyEvent{Name: k}
+	w.keyDown(ev)
+	w.win.Canvas().OnTypedKey()(ev)
+	if len(k) == 1 {
+		w.win.Canvas().OnTypedRune()(rune(strings.ToLower(string(k))[0]))
+	}
 }
 
 // Every single-key binding, checked by its effect.
@@ -113,7 +120,8 @@ func TestUnboundKeysDoNothing(t *testing.T) {
 	for _, r := range []rune{'3', '8', 'a', 'z', 'q', 'ㅂ', ' ', 'ㅁ', 'm', 'M', 'ㅡ', 'f', 'F', 'ㄹ'} {
 		press(t, w, r)
 	}
-	if !w.settings.Equal(before) || w.state != translator.StateIdle || w.win.FullScreen() {
+	if !w.settings.Equal(before) || w.state != translator.StateIdle || w.win.FullScreen() ||
+		w.muted || w.view.Muted() {
 		t.Error("an unbound key changed something")
 	}
 }
@@ -174,22 +182,65 @@ func TestMAndFAreBoundByPhysicalKey(t *testing.T) {
 	}
 }
 
-// On Windows an input method can swallow the key-down entirely; the key-up
-// alone must then do the job — and only then, never as a second toggle.
-func TestAKeyUpActsOnlyWhenTheKeyDownWasSwallowed(t *testing.T) {
+// A full press — key-down, key, character — toggles once. Binding the m
+// character as well as the key would toggle twice, and look like a dead key.
+func TestOnePressTogglesOnce(t *testing.T) {
 	w := newTestWindow(t)
-	up := w.keyUp
-	up(&fyne.KeyEvent{Name: fyne.KeyM}) // no key-down: an IME took it
+	pressKey(t, w, fyne.KeyM)
 	if !w.muted {
-		t.Fatal("a lone key-up did not mute")
+		t.Error("one press of m did not mute, or muted twice")
 	}
-	pressKey(t, w, fyne.KeyM) // down and up: one toggle, not two
-	if w.muted {
-		t.Error("a full press toggled twice, or not at all")
-	}
-	up(&fyne.KeyEvent{Name: fyne.KeyF})
+	pressKey(t, w, fyne.KeyF)
 	if !w.win.FullScreen() {
-		t.Error("a lone f key-up did not toggle full screen")
+		t.Error("one press of f did not toggle full screen, or toggled twice")
+	}
+}
+
+// Holding m repeats the typed key but not the key-down: one toggle, not one
+// per repeat landing on whatever state the release catches.
+func TestHoldingMTogglesOnce(t *testing.T) {
+	w := newTestWindow(t)
+	w.keysArmable = true
+	ev := &fyne.KeyEvent{Name: fyne.KeyM}
+	w.keyDown(ev)
+	// An even count: unfiltered, the repeats would land back on unmuted.
+	for range 4 {
+		w.typedKey(ev)
+	}
+	if !w.muted {
+		t.Error("holding m left the translation unmuted")
+	}
+}
+
+// Under a Korean input source the layout may not name the key "M"; the scan
+// code still identifies it. A Latin name is trusted as it is.
+func TestTheMKeyIsKnownByItsScanCode(t *testing.T) {
+	w := newTestWindow(t)
+	w.keysArmable = true
+	ev := &fyne.KeyEvent{Name: "ㅡ", Physical: fyne.HardwareKey{ScanCode: platform.ScanCode('M')}}
+	w.keyDown(ev)
+	w.typedKey(ev)
+	if !w.muted {
+		t.Error("the M key, named by the Korean layout, did not mute")
+	}
+	other := &fyne.KeyEvent{Name: fyne.KeyComma, Physical: fyne.HardwareKey{ScanCode: platform.ScanCode('M')}}
+	if isKey(other, fyne.KeyM, 'M') {
+		t.Error("a key the layout names as a Latin key was taken for M by position")
+	}
+}
+
+// Modifier combinations are shortcuts: Fyne sends the key-down but never the
+// typed key, so Ctrl+M or Cmd+F must not toggle.
+func TestAModifiedPressDoesNotToggle(t *testing.T) {
+	w := newTestWindow(t)
+	w.keysArmable = true
+	w.keyDown(&fyne.KeyEvent{Name: fyne.KeyM}) // Ctrl+M: key-down, then a shortcut
+	if w.muted {
+		t.Error("a modified m muted")
+	}
+	pressKey(t, w, fyne.KeyM) // and the next plain press still works once
+	if !w.muted {
+		t.Error("the plain press after a modified one did not mute")
 	}
 }
 

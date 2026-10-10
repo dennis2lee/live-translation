@@ -120,9 +120,10 @@ type Window struct {
 	// what it hears. Deliberately *not* persisted: a mute that outlived a
 	// restart is indistinguishable from the feature being broken.
 	muted bool
-	// keyDownSeen records a key-down for m and f, so the key-up fallback
-	// (see bindKeys) does not act a second time. UI goroutine only.
-	keyDownSeen map[fyne.KeyName]bool
+	// keysArmed marks m and f pressed and not yet acted on; keysArmable says
+	// the canvas reports key-downs at all. See typedKey. UI goroutine only.
+	keysArmed   map[fyne.KeyName]bool
+	keysArmable bool
 
 	// musicGate filters the send path for the running session; nil when the
 	// feature is off or the model could not be had. yamnet is the loaded
@@ -162,11 +163,11 @@ type Window struct {
 // NewWindow builds the caption window.
 func NewWindow(app fyne.App, settings config.Settings) *Window {
 	w := &Window{
-		app:         app,
-		settings:    settings,
-		state:       translator.StateIdle,
-		stopTick:    make(chan struct{}),
-		keyDownSeen: map[fyne.KeyName]bool{},
+		app:       app,
+		settings:  settings,
+		state:     translator.StateIdle,
+		stopTick:  make(chan struct{}),
+		keysArmed: map[fyne.KeyName]bool{},
 		newSpeaker: func(deviceName string, sourceRate int) speaker {
 			return audio.NewPlayer(deviceName, sourceRate)
 		},
@@ -254,52 +255,78 @@ func (w *Window) bindKeys() {
 			w.ToggleCompletePhrases()
 		}
 	})
-	// m and f are bound by physical key, not by the character typed. Under a
-	// Korean input source the character is a jamo the input method holds as
-	// unfinished composition (ㅡ can still become ㅢ), and it only arrives
-	// when the next key completes it — so a rune binding missed the first
-	// press and acted one press late. GLFW reports the key itself before the
-	// input method sees it on macOS (cocoa_window.m, keyDown).
-	w.win.Canvas().SetOnTypedKey(func(ev *fyne.KeyEvent) {
-		switch ev.Name {
-		case fyne.KeyM:
-			w.keyDownSeen[fyne.KeyM] = true
-			w.ToggleMute()
-		case fyne.KeyF:
-			w.keyDownSeen[fyne.KeyF] = true
-			w.toggleFullScreen()
-		case fyne.KeyEscape:
-			// Spike F2 measured Escape not reaching this handler while full
-			// screen on macOS. It works in a window, which is where it is most
-			// often wanted, so it stays — but f is the binding relied on.
-			if w.win.FullScreen() {
-				w.setFullScreen(false)
-			}
-		}
-	})
-	// On Windows an input method that claims a key-down turns it into
-	// VK_PROCESSKEY, which GLFW drops (win32_window.c), so the key-down never
-	// comes; the key-up still carries the real key. Acting on the key-up
-	// only when no key-down was seen covers that without acting twice
-	// anywhere the key-down does arrive. Not run on Windows.
+	// m and f are bound by key, not by the character typed. Under a Korean
+	// input source the character is a jamo the input method holds as
+	// unfinished composition (ㅡ can still become ㅢ) until the next key
+	// completes it, so a rune binding missed the first press. GLFW reports
+	// the key before the input method sees it on macOS (cocoa_window.m,
+	// keyDown). On Windows an IME in Hangul mode turns the press into
+	// VK_PROCESSKEY, which GLFW drops along with its release: there the key
+	// cannot get through, and the Translate menu's Mute item is the way.
+	w.win.Canvas().SetOnTypedKey(w.typedKey)
 	if dc, ok := w.win.Canvas().(desktop.Canvas); ok {
-		dc.SetOnKeyUp(w.keyUp)
+		// A real press — not a repeat — arms the key; see typedKey.
+		dc.SetOnKeyDown(w.keyDown)
+		w.keysArmable = true
 	}
 }
 
-// keyUp is the key-up half of the m and f bindings; see bindKeys.
-func (w *Window) keyUp(ev *fyne.KeyEvent) {
-	if ev.Name != fyne.KeyM && ev.Name != fyne.KeyF {
-		return
+// isKey reports whether ev is the given letter key. Fyne names a letter by
+// asking the current keyboard layout, which under a Korean input source need
+// not say "M", so when the layout gives no name, or a non-ASCII one such as a
+// jamo, the hardware scan code decides. An ASCII name is trusted as it is:
+// AZERTY calls the key in the US M position ",", and that is not M.
+func isKey(ev *fyne.KeyEvent, name fyne.KeyName, letter rune) bool {
+	if ev.Name == name {
+		return true
 	}
-	if w.keyDownSeen[ev.Name] {
-		w.keyDownSeen[ev.Name] = false
-		return
+	ascii := ev.Name != ""
+	for _, r := range ev.Name {
+		ascii = ascii && r < 0x80
 	}
-	if ev.Name == fyne.KeyM {
-		w.ToggleMute()
-	} else {
-		w.toggleFullScreen()
+	return !ascii && ev.Physical.ScanCode == platform.ScanCode(letter)
+}
+
+// keyDown arms m and f on a real press. Fyne delivers it for presses only,
+// never repeats, while typedKey also receives the repeats of a held key.
+func (w *Window) keyDown(ev *fyne.KeyEvent) {
+	switch {
+	case isKey(ev, fyne.KeyM, 'M'):
+		w.keysArmed[fyne.KeyM] = true
+	case isKey(ev, fyne.KeyF, 'F'):
+		w.keysArmed[fyne.KeyF] = true
+	}
+}
+
+// typedKey acts on m and f once per press: holding m used to toggle the mute
+// at the key-repeat rate, landing on whichever state the release caught and
+// splitting the transcript's sentence at every toggle. Escape leaves full
+// screen.
+func (w *Window) typedKey(ev *fyne.KeyEvent) {
+	press := func(k fyne.KeyName) bool {
+		if !w.keysArmable {
+			return true // no key-down to wait for on this canvas
+		}
+		armed := w.keysArmed[k]
+		w.keysArmed[k] = false
+		return armed
+	}
+	switch {
+	case isKey(ev, fyne.KeyM, 'M'):
+		if press(fyne.KeyM) {
+			w.ToggleMute()
+		}
+	case isKey(ev, fyne.KeyF, 'F'):
+		if press(fyne.KeyF) {
+			w.toggleFullScreen()
+		}
+	case ev.Name == fyne.KeyEscape:
+		// Spike F2 measured Escape not reaching this handler while full
+		// screen on macOS. It works in a window, which is where it is most
+		// often wanted, so it stays — but f is the binding relied on.
+		if w.win.FullScreen() {
+			w.setFullScreen(false)
+		}
 	}
 }
 

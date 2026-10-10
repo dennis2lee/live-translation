@@ -859,8 +859,12 @@ func voicedFor(ms int) []byte {
 // it must hold until the sentence is finished and a second has passed — the
 // red team's reproduction switched 0.43 s after the gate closed, 3 of 3.
 func TestTheGateHoldsAtTheRealArrivalRate(t *testing.T) {
+	if HandoverGateQuiet != time.Second {
+		t.Fatalf("HandoverGateQuiet is %v: the measured case for a second is in its comment", HandoverGateQuiet)
+	}
+	shipped := HandoverGateQuiet
 	r := startWarm(t, true)
-	HandoverGateQuiet = time.Second // the shipped value, not startWarm's
+	HandoverGateQuiet = shipped // startWarm shortens it
 	r.warn(10 * time.Second)
 	waitFor(t, "the replacement to open", func() bool { return r.opener.attempts() == 2 })
 	r.quiet.Store(true)
@@ -932,5 +936,15 @@ func TestTheGateWaitsForTheReplacementToo(t *testing.T) {
 		if got := gateQuiet(c.old, c.next); got != c.want {
 			t.Errorf("%s: %v, want %v", c.name, got, c.want)
 		}
+	}
+}
+
+// A caption fragment of nothing but space leaves the sentence end as it was.
+func TestABlankFragmentKeepsTheSentenceEnd(t *testing.T) {
+	h := newSessionHolder()
+	h.noteOutput(Message{TargetText: " Done."})
+	h.noteOutput(Message{TargetText: " "})
+	if !h.sentenceEnded.Load() {
+		t.Error("a blank fragment undid the sentence end")
 	}
 }

@@ -120,7 +120,8 @@ func (s *Speaker) Voice() string {
 }
 
 // Clear drops everything queued, and abandons the line being spoken: no
-// block of it is sent after Clear returns. Used when the session stops, so a
+// further block of it is sent, though one already past the check as Clear
+// runs may still go out — the player's own flush catches that one. Used when the session stops, so a
 // stale sentence does not arrive after the captions have gone, and when the
 // translation is muted — where finishing the line in flight would be up to
 // several seconds of speech the room was meant not to hear.
