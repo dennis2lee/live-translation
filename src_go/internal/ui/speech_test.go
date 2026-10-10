@@ -536,3 +536,27 @@ func TestASessionStartReachesThePlayer(t *testing.T) {
 		t.Errorf("the model's audio reached WriteSpeech %d times, want 1", speech)
 	}
 }
+
+// TestASessionStartReachesThePlayer calls translatorCallbacks itself, so it
+// would pass with a production translator built from other callbacks — and
+// every test that runs a session replaces the builder. This checks what the
+// production branch actually hands the translator.
+func TestTheProductionTranslatorReportsSessionStarts(t *testing.T) {
+	w, factory := speakingWindow(t)
+	w.startPlayer()
+	player := factory.last()
+
+	opts := w.translatorOptions(audio.NewRing(4096), "AIza-test-key-not-real")
+	if opts.Callbacks.OnSessionStart == nil || opts.Callbacks.OnAudio == nil {
+		t.Fatal("the production translator is not told where to send session starts and audio")
+	}
+	opts.Callbacks.OnSessionStart()
+	opts.Callbacks.OnAudio(make([]byte, 480))
+
+	player.mu.Lock()
+	marks := player.sessionMarks
+	player.mu.Unlock()
+	if speech, _ := player.speechCounts(); marks != 1 || speech != 1 {
+		t.Errorf("session starts %d, speech writes %d reached the player, want 1 and 1", marks, speech)
+	}
+}

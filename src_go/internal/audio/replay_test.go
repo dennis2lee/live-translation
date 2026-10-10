@@ -37,9 +37,20 @@ func TestReplayRecordedRun(t *testing.T) {
 		r := replay(arrivals, audio, trimMS)
 		t.Logf("trim %4d ms | cuts %2d  lost %5.2fs | skipped pause %5.2fs | starved %5.2fs | queue avg %.2fs max %.2fs",
 			trimMS, r.cuts, r.lost, r.trimmed, r.starved, r.avgQueue, r.maxQueue)
-		if trimMS == PlayTrimAboveMS && r.cuts != 0 {
+		if trimMS != PlayTrimAboveMS {
+			continue
+		}
+		if r.cuts != 0 {
 			t.Errorf("at the shipped threshold the player still cut %d times (%.2f s of speech)",
 				r.cuts, r.lost)
+		}
+		// Measured 3.00 s skipped and 0.02 s starved over the six-minute run,
+		// against about 4 s of surplus audio. Skipping far more than the
+		// surplus would be eating pauses for nothing; starving more would be
+		// trimming the cushion away.
+		if r.trimmed > 4.5 || r.starved > 0.1 {
+			t.Errorf("at the shipped threshold: %.2f s of pause skipped (limit 4.5), %.2f s starved (limit 0.1)",
+				r.trimmed, r.starved)
 		}
 	}
 }

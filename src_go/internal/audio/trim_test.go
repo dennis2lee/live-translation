@@ -287,3 +287,18 @@ func TestAtMostOneChunkIsSkippedPerCallback(t *testing.T) {
 		t.Errorf("one callback consumed %d bytes, want one played and one skipped (%d)", used, 2*block)
 	}
 }
+
+// The queue length is what is written less what has been read. Every other
+// test trims a ring nothing has been read from yet, where that difference and
+// the sum are the same number.
+func TestTheQueueIsMeasuredAfterReading(t *testing.T) {
+	r := newPlayRing(64)
+	r.Write(samples(fill(16, 0)...)) // 32 bytes of silence
+	r.Read(make([]byte, 20))         // 12 bytes left
+	if got := r.skipSilentHead(8, 8, 0, 33); got != 0 {
+		t.Errorf("skipped %d bytes from a 12-byte queue with an 8-byte cushion", got)
+	}
+	if got := r.skipSilentHead(4, 8, 0, 33); got != 4 {
+		t.Errorf("skipped %d bytes, want 4 — the queue minus the chunk meets the cushion", got)
+	}
+}

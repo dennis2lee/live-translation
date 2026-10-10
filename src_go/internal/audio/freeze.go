@@ -429,14 +429,27 @@ func (g *freezeGate) features(window []float32) frameFeat {
 		return frameFeat{level: level}
 	}
 	x := g.diff
-	bestLag, best := 0, math.Inf(-1)
-	for k := g.lagLo; k < g.lagHi && k < len(x); k++ {
+	acf := func(k int) float64 {
 		var s float64
 		for i := 0; i+k < len(x); i++ {
 			s += x[i] * x[i+k]
 		}
-		if s > best {
+		return s
+	}
+	bestLag, best := 0, math.Inf(-1)
+	for k := g.lagLo; k < g.lagHi && k < len(x); k++ {
+		if s := acf(k); s > best {
 			best, bestLag = s, k
+		}
+	}
+	// One lag is more than 1% of the period above about 240 Hz, so a frozen
+	// high voice read as a moving one. A parabola through the peak and its
+	// neighbours places it between lags.
+	lag := float64(bestLag)
+	if bestLag > 0 && bestLag+1 < len(x) {
+		a, c := acf(bestLag-1), acf(bestLag+1)
+		if d := a - 2*best + c; d < 0 {
+			lag += 0.5 * (a - c) / d
 		}
 	}
 	var d2 float64
@@ -446,7 +459,7 @@ func (g *freezeGate) features(window []float32) frameFeat {
 	}
 	return frameFeat{
 		level:  level,
-		f0:     float64(g.rate) / float64(bestLag),
+		f0:     float64(g.rate) / lag,
 		per:    best / e0,
 		colour: math.Sqrt(d2 / e0),
 	}

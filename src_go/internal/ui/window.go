@@ -577,6 +577,12 @@ func (w *Window) stopMusicGate() {
 }
 
 func (w *Window) newTranslator(ring *audio.Ring, apiKey string) (*translator.Translator, error) {
+	return translator.New(w.translatorOptions(ring, apiKey))
+}
+
+// translatorOptions is everything a production translator is built from,
+// apart from the call that builds it, so tests can check what it is given.
+func (w *Window) translatorOptions(ring *audio.Ring, apiKey string) translator.Options {
 	// Built here, not inline below: musicFilter is what creates the gate that
 	// gateClosed then reads, so the order is load-bearing. Inside a struct
 	// literal it would be held up only by the lexical evaluation order, and
@@ -585,7 +591,7 @@ func (w *Window) newTranslator(ring *audio.Ring, apiKey string) (*translator.Tra
 	filter := w.musicFilter()
 	quiet := w.gateClosed()
 
-	return translator.New(translator.Options{
+	return translator.Options{
 		Ring:   ring,
 		APIKey: apiKey,
 		Session: translator.SessionConfig{
@@ -601,7 +607,7 @@ func (w *Window) newTranslator(ring *audio.Ring, apiKey string) (*translator.Tra
 		AdaptiveSessionPrep: w.settings.AdaptiveSessionPrep,
 		QuietMoment:         quiet,
 		Callbacks:           w.translatorCallbacks(),
-	})
+	}
 }
 
 // speakAudio hands one blob of translated speech to the player.

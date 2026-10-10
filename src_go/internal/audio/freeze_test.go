@@ -217,9 +217,12 @@ func TestNearMissesAreNotFreezes(t *testing.T) {
 		// Pitch moves 2% over the fade; tolerance 1%.
 		"pitch drifts": voiced(0.28, func(t float64) float64 { return 174 * (1 + 0.02*t/0.12) },
 			func(t float64) float64 { return -6 - 7*t/0.04 }),
-		// Periodicity falls by 0.07 as cycle-to-cycle jitter rises, with
-		// pitch and timbre unmoved; tolerance 0.05.
-		"periodicity drifts": jittered(func(t float64) float64 { return 0.08 * t / 0.12 }),
+		// Periodicity falls as cycle-to-cycle jitter rises, with timbre
+		// unmoved; tolerance 0.05. Found with the detector: clear at 0.05,
+		// caught at 0.08. Since pitch is interpolated between lags, more
+		// jitter than this also moves the pitch past 1%, and the case would
+		// be stopped by that instead — 0.08 was, and hid a looser tolerance.
+		"periodicity drifts": jittered(func(t float64) float64 { return 0.07 * t / 0.12 }),
 		// Periodicity about 0.44 throughout, everything else still; the
 		// floor is 0.5.
 		"weakly periodic": steadyNoise(0.85),
@@ -892,5 +895,137 @@ func TestResetDropsAPendingCarry(t *testing.T) {
 	if out := g.Process(next); len(out) != len(next) {
 		t.Errorf("after Reset, %d samples came out for %d put in — the carry survived",
 			len(out), len(next))
+	}
+}
+
+// ringSamples drains the ring and returns what the device would have played.
+func ringSamples(st *playState) []float64 {
+	buf := make([]byte, st.ring.Available())
+	st.ring.Read(buf)
+	out := make([]float64, len(buf)/2)
+	for i := range out {
+		out[i] = float64(int16(uint16(buf[2*i])|uint16(buf[2*i+1])<<8)) / 32768
+	}
+	return out
+}
+
+func power(x []float64) float64 {
+	var s float64
+	for _, v := range x {
+		s += v * v
+	}
+	return s / float64(max(len(x), 1))
+}
+
+// Every other player test checks that audio reached the gate, never that the
+// player plays what came back out of it. Discarding the gate's output left the
+// whole suite green with the buzz still audible — the red team's fifth-round
+// blocker. This reads the ring, which is what the device plays.
+func TestThePlayerPlaysWhatTheGateReleases(t *testing.T) {
+	p, st := runningPlayer(t)
+	lead, f := natural(0.6), frozen()
+	in := concat(lead, f, natural(0.4), silence(1.5))
+	p.MarkSessionStart()
+	for i := 0; i < len(in); i += fr / 4 {
+		p.WriteSpeech(toPCM(in[i:min(i+fr/4, len(in))]))
+	}
+	out := ringSamples(st) // 48 kHz: twice the input's sample positions
+	inset := 2 * fr * 30 / 1000
+	speech := power(out[2*fr/10 : 2*len(lead)-inset])
+	freeze := power(out[2*len(lead)+inset : 2*(len(lead)+len(f))-inset])
+	if speech == 0 {
+		t.Fatal("setup: no speech reached the ring")
+	}
+	if r := freeze / speech; r > 0.01 {
+		t.Errorf("the freeze plays at %.1f%% of the speech's power, want under 1%%", 100*r)
+	}
+}
+
+// The integer-lag pitch estimate moves in steps of more than 1% above about
+// 240 Hz, so a frozen voice up there was judged to be changing pitch and
+// missed — 66 of 2554 in the red team's sweep, every one between 250 and
+// 390 Hz. These pitches sit between integer lags on purpose.
+func TestHighVoicesBetweenLagsAreFound(t *testing.T) {
+	for hz := 250.0; hz <= 400; hz += 7.3 {
+		f := voiced(0.28, func(float64) float64 { return hz },
+			func(t float64) float64 { return -6 - 7*t/0.04 })
+		lead := natural(0.5)
+		out, g := gate(concat(lead, f, natural(0.3)))
+		if len(g.runStarts) != 1 {
+			t.Errorf("a freeze at %.1f Hz: %d cuts, want 1", hz, len(g.runStarts))
+			continue
+		}
+		if left := energy(out[len(lead):len(lead)+len(f)]) / energy(f); left > 0.01 {
+			t.Errorf("a freeze at %.1f Hz: %.1f%% still plays", hz, 100*left)
+		}
+	}
+}
+
+// Holding audio for a decision is the cost of the gate: a listener hears it as
+// delay. Part-way through an opening the gate holds what a decision needs and
+// no more: a freeze is confirmed by four 40 ms windows (160 ms), and a cut can
+// then reach back 40 ms plus a hop and a fade (60 ms). Measured 210 at 10 ms
+// input steps.
+func TestTheOpeningIsHeldNoLongerThanTheDecisionNeeds(t *testing.T) {
+	const limitMS = 220
+	g := newFreezeGate(fr)
+	g.MarkSessionStart()
+	in := natural(1.0)
+	step := fr / 100 // 10 ms
+	var in_, out_, worst int
+	for i := 0; i < len(in); i += step {
+		chunk := in[i:min(i+step, len(in))]
+		in_ += len(chunk)
+		out_ += len(g.Process(chunk))
+		if i >= fr/5 {
+			worst = max(worst, in_-out_)
+		}
+	}
+	if ms := worst * 1000 / fr; ms > limitMS {
+		t.Errorf("the opening is held up to %d ms behind its input, limit %d", ms, limitMS)
+	}
+}
+
+// The click test, fed the way TestTheCutReachesBackWithTinyBlobs is: 5 ms at a
+// time, with a freeze that holds its level before it fades, so the cut is
+// placed by following it back rather than where the fade was confirmed.
+func TestTheCutDoesNotClickWithTinyBlobs(t *testing.T) {
+	const limit = 10e-6
+	win := fr * 30 / 1000
+	in := concat(natural(0.6), frozenLate(0.07), natural(0.5), silence(1.7))
+	g := newFreezeGate(fr)
+	g.MarkSessionStart()
+	var out []float32
+	for i := 0; i < len(in); i += fr / 200 {
+		out = append(out, g.Process(in[i:min(i+fr/200, len(in))])...)
+	}
+	if len(out) != len(in) || len(g.cutLog) != 1 {
+		t.Fatalf("setup: %d of %d samples out, %d cuts", len(out), len(in), len(g.cutLog))
+	}
+	c := g.cutLog[0]
+	for name, at := range map[string]int{
+		"fade out": int(c.from) - c.fade/2,
+		"fade in":  int(c.to) + fr*freezeFadeInMS/2000,
+	} {
+		if got := clickAdded(in, out, at-win/2, at+win/2); got > limit {
+			t.Errorf("%s: adds %.0f ppm above 1 kHz, limit %.0f", name, got*1e6, limit*1e6)
+		}
+	}
+}
+
+// Every sample written must reach the ring. Dropping one per blob is a few
+// hundredths of a millisecond at the model's blob size, below what any power
+// measurement sees; written ten samples at a time it is a tenth of the audio.
+func TestEverySampleWrittenIsPlayed(t *testing.T) {
+	p, st := runningPlayer(t)
+	in := natural(1.0)
+	for i := 0; i < len(in); i += 10 {
+		p.Write(toPCM(in[i:min(i+10, len(in))]))
+	}
+	// 48 kHz mono, back to 24 kHz. The resampler keeps about 32 ms in its
+	// filter (measured 96.8% of a second through), hence 95 and not 100.
+	got := float64(st.ring.Available()/2) / 2
+	if r := got / float64(len(in)); r < 0.95 || r > 1.0 {
+		t.Errorf("%.0f of %d samples reached the ring (%.1f%%)", got, len(in), 100*r)
 	}
 }
