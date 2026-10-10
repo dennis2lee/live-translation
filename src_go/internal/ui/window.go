@@ -423,6 +423,7 @@ func sessionNeedsRestart(old, next config.Settings) bool {
 		old.SilenceGate != next.SilenceGate ||
 		old.MusicGate != next.MusicGate ||
 		old.AdaptiveSessionPrep != next.AdaptiveSessionPrep ||
+		old.WarmHandover != next.WarmHandover ||
 		old.EchoTargetLanguage != next.EchoTargetLanguage ||
 		old.VocabularySource != next.VocabularySource ||
 		old.VocabularyCaptions != next.VocabularyCaptions
@@ -608,6 +609,7 @@ func (w *Window) translatorOptions(ring *audio.Ring, apiKey string) translator.O
 		// With the gate off, quiet is nil: adaptive prep then does nothing
 		// rather than waiting for a window that can never come.
 		AdaptiveSessionPrep: w.settings.AdaptiveSessionPrep,
+		WarmHandover:        w.settings.WarmHandover,
 		QuietMoment:         quiet,
 		Callbacks:           w.translatorCallbacks(),
 	}

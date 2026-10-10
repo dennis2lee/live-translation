@@ -214,6 +214,10 @@ func TestTheSettingsThatNeedAFreshSession(t *testing.T) {
 		},
 		"music gate":   func(s config.Settings) config.Settings { s.MusicGate = !s.MusicGate; return s },
 		"silence gate": func(s config.Settings) config.Settings { s.SilenceGate = !s.SilenceGate; return s },
+		"warm handover": func(s config.Settings) config.Settings {
+			s.WarmHandover = !s.WarmHandover
+			return s
+		},
 		"provider": func(s config.Settings) config.Settings {
 			s.Provider = config.ProviderOpenAI
 			return s

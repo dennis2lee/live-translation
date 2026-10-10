@@ -107,3 +107,24 @@ func TestTheTranslatorIsBuiltForTheChosenProvider(t *testing.T) {
 		t.Errorf("Options.Provider = %q", got)
 	}
 }
+
+// Warm handover is on by default, reaches the translator, and is switched off
+// from Behaviour.
+func TestWarmHandoverIsOnAndCanBeSwitchedOff(t *testing.T) {
+	w := newTestWindow(t)
+	if !w.settings.WarmHandover {
+		t.Fatal("warm handover is off by default")
+	}
+	if !w.translatorOptions(audio.NewRing(4096), "AIza-x").WarmHandover {
+		t.Error("the translator is not told to hand over warm")
+	}
+	p := openPrefs(t, w)
+	p.warmHandover.SetChecked(false)
+	p.apply()
+	if w.settings.WarmHandover {
+		t.Error("unchecking warm handover did not apply")
+	}
+	if w.translatorOptions(audio.NewRing(4096), "AIza-x").WarmHandover {
+		t.Error("the translator still hands over warm after it was switched off")
+	}
+}

@@ -106,6 +106,7 @@ type prefsDialog struct {
 	transcriptDir *widget.Entry
 	debugLogging  *widget.Check
 	adaptivePrep  *widget.Check
+	warmHandover  *widget.Check
 
 	// meter is the dialog's own capture, opened only when there is no session
 	// to observe; observing says the meter is watching the session's capture
@@ -936,11 +937,11 @@ func (p *prefsDialog) behaviourTab() fyne.CanvasObject {
 
 	p.adaptivePrep = widget.NewCheck("Adaptive session prep", nil)
 	p.adaptivePrep.SetChecked(p.working.AdaptiveSessionPrep)
+	p.warmHandover = widget.NewCheck("Warm session handover", nil)
+	p.warmHandover.SetChecked(p.working.WarmHandover)
 	prepHint := widget.NewLabel(
-		"The server ends a session about every nine minutes and warns first. " +
-			"This spends the warning waiting for the music filter to close, " +
-			"so the changeover lands where nothing is being translated. With " +
-			"the music filter off it does nothing.")
+		"Hide the nine-minute session change: in a pause, with the new " +
+			"session already running, or while the music filter is closed.")
 	prepHint.Wrapping = fyne.TextWrapWord
 
 	// Where the log is, because it is not obvious and there is no terminal
@@ -961,7 +962,9 @@ func (p *prefsDialog) behaviourTab() fyne.CanvasObject {
 		widget.NewFormItem("Transcript folder", p.transcriptDir),
 	)
 	return container.NewVBox(form, p.completeOnly, p.saveScript,
-		p.adaptivePrep, prepHint, p.debugLogging, logHint)
+		// Side by side: one more row made this the one tab taller than the
+		// dialog.
+		container.NewHBox(p.warmHandover, p.adaptivePrep), prepHint, p.debugLogging, logHint)
 }
 
 // --- buttons --------------------------------------------------------------
@@ -985,6 +988,9 @@ func (p *prefsDialog) collect() config.Settings {
 	s.MusicGateRelease = p.musicRelease.Value
 	if p.adaptivePrep != nil {
 		s.AdaptiveSessionPrep = p.adaptivePrep.Checked
+	}
+	if p.warmHandover != nil {
+		s.WarmHandover = p.warmHandover.Checked
 	}
 	if p.voiceSelect != nil {
 		name, _ := p.selectedVoice()

@@ -106,3 +106,14 @@ func TestARealOpenAIKeyIsNotAPlaceholder(t *testing.T) {
 		t.Error("a template value was taken for a key")
 	}
 }
+
+// An older settings file has no warm_handover key and gets the default.
+func TestAnOlderSettingsFileGetsWarmHandover(t *testing.T) {
+	dir, _ := isolate(t)
+	if err := os.WriteFile(filepath.Join(dir, Filename), []byte(`{"font_size": 40}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if !Load().WarmHandover {
+		t.Error("an older settings file came back with warm handover off")
+	}
+}

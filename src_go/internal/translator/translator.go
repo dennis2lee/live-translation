@@ -25,6 +25,7 @@ import (
 	"math"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 	"unicode/utf8"
 
@@ -163,9 +164,15 @@ type Stats struct {
 	PreppedSwaps   int
 	PrepWaitsMS    []float64
 	UnpreppedSwaps int
-	ChunksSent     int
-	StartedAt      time.Time
-	MaxBacklogMS   float64
+	// QuietHandovers is how many warm handovers switched in a pause (or under
+	// the music gate), ForcedHandovers how many ran out of time or lost the
+	// old session first, and HandoverWaitsMS how long each waited.
+	QuietHandovers  int
+	ForcedHandovers int
+	HandoverWaitsMS []float64
+	ChunksSent      int
+	StartedAt       time.Time
+	MaxBacklogMS    float64
 
 	// SpeechGaps counts stretches with no translated audio at all, and
 	// SwapSilenceMS totals the ones that straddled a reconnect.
@@ -201,6 +208,7 @@ func (s Stats) Summary() string {
 		" speech_gaps=" + itoa(s.SpeechGaps) +
 		" max_speech_gap=" + formatMS(s.MaxSpeechGapMS) + "ms" +
 		" swap_silence=" + formatMS(s.SwapSilenceMS) + "ms/" + itoa(s.SwapGaps) +
+		" handovers=" + itoa(s.QuietHandovers) + "/" + itoa(s.QuietHandovers+s.ForcedHandovers) +
 		" prepped_swaps=" + itoa(s.PreppedSwaps) + "/" +
 		itoa(s.PreppedSwaps+s.UnpreppedSwaps)
 }
@@ -294,6 +302,17 @@ type Options struct {
 	// Called from the supervisor on a poll, never from the send loop.
 	QuietMoment func() bool
 
+	// WarmHandover opens a reconnect's replacement as soon as the warning
+	// arrives, feeds it unheard alongside the old session, and switches in a
+	// pause. See handOver.
+	WarmHandover bool
+
+	// ForceSwapAfter, when set, has every session warned as if by the server
+	// this long after it opens, with 50 s of grace — the measured go_away.
+	// For measuring handovers without waiting nine minutes; the application
+	// never sets it.
+	ForceSwapAfter time.Duration
+
 	// open is the session opener. Left nil, a genai-backed one is built from
 	// APIKey; the tests set it to a fake.
 	open sessionOpener
@@ -309,6 +328,8 @@ type Translator struct {
 	filter       func(chunk []byte) [][]byte
 	adaptivePrep bool
 	quietMoment  func() bool
+	warmHandover bool
+	forceSwap    time.Duration
 	cb           Callbacks
 	open         sessionOpener
 
@@ -320,6 +341,9 @@ type Translator struct {
 	// retiring is a session that has been replaced but is deliberately still
 	// open. See watchRetirement() for why.
 	retiring *sessionHolder
+	// warming is a replacement being fed alongside the active session, not
+	// yet heard. See handOver.
+	warming *sessionHolder
 	// retireWG tracks the watchdogs so a run does not outlive itself. Without
 	// it a watchdog kept running after Stop returned — harmless in production
 	// but a real loose end, and the race detector called it what it was.
@@ -363,6 +387,21 @@ type sessionHolder struct {
 	// spoke is set by this session's own receive loop when its first audio
 	// arrives, and read nowhere else.
 	spoke bool
+
+	// warming is set while this session is a replacement being fed but not
+	// heard; its receive loop then delivers nothing. Cleared by the
+	// supervisor in the same breath as making it active.
+	warming atomic.Bool
+	// openedAt, firstAudio and lastVoice are unix nanoseconds, for deciding
+	// when a handover can be made unheard. See noteOutput.
+	openedAt   atomic.Int64
+	firstAudio atomic.Int64
+	lastVoice  atomic.Int64
+	// sentenceEnded is whether this session's latest caption fragment
+	// closed a sentence.
+	sentenceEnded atomic.Bool
+	// recent is the tail of this session's captions, under mu. See noteText.
+	recent string
 	// abandoned is set when the supervisor gives up waiting for this holder.
 	// A session that opens afterwards has no owner and must not run — see
 	// adopt.
@@ -495,6 +534,8 @@ func New(opts Options) (*Translator, error) {
 		filter:       opts.Filter,
 		adaptivePrep: opts.AdaptiveSessionPrep,
 		quietMoment:  opts.QuietMoment,
+		warmHandover: opts.WarmHandover,
+		forceSwap:    opts.ForceSwapAfter,
 		cb:           opts.Callbacks,
 		open:         open,
 		state:        StateIdle,
@@ -532,6 +573,7 @@ func (t *Translator) Start() error {
 	t.lastAudioAt = time.Time{}
 	t.audioReconnects = 0
 	t.retiring = nil
+	t.warming = nil
 	t.lastError = nil
 	t.stats = Stats{StartedAt: time.Now()}
 	ctx, cancel := context.WithCancel(context.Background())
@@ -619,6 +661,14 @@ func (t *Translator) supervise(ctx context.Context) {
 		if active != nil {
 			t.closeSession(active)
 		}
+		// So is one being warmed up to replace it.
+		t.mu.Lock()
+		warming := t.warming
+		t.warming = nil
+		t.mu.Unlock()
+		if warming != nil {
+			t.closeSession(warming)
+		}
 		// A session kept open across a swap is still ours to close.
 		t.retireAny("the translator is stopping")
 		// The watchdogs are already unblocked by the cancel above; this is
@@ -627,20 +677,28 @@ func (t *Translator) supervise(ctx context.Context) {
 	}()
 
 	failures := 0
+	// warmNext is a replacement handOver has already opened and warmed; the
+	// next turn of the loop switches to it instead of opening one.
+	var warmNext *sessionHolder
 	for ctx.Err() == nil {
-		// Having a session to replace means this is a reconnect. Using
-		// Stats.Reconnects would mislabel the first one, since it is still 0.
-		t.mu.Lock()
-		reconnecting := t.active != nil
-		t.mu.Unlock()
-		if reconnecting {
-			t.setState(StateReconnecting, "")
-		} else {
-			t.setState(StateConnecting, "")
-		}
-
+		holder, warm := warmNext, warmNext != nil
+		warmNext = nil
 		gapStarted := time.Now()
-		holder := t.openSession(ctx)
+		if !warm {
+			// Having a session to replace means this is a reconnect. Using
+			// Stats.Reconnects would mislabel the first one, since it is
+			// still 0. A warm switch is neither: nothing is connecting and
+			// nothing is missing, so the indicator is left alone.
+			t.mu.Lock()
+			reconnecting := t.active != nil
+			t.mu.Unlock()
+			if reconnecting {
+				t.setState(StateReconnecting, "")
+			} else {
+				t.setState(StateConnecting, "")
+			}
+			holder = t.openSession(ctx, false)
+		}
 		if ctx.Err() != nil {
 			return
 		}
@@ -672,6 +730,14 @@ func (t *Translator) supervise(ctx context.Context) {
 		t.mu.Lock()
 		previous := t.active
 		t.active = holder // atomically swap the send target
+		// Heard from this instant: its receive loop delivers from the next
+		// message on. Cleared under the same lock as the swap, so no message
+		// falls between being suppressed as a replacement's and delivered as
+		// the active session's.
+		holder.warming.Store(false)
+		if t.warming == holder {
+			t.warming = nil
+		}
 		// Marked retired in the same breath as the swap, not later. Between
 		// those two points the replaced session is still receiving, and the
 		// gate in noteHandle is what stops it writing a resumption handle for
@@ -695,25 +761,54 @@ func (t *Translator) supervise(ctx context.Context) {
 			t.stats.GapsMS = append(t.stats.GapsMS, gapMS)
 			count := t.stats.Reconnects
 			t.mu.Unlock()
-			slog.Info("session swapped", "gap_ms", gapMS, "reconnect", count)
+			slog.Info("session swapped", "gap_ms", gapMS, "reconnect", count, "warm", warm)
 			t.cb.reconnected()
-			t.watchRetirement(ctx, previous)
+			if warm {
+				// The replacement has been hearing everything and has been
+				// speaking for a while; the old session has nothing left to
+				// cover, and whatever it would say next the replacement
+				// will say too.
+				t.retireIf(previous, "the warm replacement has taken over")
+			} else {
+				t.watchRetirement(ctx, previous)
+			}
 		}
 
 		t.setState(StateRunning, "")
 
 		// Keep translating on this session until it warns or drops. The old
 		// session stays alive past go_away, until the replacement is ready.
+		var forced <-chan time.Time
+		var forceTimer *time.Timer
+		if t.forceSwap > 0 {
+			forceTimer = time.NewTimer(t.forceSwap)
+			forced = forceTimer.C
+		}
 		select {
 		case <-holder.goAway:
+		case <-forced:
+			slog.Info("forcing a swap, as asked", "after", t.forceSwap)
+			holder.markGoAway(50 * time.Second)
 		case <-holder.closed:
 		case <-ctx.Done():
+		}
+		if forceTimer != nil {
+			forceTimer.Stop()
+		}
+		if ctx.Err() != nil {
 			return
 		}
 
 		// Spend what the server gave us looking for a moment when the swap
-		// cannot be heard. Returns at once unless everything lines up.
-		t.waitForSwapWindow(ctx, holder)
+		// cannot be heard. A warm handover opens the replacement now and
+		// waits for a pause; otherwise adaptive prep may wait for a song.
+		// Either returns at once unless everything lines up.
+		if t.warmHandover && holder.sawGoAway() && !holder.isClosed() {
+			warmNext = t.handOver(ctx, holder)
+		}
+		if warmNext == nil {
+			t.waitForSwapWindow(ctx, holder)
+		}
 
 		// A session that opened and died immediately is a failure too, or a
 		// server dropping every connection becomes a hot loop.
@@ -742,8 +837,11 @@ func (t *Translator) supervise(ctx context.Context) {
 }
 
 // openSession opens a session and returns its holder once it is ready.
-func (t *Translator) openSession(ctx context.Context) *sessionHolder {
+func (t *Translator) openSession(ctx context.Context, warming bool) *sessionHolder {
 	holder := newSessionHolder()
+	// Before the receive loop exists, so not one message of a replacement's
+	// opening can be delivered.
+	holder.warming.Store(warming)
 
 	t.mu.Lock()
 	handle := t.handle
@@ -798,8 +896,9 @@ func (t *Translator) sessionMain(ctx context.Context, holder *sessionHolder, han
 		}
 		return
 	}
+	holder.openedAt.Store(time.Now().UnixNano())
 	holder.markReady()
-	slog.Info("live session open", "resumed", handle != "")
+	slog.Info("live session open", "resumed", handle != "", "warming", holder.warming.Load())
 
 	defer func() {
 		if err := session.Close(); err != nil {
@@ -829,6 +928,20 @@ func (t *Translator) sessionMain(ctx context.Context, holder *sessionHolder, han
 		if msg.GoAway && !holder.sawGoAway() {
 			slog.Info("go_away received — opening replacement", "time_left", msg.GoAwayLeft)
 			holder.markGoAway(msg.GoAwayLeft)
+		}
+
+		holder.noteOutput(msg)
+		if holder.warming.Load() {
+			// A replacement being warmed is heard from nothing: its captions
+			// would repeat the active session's, and its opening is where
+			// the buzz is. Its first audio still counts as the session
+			// having spoken, so the freeze gate is never told a session
+			// opens at the switch — what it plays from then on is the
+			// middle of a session, not the start of one.
+			if len(msg.Audio) > 0 {
+				holder.spoke = true
+			}
+			continue
 		}
 
 		// 2) Resumption handle — always keep the newest the *active* session
@@ -1070,8 +1183,13 @@ func (t *Translator) sendLoop(ctx context.Context) {
 	for ctx.Err() == nil {
 		t.mu.Lock()
 		holder := t.active
+		warming := t.warming
 		started := t.stats.StartedAt
 		t.mu.Unlock()
+		var warmSession liveSession
+		if warming != nil && !warming.isClosed() {
+			warmSession = warming.live()
+		}
 
 		session := liveSession(nil)
 		if holder != nil {
@@ -1158,6 +1276,17 @@ func (t *Translator) sendLoop(ctx context.Context) {
 			t.mu.Lock()
 			t.stats.ChunksSent++
 			t.mu.Unlock()
+
+			// The replacement hears exactly what the active session hears,
+			// after the same gates. A failure here costs only the warm-up:
+			// handOver sees it closed and falls back to a cold swap.
+			if warmSession != nil {
+				if err := warmSession.SendAudio(out); err != nil {
+					slog.Warn("send to the warming replacement failed", "err", err)
+					warming.markClosed()
+					warmSession = nil
+				}
+			}
 		}
 	}
 }

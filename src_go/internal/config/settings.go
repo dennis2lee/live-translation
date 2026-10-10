@@ -225,6 +225,14 @@ type Settings struct {
 	// reason — it cannot make an ungated session worse.
 	AdaptiveSessionPrep bool `json:"adaptive_session_prep"`
 
+	// WarmHandover opens a reconnect's replacement session when the warning
+	// arrives, feeds it the same audio unheard, and switches to it in a pause
+	// once it is speaking — so the listener hears neither its warm-up silence
+	// nor its opening, and the old session is not cut off mid-word. Default
+	// on; absent from older settings files, which therefore get it too,
+	// since Load unmarshals into Default().
+	WarmHandover bool `json:"warm_handover"`
+
 	// Terms to bias speech recognition towards, one per line. Two lists,
 	// because they are genuinely different: what the model should hear in the
 	// source language, and how names should come out in the captions. They must
@@ -273,6 +281,7 @@ func Default() Settings {
 		// On: with the music gate off it does nothing, and Load unmarshals
 		// over the defaults so an older settings file keeps this true.
 		AdaptiveSessionPrep: true,
+		WarmHandover:        true,
 		TargetLanguageCode:  "en",
 		CaptionPolicy:       string(captions.PolicyIncremental),
 	}
