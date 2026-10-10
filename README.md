@@ -11,7 +11,7 @@
 </p>
 
 <p align="center">
-  <img alt="macOS" src="https://img.shields.io/badge/macOS-Apple%20silicon-111111?style=flat-square&logo=apple&logoColor=white">
+  <img alt="macOS 26+" src="https://img.shields.io/badge/macOS%2026%2B-Apple%20silicon-111111?style=flat-square&logo=apple&logoColor=white">
   <img alt="Windows" src="https://img.shields.io/badge/Windows-x64-0078D6?style=flat-square&logo=windows&logoColor=white">
   <img alt="Google Gemini" src="https://img.shields.io/badge/Google-Gemini%20Live-4285F4?style=flat-square&logo=googlegemini&logoColor=white">
   <img alt="OpenAI" src="https://img.shields.io/badge/OpenAI-Realtime%20Translate-412991?style=flat-square&logo=openai&logoColor=white">
@@ -52,9 +52,9 @@ projector, press **`0`**. The speaker does nothing different.
       installed on the computer. Mute it any time with <code>m</code>.
     </td>
     <td width="33%" valign="top">
-      <h3>♾️ Hours, not minutes</h3>
+      <h3>♾️ Built for long sessions</h3>
       Sessions are renewed behind the scenes. The next one is warmed up
-      unheard and switched in during a pause, so nobody hears the seam.
+      unheard and switched in during a pause between sentences.
     </td>
   </tr>
   <tr>
@@ -110,10 +110,10 @@ an unsigned app, microphone permission, and what to do if something is off:
 |---|---|
 | ⚡ **Fast** | First caption in about 3 s with Gemini; OpenAI's first translated speech arrives in under a second. |
 | 🔁 **Seamless reconnects** | Gemini ends a session about every nine minutes (LiveCap renews an OpenAI session itself, every 50). The replacement is opened early, fed the same audio unheard, and switched in a pause after the same sentence in both. Measured on Gemini: the silence at a reconnect fell from 2.4–3.6 s to 0.5–1.2 s — an ordinary pause between sentences. |
-| 🎚️ **Cleaner speech** | Removes a buzzing artifact the cloud model produces at the start of a session — found and verified with signal processing, not by ear alone. |
+| 🎚️ **Cleaner speech** | Removes a buzzing artifact the cloud model produces at the start of a session — found and measured with signal processing on recorded model audio. |
 | 🎵 **Music filter** | A pure-Go port of Google's YAMNet audio classifier, running on the device. No audio leaves the machine for it. |
 | 🔤 **Readable captions** | Fixed box, bottom-aligned text, paced line release, an optional "complete phrases only" mode, clear-on-silence, and every colour and size adjustable. |
-| 🔒 **Your key stays yours** | Stored encrypted or in the system keychain — never in a settings file, never in a log, never in a URL. |
+| 🔒 **Your key stays yours** | Kept in an encrypted file (which deters casual reading, but anyone with the app can decrypt it) or in the system keychain — never in a settings file, never in a log, never in a URL. |
 | 🪶 **Native and small** | Go and Fyne. One app, no Electron, no Python, no runtime to install. |
 
 ## 🤝 Choosing a provider
@@ -124,10 +124,10 @@ an unsigned app, microphone permission, and what to do if something is off:
 | First translated speech | 3.3–5.2 s | ~0.5 s |
 | Spoken voice | picked by the model, changes at each reconnect | follows the speaker's voice (whether it holds across reconnects is not yet measured) |
 | Name / jargon hints | ✅ | — |
-| Cost | ~$0.037 per minute | ~$0.034 per minute |
+| Cost | ~$0.037 per minute (measured: $1.11 for 30 min) | $0.034 per minute (OpenAI's list price) |
 
-A 30-minute session costs about **$1.10** either way. You pay the provider
-directly; LiveCap has no account and no server of its own.
+You pay the provider directly; LiveCap has no account and no server of its
+own. Set a budget alert with whichever you use.
 
 <details>
 <summary><b>⌨️ Keyboard</b></summary>
@@ -171,11 +171,12 @@ the measurement is written down next to it.
 
 ## 🚧 Honest limits
 
-- **Windows** builds and installs cleanly in testing but **has not yet been run
-  on a real Windows PC** by its author.
+- **Windows** has been installed and run on a real PC (August 2026, version
+  1.0), but this release's additions — OpenAI, warm handover, the Windows
+  voices — **have not been run on Windows**.
 - Builds are **not code-signed or notarized**; both systems ask once before the
   first launch (the setup guides walk through it).
-- Mac builds are **Apple silicon only**.
+- Mac builds are **Apple silicon only** and need **macOS 26 or later**.
 - The buzz removal covers the start of a session; a similar artifact at the end
   of an old session is left alone, because every attempt to cut it also cut a
   word.
@@ -229,7 +230,6 @@ what counts):
 | ❌ | **Commercial use.** |
 | ❌ | **Redistributing** it, in source or built form. |
 | ❌ | **Changing it**, or building new works on it, without permission. |
-| ❌ | Removing or altering the copyright and author notice. |
 
 Want to do something the license does not allow? Ask:
 <a href="mailto:dennis2.lee@gmail.com">dennis2.lee@gmail.com</a>.

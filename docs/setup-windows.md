@@ -5,10 +5,12 @@ spent getting an API key.
 
 > **Using a Mac?** See [setup-macos.md](setup-macos.md).
 
-> **Please read first.** The Windows build has been checked by building and
-> inspecting it, but it **has not yet been run on a real Windows PC by its
-> author.** If something in this guide does not match what you see, that is
-> worth reporting — please include the log file (see *Troubleshooting*).
+> **Please read first.** LiveCap has been installed and run on a real Windows
+> PC (August 2026, version 1.0), but the newer features — the OpenAI
+> provider, warm session handover and the local Windows voices — **have not
+> been run on Windows yet.** If something in this guide does not match what you
+> see, that is worth reporting — please include the log file (see
+> *Troubleshooting*).
 
 ## What you need
 
@@ -16,10 +18,9 @@ spent getting an API key.
 |---|---|
 | **Windows 10 or 11, 64-bit (x64)** | ARM-based Windows PCs are not supported. |
 | **A microphone or audio interface** | A headset or USB microphone works. A USB interface fed from a mixer works best for events. |
-| **An internet connection** | About 0.3 Mbit/s upload while translating. |
-| **An API key, with billing** | From Google (Gemini) or OpenAI. Step 4 covers this. Translation costs about **$0.035 per minute** of use. |
+| **An internet connection** | About 0.3 Mbit/s upload while translating with Gemini, 0.5 Mbit/s with OpenAI. |
+| **An API key, with billing** | From Google (Gemini) or OpenAI. Step 4 covers this. Translation costs about **$0.035 per minute** of use (see step 4). |
 | **Administrator rights** | The installer installs for all users. |
-| **Access to the GitHub repository** | It is private, so you need to be invited before you can download. |
 
 ---
 
@@ -92,12 +93,12 @@ in Preferences.
 | First translated speech | 3–5 s after you start | under 1 s |
 | Spoken voice | changes at every reconnect | follows the speaker's voice (not yet measured across reconnects) |
 | Name and jargon hints (Words tab) | yes | no |
-| Cost | ~$0.037 / min | ~$0.034 / min |
+| Cost | ~$0.037 / min (measured) | $0.034 / min (OpenAI's list price) |
 
 Captions work the same with either.
 
-> **Set a budget alert** with your provider. A 30-minute session costs about
-> $1.10.
+> **Set a budget alert** with your provider. A 30-minute Gemini session
+> measured $1.11.
 
 ## Step 5 — Start LiveCap and enter the key
 
@@ -115,8 +116,10 @@ Captions work the same with either.
    updated for Windows yet.
 7. Click **OK**.
 
-The key is saved encrypted under your user profile and is never written to a
-settings file or a log.
+The key is kept in an encrypted file under your user profile and is never
+written to a settings file or a log. The encryption only keeps it out of plain
+sight — anyone with a copy of LiveCap can decrypt that file — so tick the
+Keychain option (Windows Credential Manager) for real protection.
 
 ## Step 6 — Choose your audio input
 
@@ -185,7 +188,8 @@ device and a **Voice**:
 
 - **Model voice**: the cloud model's own speech.
 - **A voice on this PC**: read aloud by Windows, which keeps the same voice all
-  session. Click **Preview** to hear it. To add voices, go to
+  session. Click **Preview** to hear it. *Not yet tested on Windows — please
+  report whether your voices appear and Preview plays.* To add voices, go to
   **Settings → Time & language → Speech → Manage voices**.
   - The newer **natural voices** added for Narrator cannot be used by LiveCap.
     Voices from a language pack can.
@@ -227,12 +231,12 @@ This is **Preferences → Behaviour → Warm session handover**, on by default.
 | What you see | What to do |
 |---|---|
 | *Windows protected your PC* | Step 2: **More info → Run anyway**. |
-| *API key required — enter it in Preferences* | Step 5. The key must be for the provider selected on the API tab. |
+| *Google Gemini API key required* or *OpenAI API key required — enter it in Preferences* | Step 5. The key must be for the provider selected on the API tab. |
 | *Billing credits exhausted* or *Billing required* (Gemini) | Turn on billing for the **same project** as the key. |
 | *OpenAI credit exhausted* | Add credit under Settings → Billing on platform.openai.com. |
 | *API key is not valid* | Copy the key again. No spaces before or after it. |
 | Green dot, but no captions | Microphone access is off for desktop apps — step 3 — then restart LiveCap. Also run the level test (step 6). |
-| My USB interface is not in the list | Plug it in, then **Settings → Audio Input → Refresh Device List**. |
+| My USB interface is not in the list | Plug it in, then **Settings → Refresh Device List**. |
 | Stuck in full screen, no menu | Press **f**. |
 | A voice I installed is not in the Voice list | Only SAPI voices are visible. Narrator's natural voices are not. |
 | The translation is echoed and repeated | The speakers are feeding the microphone. Use headphones, or turn off **Speak the translation aloud**. |

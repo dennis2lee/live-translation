@@ -10,11 +10,10 @@ spent getting an API key.
 | | |
 |---|---|
 | **A Mac with Apple silicon** | M1 or later. The download is built for arm64 only, so Intel Macs cannot run it. |
-| **macOS 12 or later** | Tested on macOS 26.5. |
+| **macOS 26 or later** | The build and its bundled resampler need macOS 26. Tested on 26.5. |
 | **A microphone or audio interface** | The built-in microphone works. A USB interface fed from a mixer works best for events. |
-| **An internet connection** | About 0.3 Mbit/s upload while translating. |
-| **An API key, with billing** | From Google (Gemini) or OpenAI. Step 4 covers this. Translation costs about **$0.035 per minute** of use. |
-| **Access to the GitHub repository** | It is private, so you need to be invited before you can download. |
+| **An internet connection** | About 0.3 Mbit/s upload while translating with Gemini, 0.5 Mbit/s with OpenAI. |
+| **An API key, with billing** | From Google (Gemini) or OpenAI. Step 4 covers this. Translation costs about **$0.035 per minute** of use (see step 4). |
 
 ---
 
@@ -84,12 +83,12 @@ in Preferences.
 | First translated speech | 3–5 s after you start | under 1 s |
 | Spoken voice | changes at every reconnect | follows the speaker's voice (not yet measured across reconnects) |
 | Name and jargon hints (Words tab) | yes | no |
-| Cost | ~$0.037 / min | ~$0.034 / min |
+| Cost | ~$0.037 / min (measured) | $0.034 / min (OpenAI's list price) |
 
 Captions work the same with either.
 
-> **Set a budget alert** with your provider. A 30-minute session costs about
-> $1.10.
+> **Set a budget alert** with your provider. A 30-minute Gemini session
+> measured $1.11.
 
 ## Step 5 — Enter the key
 
@@ -102,8 +101,10 @@ Captions work the same with either.
 5. Optionally tick **Also store in the macOS Keychain**.
 6. Click **OK**.
 
-The key is saved encrypted on your Mac and is never written to a settings file
-or a log.
+The key is kept in an encrypted file on your Mac and is never written to a
+settings file or a log. The encryption only keeps it out of plain sight —
+anyone with a copy of LiveCap can decrypt that file — so tick the Keychain
+option for real protection.
 
 ## Step 6 — Choose your audio input
 
@@ -214,12 +215,12 @@ This is **Preferences → Behaviour → Warm session handover**, on by default.
 |---|---|
 | *"LiveCap" cannot be opened* / *cannot verify the developer* | Step 3: System Settings → Privacy & Security → **Open Anyway**. |
 | The app will not start at all on an Intel Mac | The build is Apple silicon only. |
-| *API key required — enter it in Preferences* | Step 5. The key must be for the provider selected on the API tab. |
+| *Google Gemini API key required* or *OpenAI API key required — enter it in Preferences* | Step 5. The key must be for the provider selected on the API tab. |
 | *Billing credits exhausted* or *Billing required* (Gemini) | Turn on billing for the **same project** as the key. |
 | *OpenAI credit exhausted* | Add credit under Settings → Billing on platform.openai.com. |
 | *API key is not valid* | Copy the key again. No spaces before or after it. |
 | Green dot, but no captions | macOS is blocking the microphone: **System Settings → Privacy & Security → Microphone**, turn LiveCap on, then restart LiveCap. Also run the level test (step 6). |
-| My USB interface is not in the list | Plug it in, then **Settings → Audio Input → Refresh Device List**. |
+| My USB interface is not in the list | Plug it in, then **Settings → Refresh Device List**. |
 | Captions are too small | **Settings → Font Size**, or Preferences → Captions. |
 | The translation is echoed and repeated | The speakers are feeding the microphone. Use headphones, or turn off **Speak the translation aloud**. |
 | Anything else | **Preferences → Behaviour** shows where the log file is. Include it when reporting a problem. It never contains your key. |

@@ -17,8 +17,6 @@
       .ko   { font-family: "Apple SD Gothic Neo", "Malgun Gothic", "Noto Sans KR", sans-serif; }
       .cap  { font-size: 30px; font-weight: 600; fill: #ffffff; }
       .dim  { fill-opacity: 0.55; }
-      @keyframes pulse { 0%, 100% { opacity: 1 } 50% { opacity: 0.35 } }
-      .live { animation: pulse 2.4s ease-in-out infinite; }
     </style>
   </defs>
 
@@ -46,13 +44,15 @@
     <text x="155" y="20" text-anchor="middle" font-size="13" fill="#79c0ff">Gemini · OpenAI</text>
   </g>
 
-  <!-- the caption box: fixed, 90% wide, bottom-aligned, newest line steady -->
+  <!-- the caption box: fixed, 90% wide, rows left-aligned and bottom-aligned,
+       the unsettled line dimmed -->
   <rect x="80" y="290" width="800" height="70" fill="url(#glow)" filter="url(#soft)"/>
   <rect x="48" y="236" width="864" height="150" rx="24" fill="#1B4965"/>
-  <text x="480" y="294" text-anchor="middle" class="ui cap">Good morning, everyone. Let's begin today's meeting.</text>
-  <text x="480" y="344" text-anchor="middle" class="ui cap dim">First, a quick look at last week's progress</text>
+  <text x="84" y="294" class="ui cap">Good morning, everyone. Let's begin today's meeting.</text>
+  <text x="84" y="344" class="ui cap dim">First, a quick look at last week's progress</text>
 
-  <!-- direction hint and the status dot, just below the box -->
+  <!-- direction hint and the status dot, just below the box: steady green is
+       live (only connecting blinks) -->
   <text x="868" y="414" text-anchor="end" class="ui" font-size="15" fill="#8b949e">KO→EN</text>
-  <circle cx="892" cy="409" r="8" fill="#2ea043" class="live"/>
+  <circle cx="892" cy="409" r="8" fill="#2ea043"/>
 </svg>
