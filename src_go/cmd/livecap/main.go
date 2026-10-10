@@ -128,7 +128,9 @@ func runSelftest() int {
 		report("log file", false, "could not be opened — stderr only")
 	}
 
-	if source := config.APIKeySource(); source != "" {
+	provider := config.Load().Provider
+	report("provider", true, config.ProviderMenuText[provider])
+	if source := config.KeySource(provider); source != "" {
 		report("api key", true, "from "+source)
 	} else {
 		report("api key", false, "not found — enter one in Preferences")
@@ -151,7 +153,11 @@ func runSelftest() int {
 		report("audio input", true, fmt.Sprintf("%d device(s): %s", len(devices), names))
 	}
 
-	latency := netcheck.MeasureLatency(netcheck.LiveAPIHost, netcheck.LiveAPIPort, 3, 0)
+	host := netcheck.LiveAPIHost
+	if provider == config.ProviderOpenAI {
+		host = netcheck.OpenAIHost
+	}
+	latency := netcheck.MeasureLatency(host, netcheck.LiveAPIPort, 3, 0)
 	if latency.OK() {
 		report("live api reachable", true,
 			fmt.Sprintf("%s, %.0f ms median", latency.Host, latency.MedianMS()))
@@ -159,7 +165,11 @@ func runSelftest() int {
 		report("live api reachable", false, latency.Host+" — "+latency.Err)
 	}
 
-	report("model", true, translator.Model)
+	if provider == config.ProviderOpenAI {
+		report("model", true, translator.OpenAIModel)
+	} else {
+		report("model", true, translator.Model)
+	}
 
 	fmt.Println()
 	if !ok {

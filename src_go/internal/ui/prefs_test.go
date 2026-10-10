@@ -15,11 +15,11 @@ import (
 func openPrefs(t *testing.T, w *Window) *prefsDialog {
 	t.Helper()
 	p := &prefsDialog{
-		win:       w,
-		original:  w.settings,
-		storedKey: config.StoredAPIKey(),
-		working:   w.settings,
-		levelStop: make(chan struct{}),
+		win:        w,
+		original:   w.settings,
+		storedKeys: storedKeys(),
+		working:    w.settings,
+		levelStop:  make(chan struct{}),
 	}
 	// The tabs are what construct the widgets that collect() reads back.
 	p.connectionTab()
@@ -84,7 +84,7 @@ func TestCancelUndoesAnApply(t *testing.T) {
 // Cancel without Apply must not touch anything, including the key store.
 func TestCancelWithoutApplyIsANoOp(t *testing.T) {
 	w := newTestWindow(t)
-	if err := config.SaveAPIKey("original-key", false); err != nil {
+	if err := config.SaveKey(config.ProviderGemini, "original-key", false); err != nil {
 		t.Fatal(err)
 	}
 	before := w.settings
@@ -95,7 +95,7 @@ func TestCancelWithoutApplyIsANoOp(t *testing.T) {
 	if !w.settings.Equal(before) {
 		t.Error("Cancel changed the settings although Apply was never pressed")
 	}
-	if got := config.StoredAPIKey(); got != "original-key" {
+	if got := config.StoredKey(config.ProviderGemini); got != "original-key" {
 		t.Errorf("StoredAPIKey = %q", got)
 	}
 }
@@ -105,14 +105,14 @@ func TestCancelWithoutApplyIsANoOp(t *testing.T) {
 // no way to tell a fresh copy from one that was already there.
 func TestCancelRestoresTheKeyStore(t *testing.T) {
 	w := newTestWindow(t)
-	if err := config.SaveAPIKey("original-key", false); err != nil {
+	if err := config.SaveKey(config.ProviderGemini, "original-key", false); err != nil {
 		t.Fatal(err)
 	}
 	p := openPrefs(t, w)
 
 	p.apiKey.SetText("typed-by-mistake")
 	p.apply()
-	if got := config.StoredAPIKey(); got != "typed-by-mistake" {
+	if got := config.StoredKey(config.ProviderGemini); got != "typed-by-mistake" {
 		t.Fatalf("StoredAPIKey = %q after Apply", got)
 	}
 	// The field is cleared once applied, so the key is not left on screen.
@@ -121,7 +121,7 @@ func TestCancelRestoresTheKeyStore(t *testing.T) {
 	}
 
 	p.cancel()
-	if got := config.StoredAPIKey(); got != "original-key" {
+	if got := config.StoredKey(config.ProviderGemini); got != "original-key" {
 		t.Errorf("StoredAPIKey = %q after Cancel, want the original back", got)
 	}
 }
@@ -132,18 +132,18 @@ func TestCancelRestoresTheKeyStore(t *testing.T) {
 // Forget→Cancel left the key deleted, Forget→Apply→Cancel brought it back.
 func TestCancelUndoesForgetKey(t *testing.T) {
 	w := newTestWindow(t)
-	if err := config.SaveAPIKey("original-key", false); err != nil {
+	if err := config.SaveKey(config.ProviderGemini, "original-key", false); err != nil {
 		t.Fatal(err)
 	}
 	p := openPrefs(t, w)
 
 	p.forgetKey()
-	if got := config.StoredAPIKey(); got != "" {
+	if got := config.StoredKey(config.ProviderGemini); got != "" {
 		t.Fatalf("Forget Key left %q in the store", got)
 	}
 
 	p.cancel()
-	if got := config.StoredAPIKey(); got != "original-key" {
+	if got := config.StoredKey(config.ProviderGemini); got != "original-key" {
 		t.Errorf("StoredAPIKey = %q after Cancel, want the key back", got)
 	}
 }
@@ -155,11 +155,11 @@ func TestCancelRestoresAnEmptyStore(t *testing.T) {
 	p := openPrefs(t, w)
 	p.apiKey.SetText("AIzaSyExampleNotARealKey")
 	p.apply()
-	if config.StoredAPIKey() == "" {
+	if config.StoredKey(config.ProviderGemini) == "" {
 		t.Fatal("Apply did not store the key")
 	}
 	p.cancel()
-	if got := config.StoredAPIKey(); got != "" {
+	if got := config.StoredKey(config.ProviderGemini); got != "" {
 		t.Errorf("StoredAPIKey = %q, want nothing", got)
 	}
 }
@@ -281,7 +281,7 @@ func TestKeyStatusNamesTheSourceNotTheKey(t *testing.T) {
 	}
 
 	const secret = "AIzaSyExampleNotARealKey"
-	if err := config.SaveAPIKey(secret, false); err != nil {
+	if err := config.SaveKey(config.ProviderGemini, secret, false); err != nil {
 		t.Fatal(err)
 	}
 	p.refreshKeyStatus()

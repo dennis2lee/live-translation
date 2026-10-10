@@ -9,8 +9,9 @@ import (
 	"github.com/dennis2lee/live-translation/src_go/internal/credentials"
 )
 
-// APIKeyVars are the environment variables consulted, in order.
-var APIKeyVars = []string{"GEMINI_API_KEY", "GOOGLE_API_KEY"}
+// APIKeyVars are the environment variables consulted for the Gemini key, in
+// order.
+var APIKeyVars = keySpecs[ProviderGemini].envVars
 
 var placeholderMarkers = []string{"your", "xxx", "<", "here"}
 
@@ -25,11 +26,14 @@ var (
 
 // isPlaceholder spots an unfilled template value.
 //
-// Real Google API keys start with "AIza"; a random key body could contain a
-// marker like "here" by chance, so never reject one of those.
+// Real keys start with a known prefix — "AIza" for Google, "sk-" for OpenAI —
+// and a random key body could contain a marker like "here" by chance, so never
+// reject one of those.
 func isPlaceholder(value string) bool {
-	if strings.HasPrefix(value, "AIza") {
-		return false
+	for _, spec := range keySpecs {
+		if strings.HasPrefix(value, spec.prefix) {
+			return false
+		}
 	}
 	low := strings.ToLower(value)
 	for _, marker := range placeholderMarkers {
@@ -40,82 +44,94 @@ func isPlaceholder(value string) bool {
 	return false
 }
 
-// LoadAPIKey looks up the key: environment variable, encrypted store, then
-// Keychain. Never stored in source or in the settings file.
-func LoadAPIKey() string {
-	for _, name := range APIKeyVars {
+// LoadAPIKey is LoadKey for Gemini, which the spikes and older callers use.
+func LoadAPIKey() string { return LoadKey(ProviderGemini) }
+
+// APIKeySource is KeySource for Gemini.
+func APIKeySource() string { return KeySource(ProviderGemini) }
+
+// LoadKey looks up a provider's key: environment variable, encrypted store,
+// then Keychain. Never stored in source or in the settings file.
+func LoadKey(p Provider) string {
+	spec := specFor(p)
+	for _, name := range spec.envVars {
 		if v := strings.TrimSpace(getenv(name)); v != "" && !isPlaceholder(v) {
 			return v
 		}
 	}
-	if stored := credentials.Get(APIKeyVars[0]); stored != "" && !isPlaceholder(stored) {
+	if stored := credentials.Get(spec.envVars[0]); stored != "" && !isPlaceholder(stored) {
 		return stored
 	}
-	v, err := keychainGet(KeyringService, KeyringUser)
+	v, err := keychainGet(KeyringService, spec.keychainUser)
 	if err != nil {
 		// Nothing stored is the normal case, so this is not an error worth
 		// raising to the user.
-		slog.Debug("no key in the keychain", "err", err)
+		slog.Debug("no key in the keychain", "provider", p, "err", err)
 		return ""
 	}
 	return strings.TrimSpace(v)
 }
 
-// APIKeySource says where the key in force comes from, for Preferences to show.
-// It returns "" when there is no key anywhere.
-func APIKeySource() string {
-	for _, name := range APIKeyVars {
+// KeySource says where a provider's key in force comes from, for Preferences
+// to show. It returns "" when there is no key anywhere.
+func KeySource(p Provider) string {
+	spec := specFor(p)
+	for _, name := range spec.envVars {
 		if v := strings.TrimSpace(getenv(name)); v != "" && !isPlaceholder(v) {
 			return name + " environment variable"
 		}
 	}
-	if stored := credentials.Get(APIKeyVars[0]); stored != "" && !isPlaceholder(stored) {
+	if stored := credentials.Get(spec.envVars[0]); stored != "" && !isPlaceholder(stored) {
 		return "encrypted store"
 	}
-	if v, err := keychainGet(KeyringService, KeyringUser); err == nil && strings.TrimSpace(v) != "" {
+	if v, err := keychainGet(KeyringService, spec.keychainUser); err == nil && strings.TrimSpace(v) != "" {
 		return "macOS Keychain"
 	}
 	return ""
 }
 
-// SaveAPIKey stores the key encrypted, and optionally in the Keychain as well.
-func SaveAPIKey(key string, toKeychain bool) error {
+// SaveKey stores a provider's key encrypted, and optionally in the Keychain as
+// well.
+func SaveKey(p Provider, key string, toKeychain bool) error {
+	spec := specFor(p)
 	key = strings.TrimSpace(key)
-	if err := credentials.Put(APIKeyVars[0], key); err != nil {
+	if err := credentials.Put(spec.envVars[0], key); err != nil {
 		return err
 	}
 	if toKeychain {
-		if err := keychainSet(KeyringService, KeyringUser, key); err != nil {
-			slog.Error("could not write key to keychain", "err", err)
+		if err := keychainSet(KeyringService, spec.keychainUser, key); err != nil {
+			slog.Error("could not write key to keychain", "provider", p, "err", err)
 			return err
 		}
 	}
 	return nil
 }
 
-// StoredAPIKey is the key held in the encrypted store, ignoring the environment
-// variable and the Keychain.
+// StoredKey is a provider's key held in the encrypted store, ignoring the
+// environment variable and the Keychain.
 //
 // Preferences takes this before it writes anything, so cancelling can put the
 // store back exactly as it found it.
-func StoredAPIKey() string { return credentials.Get(APIKeyVars[0]) }
+func StoredKey(p Provider) string { return credentials.Get(specFor(p).envVars[0]) }
 
-// RestoreStoredAPIKey undoes a write to the encrypted store, back to previous.
+// RestoreStoredKey undoes a write to the encrypted store, back to previous.
 //
 // Only the store is restored. A key that was also copied into the Keychain
 // stays there — there is no way to tell a fresh copy from a pre-existing one.
-func RestoreStoredAPIKey(previous string) error {
+func RestoreStoredKey(p Provider, previous string) error {
+	name := specFor(p).envVars[0]
 	if previous != "" {
-		return credentials.Put(APIKeyVars[0], previous)
+		return credentials.Put(name, previous)
 	}
-	return credentials.Remove(APIKeyVars[0])
+	return credentials.Remove(name)
 }
 
-// ClearAPIKey forgets the key everywhere this application put it.
-func ClearAPIKey() {
-	if err := credentials.Remove(APIKeyVars[0]); err != nil {
-		slog.Warn("could not clear the stored key", "err", err)
+// ClearKey forgets a provider's key everywhere this application put it.
+func ClearKey(p Provider) {
+	spec := specFor(p)
+	if err := credentials.Remove(spec.envVars[0]); err != nil {
+		slog.Warn("could not clear the stored key", "provider", p, "err", err)
 	}
 	// Nothing stored is the normal case, so a failure here is not reported.
-	_ = keychainKill(KeyringService, KeyringUser)
+	_ = keychainKill(KeyringService, spec.keychainUser)
 }

@@ -83,6 +83,12 @@ const (
 // fatalErrors are failures retrying cannot fix. Report immediately instead of
 // backing off.
 var fatalErrors = []struct{ marker, message string }{
+	// OpenAI's first, because its quota message links to a "billing" page
+	// and would otherwise be reported as Gemini's free-tier problem.
+	{"insufficient_quota", "OpenAI credit exhausted — add credit at platform.openai.com"},
+	{"invalid_api_key", "API key is not valid"},
+	{"401 unauthorized", "API key is not valid"},
+	{"model_not_found", "Model not found — check the model name"},
 	{"credits are depleted", "Billing credits exhausted — set up billing in AI Studio"},
 	{"billing", "Billing required — this model is not on the free tier"},
 	{"api key not valid", "API key is not valid"},
@@ -258,8 +264,12 @@ func (c Callbacks) audio(pcm []byte) {
 
 // Options configures a Translator.
 type Options struct {
-	Ring        *audio.Ring
-	APIKey      string
+	Ring   *audio.Ring
+	APIKey string
+	// Provider picks the service: ProviderOpenAI, or anything else for
+	// Gemini. A string rather than config.Provider so this package stays
+	// free of the settings package.
+	Provider    string
 	Session     SessionConfig
 	SilenceGate bool
 	Callbacks   Callbacks
@@ -468,7 +478,11 @@ func New(opts Options) (*Translator, error) {
 			return nil, errors.New("translator: no API key")
 		}
 		var err error
-		open, err = newGenaiOpener(opts.APIKey, opts.Session)
+		if opts.Provider == ProviderOpenAI {
+			open, err = newOpenAIOpener(opts.APIKey, opts.Session)
+		} else {
+			open, err = newGenaiOpener(opts.APIKey, opts.Session)
+		}
 		if err != nil {
 			return nil, err
 		}

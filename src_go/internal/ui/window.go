@@ -418,7 +418,8 @@ func (w *Window) applySessionChanges(old config.Settings) {
 // without a rebuild, and adding one of them here would punch a hole in the
 // audio on every Apply.
 func sessionNeedsRestart(old, next config.Settings) bool {
-	return old.TargetLanguageCode != next.TargetLanguageCode ||
+	return old.Provider != next.Provider ||
+		old.TargetLanguageCode != next.TargetLanguageCode ||
 		old.SilenceGate != next.SilenceGate ||
 		old.MusicGate != next.MusicGate ||
 		old.AdaptiveSessionPrep != next.AdaptiveSessionPrep ||
@@ -485,14 +486,15 @@ func (w *Window) restartTranslator() {
 	if w.capture == nil {
 		return
 	}
-	apiKey := config.LoadAPIKey()
+	apiKey := config.LoadKey(w.settings.Provider)
 	if apiKey == "" {
 		// The running session keeps translating in the old direction, so this
 		// is a notice rather than an error state — but it has to be said. It
 		// used to return in silence, and pressing 2 with the key forgotten
 		// looked exactly like the key binding being broken.
 		slog.Warn("settings change needs a session restart, but the API key is gone")
-		w.showNotice("API key required — the change will apply next time you start")
+		w.showNotice(config.ProviderMenuText[w.settings.Provider] +
+			" API key required — the change will apply next time you start")
 		return
 	}
 	if w.translator != nil {
@@ -592,8 +594,9 @@ func (w *Window) translatorOptions(ring *audio.Ring, apiKey string) translator.O
 	quiet := w.gateClosed()
 
 	return translator.Options{
-		Ring:   ring,
-		APIKey: apiKey,
+		Ring:     ring,
+		APIKey:   apiKey,
+		Provider: string(w.settings.Provider),
 		Session: translator.SessionConfig{
 			TargetLanguageCode: w.settings.TargetLanguageCode,
 			EchoTargetLanguage: w.settings.EchoTargetLanguage,
@@ -828,9 +831,10 @@ func (w *Window) StartTranslation() {
 	if w.state != translator.StateIdle {
 		return
 	}
-	apiKey := config.LoadAPIKey()
+	apiKey := config.LoadKey(w.settings.Provider)
 	if apiKey == "" {
-		w.failToStart("API key required — enter it in Preferences")
+		w.failToStart(config.ProviderMenuText[w.settings.Provider] +
+			" API key required — enter it in Preferences")
 		return
 	}
 

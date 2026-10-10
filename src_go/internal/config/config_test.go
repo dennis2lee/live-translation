@@ -300,7 +300,7 @@ func TestResetForgetsEverything(t *testing.T) {
 // The settings file must never hold the API key.
 func TestSettingsFileNeverHoldsTheKey(t *testing.T) {
 	dir, _ := isolate(t)
-	if err := SaveAPIKey("AIzaSyExampleNotARealKey", false); err != nil {
+	if err := SaveKey(ProviderGemini, "AIzaSyExampleNotARealKey", false); err != nil {
 		t.Fatal(err)
 	}
 	if err := Save(Default()); err != nil {
@@ -338,7 +338,7 @@ func TestAPIKeyLookupOrder(t *testing.T) {
 	}
 
 	// The encrypted store beats the Keychain.
-	if err := SaveAPIKey("from-store", false); err != nil {
+	if err := SaveKey(ProviderGemini, "from-store", false); err != nil {
 		t.Fatal(err)
 	}
 	if got := LoadAPIKey(); got != "from-store" {
@@ -395,39 +395,39 @@ func TestRealKeysAreNeverMistakenForPlaceholders(t *testing.T) {
 // Cancelling Preferences must put the store back exactly as it was.
 func TestRestoreStoredAPIKey(t *testing.T) {
 	isolate(t)
-	if err := SaveAPIKey("original", false); err != nil {
+	if err := SaveKey(ProviderGemini, "original", false); err != nil {
 		t.Fatal(err)
 	}
-	before := StoredAPIKey()
-	if err := SaveAPIKey("typed-by-mistake", false); err != nil {
+	before := StoredKey(ProviderGemini)
+	if err := SaveKey(ProviderGemini, "typed-by-mistake", false); err != nil {
 		t.Fatal(err)
 	}
-	if err := RestoreStoredAPIKey(before); err != nil {
+	if err := RestoreStoredKey(ProviderGemini, before); err != nil {
 		t.Fatal(err)
 	}
-	if got := StoredAPIKey(); got != "original" {
+	if got := StoredKey(ProviderGemini); got != "original" {
 		t.Errorf("StoredAPIKey = %q after restore", got)
 	}
 
 	// Restoring "no key at all" must empty the store, not write "".
-	if err := RestoreStoredAPIKey(""); err != nil {
+	if err := RestoreStoredKey(ProviderGemini, ""); err != nil {
 		t.Fatal(err)
 	}
-	if got := StoredAPIKey(); got != "" {
+	if got := StoredKey(ProviderGemini); got != "" {
 		t.Errorf("StoredAPIKey = %q, want nothing", got)
 	}
 }
 
 func TestClearAPIKeyForgetsBothPlaces(t *testing.T) {
 	_, keychain := isolate(t)
-	if err := SaveAPIKey("secret", true); err != nil {
+	if err := SaveKey(ProviderGemini, "secret", true); err != nil {
 		t.Fatal(err)
 	}
 	if len(keychain) != 1 {
 		t.Fatalf("keychain holds %d entries", len(keychain))
 	}
-	ClearAPIKey()
-	if got := StoredAPIKey(); got != "" {
+	ClearKey(ProviderGemini)
+	if got := StoredKey(ProviderGemini); got != "" {
 		t.Errorf("store still holds %q", got)
 	}
 	if len(keychain) != 0 {

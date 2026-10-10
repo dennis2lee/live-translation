@@ -233,8 +233,13 @@ type Settings struct {
 	VocabularyCaptions string `json:"vocabulary_captions"`
 
 	// API
-	TargetLanguageCode string `json:"target_language_code"`
-	EchoTargetLanguage bool   `json:"echo_target_language"`
+	//
+	// Provider is the translation service. Absent from settings files written
+	// before it existed, which therefore keep Gemini — Default() is what Load
+	// unmarshals into.
+	Provider           Provider `json:"provider"`
+	TargetLanguageCode string   `json:"target_language_code"`
+	EchoTargetLanguage bool     `json:"echo_target_language"`
 
 	// CaptionPolicy is fixed to A by measurement (spikes/RESULTS.md):
 	// fragments arrive incrementally, median 14 chars, about once per second.
@@ -244,6 +249,7 @@ type Settings struct {
 // Default returns the settings a fresh install starts with.
 func Default() Settings {
 	return Settings{
+		Provider:           ProviderGemini,
 		BgColor:            "#000000",
 		BoxColor:           "#1B4965",
 		TextColor:          "#FFFFFF",
@@ -338,6 +344,9 @@ func (s Settings) Clamped() Settings {
 	case BoxTop, BoxCenter, BoxBottom:
 	default:
 		out.BoxPosition = string(BoxBottom)
+	}
+	if !s.Provider.Valid() {
+		out.Provider = ProviderGemini
 	}
 	out.FontSize = int(clamp(float64(s.FontSize), 24, 96))
 	out.MaxLines = int(clamp(float64(s.MaxLines), 1, 4))

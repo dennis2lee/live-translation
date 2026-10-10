@@ -38,6 +38,8 @@ const (
 	// guess.
 	LiveAPIHost = "generativelanguage.googleapis.com"
 	LiveAPIPort = 443
+	// OpenAIHost is where an OpenAI translation session connects.
+	OpenAIHost = "api.openai.com"
 
 	SpeedHost   = "speed.cloudflare.com"
 	downloadURL = "https://" + SpeedHost + "/__down?bytes=%d"
@@ -329,9 +331,14 @@ func MeasureUpload(url string, nbytes int, timeout time.Duration) Throughput {
 	return flow
 }
 
-// Run runs the whole check. Blocking — call it off the UI goroutine.
-func Run() Report {
-	report := Report{Latency: MeasureLatency(LiveAPIHost, LiveAPIPort, LatencySamples, LatencyTimeout)}
+// Run runs the whole check against Gemini. Blocking — call it off the UI
+// goroutine.
+func Run() Report { return RunFor(LiveAPIHost) }
+
+// RunFor runs the whole check, measuring the round trip to host — the server
+// the chosen provider's sessions connect to.
+func RunFor(host string) Report {
+	report := Report{Latency: MeasureLatency(host, LiveAPIPort, LatencySamples, LatencyTimeout)}
 	report.Upload = MeasureUpload("", UploadBytes, Timeout)
 	report.Download = MeasureDownload("", DownloadBytes, Timeout)
 	slog.Info("network check", "verdict", report.Verdict())

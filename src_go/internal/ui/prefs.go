@@ -43,8 +43,9 @@ type prefsDialog struct {
 
 	// original is what was in force when the dialog opened, for Cancel.
 	original config.Settings
-	// storedKey is the encrypted store's contents at the same moment.
-	storedKey string
+	// storedKeys is the encrypted store's contents at the same moment, one
+	// entry per provider: Cancel puts back every key the dialog touched.
+	storedKeys map[config.Provider]string
 	// dirty records that the dialog has already changed something outside
 	// itself, so Cancel knows there is something to undo.
 	//
@@ -57,6 +58,8 @@ type prefsDialog struct {
 	working config.Settings
 
 	// Widgets whose values are read back on Apply.
+	provider     *widget.Select
+	keyHeading   *widget.Label
 	apiKey       *widget.Entry
 	toKeychain   *widget.Check
 	keyStatus    *widget.Label
@@ -164,11 +167,11 @@ func (w *Window) OpenPreferences() {
 		return
 	}
 	p := &prefsDialog{
-		win:       w,
-		original:  w.settings,
-		storedKey: config.StoredAPIKey(),
-		working:   w.settings,
-		levelStop: make(chan struct{}),
+		win:        w,
+		original:   w.settings,
+		storedKeys: storedKeys(),
+		working:    w.settings,
+		levelStop:  make(chan struct{}),
 	}
 	w.prefs = p
 	p.show()
@@ -255,13 +258,33 @@ func (p *prefsDialog) close() {
 
 // --- tabs -----------------------------------------------------------------
 
+// storedKeys reads every provider's entry in the encrypted store.
+func storedKeys() map[config.Provider]string {
+	keys := map[config.Provider]string{}
+	for _, pr := range config.Providers {
+		keys[pr] = config.StoredKey(pr)
+	}
+	return keys
+}
+
 func (p *prefsDialog) apiTab() fyne.CanvasObject {
+	options := make([]string, len(config.Providers))
+	for i, pr := range config.Providers {
+		options[i] = config.ProviderMenuText[pr]
+	}
+	p.keyHeading = widget.NewLabelWithStyle("", fyne.TextAlignLeading, fyne.TextStyle{Bold: true})
 	p.apiKey = widget.NewPasswordEntry()
-	p.apiKey.SetPlaceHolder("AIza…")
 	p.toKeychain = widget.NewCheck("Also store in the macOS Keychain", nil)
 	p.keyStatus = widget.NewLabel("")
 	p.keyStatus.Wrapping = fyne.TextWrapWord
-	p.refreshKeyStatus()
+	p.provider = widget.NewSelect(options, func(string) {
+		// A key typed for one provider is never saved as the other's: it
+		// would be a rejected session and a key sent to the wrong company.
+		p.apiKey.SetText("")
+		p.showProviderKey()
+	})
+	p.provider.SetSelected(config.ProviderMenuText[p.working.Provider])
+	p.showProviderKey()
 
 	test := widget.NewButton("Test Key", func() { p.testKey() })
 	forget := widget.NewButton("Forget Key", func() { p.forgetKey() })
@@ -269,7 +292,9 @@ func (p *prefsDialog) apiTab() fyne.CanvasObject {
 	// The key is never logged and never written to the settings file — only to
 	// the encrypted store, and to the Keychain when asked.
 	return container.NewVBox(
-		widget.NewLabelWithStyle("Gemini API key", fyne.TextAlignLeading, fyne.TextStyle{Bold: true}),
+		widget.NewLabelWithStyle("Provider", fyne.TextAlignLeading, fyne.TextStyle{Bold: true}),
+		p.provider,
+		p.keyHeading,
 		p.apiKey,
 		p.toKeychain,
 		container.NewHBox(test, forget),
@@ -599,8 +624,8 @@ func (p *prefsDialog) networkTab() fyne.CanvasObject {
 	// Wrapping, like the two labels above. Without it this one sentence set the
 	// minimum width of the whole dialog to 720 px.
 	intro := widget.NewLabel(fmt.Sprintf(
-		"A session needs about %.0f kbit/s upstream and a steady round trip to %s.",
-		netcheck.AudioKbps, netcheck.LiveAPIHost))
+		"A session needs about %.0f kbit/s upstream and a steady round trip to the provider's server.",
+		netcheck.AudioKbps))
 	intro.Wrapping = fyne.TextWrapWord
 
 	return container.NewVBox(
@@ -622,7 +647,8 @@ func (p *prefsDialog) vocabularyTab() fyne.CanvasObject {
 	// with no wrapping asks for its whole text on one line.
 	note := widget.NewLabel(fmt.Sprintf(
 		"Split on line breaks only, never commas, so a term can be a whole clause. "+
-			"At most %d terms — they are resent with every reconnect.",
+			"At most %d terms — they are resent with every reconnect. "+
+			"Google Gemini only: OpenAI takes no vocabulary hints.",
 		config.MaxVocabularyTerms))
 	note.Wrapping = fyne.TextWrapWord
 
@@ -943,6 +969,7 @@ func (p *prefsDialog) behaviourTab() fyne.CanvasObject {
 // collect reads every widget back into a Settings.
 func (p *prefsDialog) collect() config.Settings {
 	s := p.working
+	s.Provider = p.selectedProvider()
 	if i := p.deviceSelect.SelectedIndex(); i >= 0 && i < len(p.deviceNames) {
 		s.AudioDeviceName = p.deviceNames[i]
 	}
@@ -993,10 +1020,34 @@ func (p *prefsDialog) collect() config.Settings {
 	return s.Clamped()
 }
 
+// selectedProvider is the provider the API tab is showing.
+func (p *prefsDialog) selectedProvider() config.Provider {
+	if p.provider != nil {
+		for pr, label := range config.ProviderMenuText {
+			if label == p.provider.Selected {
+				return pr
+			}
+		}
+	}
+	return p.working.Provider
+}
+
+// showProviderKey points the key widgets at the selected provider.
+func (p *prefsDialog) showProviderKey() {
+	pr := p.selectedProvider()
+	p.keyHeading.SetText(config.ProviderMenuText[pr] + " API key")
+	if pr == config.ProviderOpenAI {
+		p.apiKey.SetPlaceHolder("sk-…")
+	} else {
+		p.apiKey.SetPlaceHolder("AIza…")
+	}
+	p.refreshKeyStatus()
+}
+
 // apply pushes the current widget values into the running application.
 func (p *prefsDialog) apply() {
 	if key := p.apiKey.Text; key != "" {
-		if err := config.SaveAPIKey(key, p.toKeychain.Checked); err != nil {
+		if err := config.SaveKey(p.selectedProvider(), key, p.toKeychain.Checked); err != nil {
 			slog.Error("could not save the API key", "err", err)
 		}
 		p.apiKey.SetText("")
@@ -1016,7 +1067,7 @@ func (p *prefsDialog) apply() {
 // brought it back. The Keychain copy is gone either way — there is no way to
 // tell a copy this dialog made from one that was already there.
 func (p *prefsDialog) forgetKey() {
-	config.ClearAPIKey()
+	config.ClearKey(p.selectedProvider())
 	p.dirty = true
 	p.apiKey.SetText("")
 	p.refreshKeyStatus()
@@ -1029,8 +1080,10 @@ func (p *prefsDialog) cancel() {
 		return
 	}
 	slog.Info("preferences cancelled — reverting the applied changes")
-	if err := config.RestoreStoredAPIKey(p.storedKey); err != nil {
-		slog.Error("could not restore the stored key", "err", err)
+	for pr, key := range p.storedKeys {
+		if err := config.RestoreStoredKey(pr, key); err != nil {
+			slog.Error("could not restore the stored key", "provider", pr, "err", err)
+		}
 	}
 	p.win.applySettings(p.original)
 }
@@ -1038,7 +1091,7 @@ func (p *prefsDialog) cancel() {
 // --- workers --------------------------------------------------------------
 
 func (p *prefsDialog) refreshKeyStatus() {
-	source := config.APIKeySource()
+	source := config.KeySource(p.selectedProvider())
 	if source == "" {
 		p.keyStatus.SetText("No key found. Enter one above.")
 		return
@@ -1048,9 +1101,10 @@ func (p *prefsDialog) refreshKeyStatus() {
 
 // testKey does one cheap authenticated call, off the UI goroutine.
 func (p *prefsDialog) testKey() {
+	pr := p.selectedProvider()
 	key := p.apiKey.Text
 	if key == "" {
-		key = config.LoadAPIKey()
+		key = config.LoadKey(pr)
 	}
 	if key == "" {
 		p.keyStatus.SetText("No key to test.")
@@ -1058,10 +1112,16 @@ func (p *prefsDialog) testKey() {
 	}
 	p.keyStatus.SetText("Testing…")
 	go func() {
-		err := translator.TestAPIKey(key)
+		err := translator.TestKeyFor(string(pr), key)
 		fyne.Do(func() {
 			if err != nil {
 				p.keyStatus.SetText("Key rejected: " + err.Error())
+				return
+			}
+			if pr == config.ProviderOpenAI {
+				// The free check cannot see the balance; saying only
+				// "accepted" invites a surprise at the first session.
+				p.keyStatus.SetText("Key accepted. Credit balance is not checked.")
 				return
 			}
 			p.keyStatus.SetText("Key accepted.")
@@ -1078,9 +1138,15 @@ func (p *prefsDialog) runNetworkTest() {
 	p.runTest.Disable()
 	p.netResult.SetText("Testing…")
 	p.netDetail.SetText("")
+	// Read here, on the UI goroutine: the select belongs to it.
+	provider := p.selectedProvider()
 
 	go func() {
-		report := netcheck.Run()
+		host := netcheck.LiveAPIHost
+		if provider == config.ProviderOpenAI {
+			host = netcheck.OpenAIHost
+		}
+		report := netcheck.RunFor(host)
 		fyne.Do(func() {
 			p.netBusy = false
 			p.runTest.Enable()
@@ -1348,11 +1414,15 @@ func (p *prefsDialog) pollMeter() {
 
 // ShowAbout is the About box.
 func (w *Window) ShowAbout() {
+	engine, model := "Google Gemini Live API", translator.Model
+	if w.settings.Provider == config.ProviderOpenAI {
+		engine, model = "OpenAI Realtime API", translator.OpenAIModel
+	}
 	body := fmt.Sprintf(
 		"%s %s\n\nReal-time speech translation captions.\n"+
-			"Engine: Google Gemini Live API\nModel: %s\n\n"+
+			"Engine: %s\nModel: %s\n\n"+
 			"Created by %s\n%s\n\nCopyright © 2026 %s. All rights reserved.",
-		AppName, Version, translator.Model, Author, AuthorEmail, Author)
+		AppName, Version, engine, model, Author, AuthorEmail, Author)
 	dialog.ShowInformation("About "+AppName, body, w.win)
 }
 
