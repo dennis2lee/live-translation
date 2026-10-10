@@ -136,11 +136,14 @@ func openOpenAI(ctx context.Context, apiKey string, cfg SessionConfig) (*openAIS
 		goAway:    make(chan struct{}),
 		done:      make(chan struct{}),
 	}
+	// The reader starts first, so a failed write below still leaves Close a
+	// reader to end: its drain waits for msgs to close, and the reader is
+	// what closes it and the down-sampler.
+	go s.readLoop()
 	if err := s.write(openAIConfig(cfg)); err != nil {
 		s.Close()
 		return nil, err
 	}
-	go s.readLoop()
 	s.timer = time.AfterFunc(openAISessionLife, func() { close(s.goAway) })
 	return s, nil
 }
@@ -249,10 +252,13 @@ func (s *openAISession) readLoop() {
 			select {
 			case <-s.done:
 			default:
+				text := err.Error()
 				if lastErr != nil {
-					err = fmt.Errorf("%w (after %v)", err, lastErr)
+					text += " (after " + lastErr.Error() + ")"
 				}
-				s.msgs <- openAIResult{err: fmt.Errorf("openai: %w", err)}
+				// The close reason is the server's text too, and can carry
+				// the key: "1008 … Incorrect API key provided: sk-…".
+				s.msgs <- openAIResult{err: errors.New("openai: " + redactKeys(text))}
 			}
 			return
 		}
@@ -307,6 +313,14 @@ func (s *openAISession) Close() error {
 		s.wmu.Lock()
 		_ = s.conn.WriteControl(websocket.CloseMessage,
 			websocket.FormatCloseMessage(websocket.CloseNormalClosure, ""), time.Now().Add(time.Second))
+		// Under the write lock, never outside it. SendAudio runs the
+		// resampler holding this lock, and on macOS that is libsoxr: closing
+		// it while a send was converting freed the handle under the C call,
+		// a SIGSEGV that took the whole application down (found by the red
+		// team, 100 runs). The supervisor closes sessions that sendLoop may
+		// still be sending to — a warm switch, a server hang-up — so this
+		// is reachable in ordinary use.
+		s.resampler.Close()
 		s.wmu.Unlock()
 		err = s.conn.Close()
 		// Drain, so a reader blocked on a full channel can see the closed
@@ -315,7 +329,6 @@ func (s *openAISession) Close() error {
 			for range s.msgs {
 			}
 		}()
-		s.resampler.Close()
 	})
 	return err
 }

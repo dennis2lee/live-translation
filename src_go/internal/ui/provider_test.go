@@ -1,8 +1,10 @@
 package ui
 
 import (
+	"errors"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/dennis2lee/live-translation/src_go/internal/audio"
 	"github.com/dennis2lee/live-translation/src_go/internal/config"
@@ -126,5 +128,70 @@ func TestWarmHandoverIsOnAndCanBeSwitchedOff(t *testing.T) {
 	}
 	if w.translatorOptions(audio.NewRing(4096), "AIza-x").WarmHandover {
 		t.Error("the translator still hands over warm after it was switched off")
+	}
+}
+
+// A restart — a provider switched while translating, say — loads the key of
+// the provider now chosen. Loading Gemini's would send it to OpenAI.
+func TestARestartUsesTheChosenProvidersKey(t *testing.T) {
+	w := newTestWindow(t)
+	if err := config.SaveKey(config.ProviderGemini, "AIza-gemini", false); err != nil {
+		t.Fatal(err)
+	}
+	if err := config.SaveKey(config.ProviderOpenAI, "sk-openai", false); err != nil {
+		t.Fatal(err)
+	}
+	fakeSession(t, w)
+	w.settings.Provider = config.ProviderOpenAI
+	var got string
+	w.buildTranslator = func(_ *audio.Ring, key string) (*translator.Translator, error) {
+		got = key
+		return nil, errors.New("no network in tests")
+	}
+	w.restartTranslator()
+	if got != "sk-openai" {
+		t.Errorf("the restarted translator was given %q", got)
+	}
+}
+
+// Test Key tests the key against the provider shown, never the other one:
+// an OpenAI key sent to Google is a key sent to the wrong company.
+func TestTestKeyAsksTheChosenProvider(t *testing.T) {
+	w := newTestWindow(t)
+	type call struct{ provider, key string }
+	calls := make(chan call, 1)
+	old := testKeyFor
+	testKeyFor = func(provider, key string) error { calls <- call{provider, key}; return nil }
+	t.Cleanup(func() { testKeyFor = old })
+
+	p := openPrefs(t, w)
+	selectProvider(p, config.ProviderOpenAI)
+	p.apiKey.SetText("sk-typed")
+	p.testKey()
+	select {
+	case c := <-calls:
+		if c.provider != translator.ProviderOpenAI || c.key != "sk-typed" {
+			t.Errorf("tested %q against %q", c.key, c.provider)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("the key was never tested")
+	}
+}
+
+// Forget Key forgets the shown provider's key, and only that one.
+func TestForgetKeyForgetsOnlyTheShownProvider(t *testing.T) {
+	w := newTestWindow(t)
+	if err := config.SaveKey(config.ProviderGemini, "AIza-gemini", false); err != nil {
+		t.Fatal(err)
+	}
+	if err := config.SaveKey(config.ProviderOpenAI, "sk-openai", false); err != nil {
+		t.Fatal(err)
+	}
+	p := openPrefs(t, w)
+	selectProvider(p, config.ProviderOpenAI)
+	p.forgetKey()
+	if config.StoredKey(config.ProviderOpenAI) != "" || config.StoredKey(config.ProviderGemini) != "AIza-gemini" {
+		t.Errorf("OpenAI %q, Gemini %q after forgetting OpenAI's",
+			config.StoredKey(config.ProviderOpenAI), config.StoredKey(config.ProviderGemini))
 	}
 }

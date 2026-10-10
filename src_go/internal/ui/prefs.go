@@ -259,6 +259,10 @@ func (p *prefsDialog) close() {
 
 // --- tabs -----------------------------------------------------------------
 
+// testKeyFor is translator.TestKeyFor, indirected so a test can see which
+// provider a key is tested against without the network.
+var testKeyFor = translator.TestKeyFor
+
 // storedKeys reads every provider's entry in the encrypted store.
 func storedKeys() map[config.Provider]string {
 	keys := map[config.Provider]string{}
@@ -526,7 +530,9 @@ func (p *prefsDialog) voiceRow() {
 	}
 }
 
-const modelVoiceLabel = "Model voice — changes at every reconnect"
+// modelVoiceLabel names the translation service's own speech. Not "changes
+// at every reconnect": that is Gemini's, and OpenAI's follows the speaker.
+const modelVoiceLabel = "Model voice"
 
 // selectedVoice is the voice name the dropdown is on, "" for the model's.
 func (p *prefsDialog) selectedVoice() (name, sample string) {
@@ -1118,7 +1124,7 @@ func (p *prefsDialog) testKey() {
 	}
 	p.keyStatus.SetText("Testing…")
 	go func() {
-		err := translator.TestKeyFor(string(pr), key)
+		err := testKeyFor(string(pr), key)
 		fyne.Do(func() {
 			if err != nil {
 				p.keyStatus.SetText("Key rejected: " + err.Error())
@@ -1148,11 +1154,7 @@ func (p *prefsDialog) runNetworkTest() {
 	provider := p.selectedProvider()
 
 	go func() {
-		host := netcheck.LiveAPIHost
-		if provider == config.ProviderOpenAI {
-			host = netcheck.OpenAIHost
-		}
-		report := netcheck.RunFor(host)
+		report := netcheck.RunFor(netcheck.HostFor(string(provider)))
 		fyne.Do(func() {
 			p.netBusy = false
 			p.runTest.Enable()

@@ -150,8 +150,7 @@ You can also change the input later from **Settings → Audio Input**.
 
 The keys work with the Korean input method too.
 
-> **In full screen the menu bar is hidden.** Press **f** to come back out —
-> Escape does not do it.
+> **In full screen the menu bar is hidden.** Press **f** to come back out.
 
 **Translate → Clear Captions** empties the caption box.
 
@@ -183,7 +182,7 @@ For a projector or a second screen, drag the window there and press **f**.
 **Preferences → Output → Speak the translation aloud**, then pick the output
 device and a **Voice**:
 
-- **Model's voice**: the cloud model's own speech.
+- **Model voice**: the cloud model's own speech.
 - **A voice on this PC**: read aloud by Windows, which keeps the same voice all
   session. Click **Preview** to hear it. To add voices, go to
   **Settings → Time & language → Speech → Manage voices**.
@@ -215,8 +214,9 @@ Folder**. Turn it off under **Translate → Save Transcript**.
 
 ### Long sessions
 
-The provider replaces a session about every nine minutes. LiveCap prepares the
-new session in advance and switches over in a pause, so you should not notice.
+Gemini replaces a session about every nine minutes, and LiveCap renews an
+OpenAI session itself every 50. Either way LiveCap prepares the new session
+in advance and switches over in a pause, so you should not notice.
 This is **Preferences → Behaviour → Warm session handover**, on by default.
 
 ---

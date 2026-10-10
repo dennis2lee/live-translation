@@ -331,6 +331,15 @@ func MeasureUpload(url string, nbytes int, timeout time.Duration) Throughput {
 	return flow
 }
 
+// HostFor is the server a provider's sessions connect to: "openai", or
+// anything else for Gemini.
+func HostFor(provider string) string {
+	if provider == "openai" {
+		return OpenAIHost
+	}
+	return LiveAPIHost
+}
+
 // Run runs the whole check against Gemini. Blocking — call it off the UI
 // goroutine.
 func Run() Report { return RunFor(LiveAPIHost) }

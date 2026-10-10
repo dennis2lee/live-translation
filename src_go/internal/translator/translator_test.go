@@ -30,6 +30,9 @@ type fakeSession struct {
 	next    chan Message
 	done    chan struct{}
 	closeCh sync.Once
+	// closeGate, when set, holds Close until it is closed — a session that
+	// takes a moment to shut, receiving all the while.
+	closeGate chan struct{}
 }
 
 func newFakeSession(messages []Message) *fakeSession {
@@ -63,6 +66,9 @@ func (f *fakeSession) Receive() (Message, error) {
 }
 
 func (f *fakeSession) Close() error {
+	if f.closeGate != nil {
+		<-f.closeGate
+	}
 	f.mu.Lock()
 	f.closed = true
 	f.mu.Unlock()

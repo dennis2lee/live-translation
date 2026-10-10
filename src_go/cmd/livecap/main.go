@@ -153,11 +153,7 @@ func runSelftest() int {
 		report("audio input", true, fmt.Sprintf("%d device(s): %s", len(devices), names))
 	}
 
-	host := netcheck.LiveAPIHost
-	if provider == config.ProviderOpenAI {
-		host = netcheck.OpenAIHost
-	}
-	latency := netcheck.MeasureLatency(host, netcheck.LiveAPIPort, 3, 0)
+	latency := netcheck.MeasureLatency(netcheck.HostFor(string(provider)), netcheck.LiveAPIPort, 3, 0)
 	if latency.OK() {
 		report("live api reachable", true,
 			fmt.Sprintf("%s, %.0f ms median", latency.Host, latency.MedianMS()))

@@ -99,16 +99,34 @@ var fatalErrors = []struct{ marker, message string }{
 	{"was not found", "Model not found — check the model name"},
 }
 
+// transientErrors are failures that look like fatal ones and are not. See
+// FatalReason for which markers they override.
+var transientErrors = []string{"rate_limit_exceeded"}
+
 // FatalReason returns the message to show for a non-retryable error, or "".
 func FatalReason(err error) string {
 	if err == nil {
 		return ""
 	}
 	text := strings.ToLower(err.Error())
+	transient := false
+	for _, marker := range transientErrors {
+		transient = transient || strings.Contains(text, marker)
+	}
 	for _, f := range fatalErrors {
-		if strings.Contains(text, f.marker) {
-			return f.message
+		if !strings.Contains(text, f.marker) {
+			continue
 		}
+		// A rate limit passes with time, and OpenAI's message for one ends
+		// with a link to its billing page — which the bare "billing" marker
+		// would read as Gemini's free-tier refusal and stop translating.
+		// Measured: every session on a new account draws two in its first
+		// 0.6 s. Only that generic marker yields to it: a specific one such
+		// as insufficient_quota, arriving alongside, still ends the run.
+		if transient && f.marker == "billing" {
+			continue
+		}
+		return f.message
 	}
 	return ""
 }
@@ -737,6 +755,13 @@ func (t *Translator) supervise(ctx context.Context) {
 		holder.warming.Store(false)
 		if t.warming == holder {
 			t.warming = nil
+		}
+		if warm && previous != nil {
+			// And the old one goes quiet in the same instant. It is closed
+			// just after, but closing takes a moment and a session can hand
+			// over messages it had already received: anything it says from
+			// here on, the replacement says too.
+			previous.warming.Store(true)
 		}
 		// Marked retired in the same breath as the swap, not later. Between
 		// those two points the replaced session is still receiving, and the

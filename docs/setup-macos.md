@@ -10,7 +10,7 @@ spent getting an API key.
 | | |
 |---|---|
 | **A Mac with Apple silicon** | M1 or later. The download is built for arm64 only, so Intel Macs cannot run it. |
-| **macOS 13 or later** | Tested on macOS 26.5. |
+| **macOS 12 or later** | Tested on macOS 26.5. |
 | **A microphone or audio interface** | The built-in microphone works. A USB interface fed from a mixer works best for events. |
 | **An internet connection** | About 0.3 Mbit/s upload while translating. |
 | **An API key, with billing** | From Google (Gemini) or OpenAI. Step 4 covers this. Translation costs about **$0.035 per minute** of use. |
@@ -169,7 +169,7 @@ For a projector or a second screen, drag the window there and press **f**.
 **Preferences → Output → Speak the translation aloud**, then pick the output
 device and a **Voice**:
 
-- **Model's voice**: the cloud model's own speech.
+- **Model voice**: the cloud model's own speech.
 - **A voice on this Mac**: read aloud by macOS, which keeps the same voice all
   session. Click **Preview** to hear it. To add voices, go to
   **System Settings → Accessibility → Spoken Content → System Voice → Manage
@@ -200,8 +200,9 @@ Folder**. Turn it off under **Translate → Save Transcript**.
 
 ### Long sessions
 
-The provider replaces a session about every nine minutes. LiveCap prepares the
-new session in advance and switches over in a pause, so you should not notice.
+Gemini replaces a session about every nine minutes, and LiveCap renews an
+OpenAI session itself every 50. Either way LiveCap prepares the new session
+in advance and switches over in a pause, so you should not notice.
 This is **Preferences → Behaviour → Warm session handover**, on by default.
 
 ---

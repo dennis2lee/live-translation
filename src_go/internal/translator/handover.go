@@ -51,6 +51,12 @@ var (
 	// measured freeze ended 0.84 s in, with margin.
 	HandoverWarm = 1500 * time.Millisecond
 
+	// HandoverMaxWait caps the wait however much grace there is. Gemini
+	// warns 50 s ahead, but OpenAI's session warns itself ten minutes ahead,
+	// and waiting most of that for a pause would be ten minutes of two
+	// billed sessions. Measured waits for a pause: 6.5–23.8 s.
+	HandoverMaxWait = 45 * time.Second
+
 	// HandoverReserve is the part of the server's grace the wait never
 	// spends. The replacement is already open and warm, so the switch itself
 	// is instant; this only keeps it clear of the far end hanging up.
@@ -74,8 +80,7 @@ const voiceRMS = 0.003
 // It chooses only *when*: whatever happens, the switch is made before the
 // server's deadline.
 func (t *Translator) handOver(ctx context.Context, old *sessionHolder) *sessionHolder {
-	budget := old.graceLeft() - HandoverReserve
-	if budget <= 0 {
+	if handoverBudget(old.graceLeft()) <= 0 {
 		return nil
 	}
 	next := t.openSession(ctx, true)
@@ -85,9 +90,18 @@ func (t *Translator) handOver(ctx context.Context, old *sessionHolder) *sessionH
 	t.mu.Lock()
 	t.warming = next
 	t.mu.Unlock()
+	// Taken now, not before the open: connecting can take up to
+	// OpenTimeout, and that time comes out of the server's grace too.
+	budget := max(handoverBudget(old.graceLeft()), 0)
 	slog.Info("warming a replacement session", "budget", budget.Round(time.Second))
 
+	// switchTo hands the replacement over, unless it died in the meantime:
+	// a select with several ready cases picks one at random, so the pause
+	// test can win against the replacement closing. Switching to a dead
+	// session would close the healthy old one for nothing.
 	started := time.Now()
+	switchTo := func(quiet bool) *sessionHolder { return t.claim(next, quiet, time.Since(started)) }
+
 	deadline := time.NewTimer(budget)
 	defer deadline.Stop()
 	ticker := time.NewTicker(handoverPoll)
@@ -105,13 +119,11 @@ func (t *Translator) handOver(ctx context.Context, old *sessionHolder) *sessionH
 		case <-old.closed:
 			slog.Info("the session ended while its replacement warmed — switching now",
 				"warm", next.warmFor() > 0)
-			t.noteHandover(false, time.Since(started))
-			return next
+			return switchTo(false)
 		case <-deadline.C:
 			slog.Info("no pause came — switching anyway",
 				"waited", time.Since(started).Round(time.Millisecond))
-			t.noteHandover(false, time.Since(started))
-			return next
+			return switchTo(false)
 		case <-ticker.C:
 			// What the decision below sees, for tuning its thresholds from a
 			// real run rather than by guessing. Debug only, and thinned to
@@ -130,17 +142,34 @@ func (t *Translator) handOver(ctx context.Context, old *sessionHolder) *sessionH
 				slog.Info("switching sessions under the music gate",
 					"waited", time.Since(started).Round(time.Millisecond))
 				t.notePreppedSwap(time.Since(started))
-				t.noteHandover(true, time.Since(started))
-				return next
+				return switchTo(true)
 			}
 			if next.warmFor() >= HandoverWarm && pauseShared(old, next) {
 				slog.Info("switching sessions in a pause",
 					"waited", time.Since(started).Round(time.Millisecond))
-				t.noteHandover(true, time.Since(started))
-				return next
+				return switchTo(true)
 			}
 		}
 	}
+}
+
+// claim hands the replacement over for the switch, unless it has closed in
+// the meantime — see switchTo in handOver — in which case it is dropped and
+// the swap falls back to a cold one.
+func (t *Translator) claim(next *sessionHolder, quiet bool, waited time.Duration) *sessionHolder {
+	if next.isClosed() {
+		slog.Warn("the warming replacement ended at the switch — swapping cold")
+		t.dropWarming(next)
+		return nil
+	}
+	t.noteHandover(quiet, waited)
+	return next
+}
+
+// handoverBudget is how long a warm handover may wait for a pause, given the
+// grace the server stated.
+func handoverBudget(grace time.Duration) time.Duration {
+	return min(grace-HandoverReserve, HandoverMaxWait)
 }
 
 // dropWarming closes a replacement that will not be switched to.

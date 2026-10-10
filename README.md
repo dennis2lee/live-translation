@@ -54,7 +54,7 @@ connection alive for hours.
 |---|---|
 | **Two engines** | Google `gemini-3.5-live-translate-preview` or OpenAI `gpt-realtime-translate`, chosen in Preferences. Captions behave the same with either. |
 | **Fast** | First caption in about 3 s with Gemini; OpenAI's first translated speech arrives in under a second. |
-| **Seamless reconnects** | The provider ends a session about every nine minutes. LiveCap opens the replacement early, feeds it the same audio unheard, and switches in a shared pause. Measured: the silence at a reconnect fell from 2.4–3.6 s to under 0.8 s. |
+| **Seamless reconnects** | Gemini ends a session about every nine minutes (LiveCap renews an OpenAI session itself, every 50). LiveCap opens the replacement early, feeds it the same audio unheard, and switches in a shared pause. Measured on Gemini: the silence at a reconnect fell from 2.4–3.6 s to 0.5–1.2 s — an ordinary pause between sentences. |
 | **Music filter** | An on-device classifier (a pure-Go port of Google's YAMNet) holds back songs and instrumental music, so a worship set or a video clip is not translated. |
 | **Cleaner speech** | Removes a buzzing artifact the cloud model produces at the start of a session, measured and verified with signal processing, not by ear alone. |
 | **Readable captions** | Fixed box, bottom-aligned text, paced line release, optional "complete phrases only" mode, clear-on-silence, every colour and size adjustable. |

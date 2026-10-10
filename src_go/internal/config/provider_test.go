@@ -117,3 +117,15 @@ func TestAnOlderSettingsFileGetsWarmHandover(t *testing.T) {
 		t.Error("an older settings file came back with warm handover off")
 	}
 }
+
+// An unknown provider's key is looked for where Gemini's is, the same
+// fallback Clamped applies to the setting — never in OpenAI's places.
+func TestAnUnknownProvidersKeyIsGeminis(t *testing.T) {
+	isolate(t)
+	if err := SaveKey(ProviderGemini, "AIza-gemini", false); err != nil {
+		t.Fatal(err)
+	}
+	if got := LoadKey("someday"); got != "AIza-gemini" {
+		t.Errorf("LoadKey(unknown) = %q", got)
+	}
+}

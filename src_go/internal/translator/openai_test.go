@@ -5,6 +5,7 @@ import (
 	"encoding/base64"
 	"encoding/binary"
 	"encoding/json"
+	"errors"
 	"math"
 	"net/http"
 	"net/http/httptest"
@@ -398,5 +399,82 @@ func TestTheErrorBeforeAPlainHangUpNamesTheCause(t *testing.T) {
 	_, err := s.Receive()
 	if got := FatalReason(err); !strings.Contains(got, "OpenAI credit") {
 		t.Errorf("FatalReason = %q for %v", got, err)
+	}
+}
+
+// Closing a session while audio is being converted for it freed libsoxr's
+// handle under the C call: a SIGSEGV, found by the red team in 100 runs. The
+// supervisor does this in ordinary use — a warm switch, a server hang-up —
+// because sendLoop may still hold the session it is closing. Run with -race,
+// which reported the race every time.
+func TestClosingWhileSendingIsSafe(t *testing.T) {
+	chunk := tone(audio.TargetRate, audio.TargetRate/10, 440)
+	for range 30 {
+		newFakeOpenAI(t)
+		s := openFake(t, SessionConfig{})
+		var wg sync.WaitGroup
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for s.SendAudio(chunk) == nil {
+			}
+		}()
+		time.Sleep(2 * time.Millisecond)
+		_ = s.Close()
+		wg.Wait()
+	}
+}
+
+// OpenAI's rate-limit message ends with a link to its billing page. Carried
+// into the error of a session that then drops, it read as Gemini's
+// free-tier refusal and stopped translating — the red team's reproduction,
+// with the text recorded from a real session.
+func TestARateLimitIsNotABillingProblem(t *testing.T) {
+	const rateLimit = "openai: tokens: rate_limit_exceeded: Request too large for gpt-realtime-translate " +
+		"in organization org-x on tokens per min (TPM): Limit 2, Requested 50. The input or output tokens " +
+		"must be reduced in order to run successfully. Visit https://platform.openai.com/account/rate-limits " +
+		"to learn more. You can increase your rate limit by adding a payment method to your account at " +
+		"https://platform.openai.com/account/billing."
+	drop := errors.New("openai: websocket: close 1006 (abnormal closure): unexpected EOF (after " + rateLimit + ")")
+	if r := FatalReason(drop); r != "" {
+		t.Errorf("a drop after a rate limit is reported fatal: %q", r)
+	}
+	// But a real quota failure arriving with one is still fatal.
+	quota := errors.New("openai: websocket: close 1013: insufficient_quota.credit_balance_exhausted (after " + rateLimit + ")")
+	if r := FatalReason(quota); !strings.Contains(r, "OpenAI credit") {
+		t.Errorf("insufficient_quota beside a rate limit: %q", r)
+	}
+	// And Gemini's billing refusal is untouched.
+	if r := FatalReason(errors.New("Billing account not enabled")); r == "" {
+		t.Error("Gemini's billing error is no longer fatal")
+	}
+}
+
+// The server's close reason is its text too, and can carry the key.
+func TestACloseReasonIsRedacted(t *testing.T) {
+	f := newFakeOpenAI(t)
+	s := openFake(t, SessionConfig{})
+	f.hangUp(websocket.ClosePolicyViolation, "Incorrect API key provided: sk-proj-abcdef123456.")
+	_, err := s.Receive()
+	if err == nil || strings.Contains(err.Error(), "abcdef") {
+		t.Errorf("err = %v", err)
+	}
+}
+
+// The key test speaks each provider's dialect: OpenAI's in a bearer header.
+func TestTheOpenAIKeyTestUsesABearerHeader(t *testing.T) {
+	var auth, goog string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		auth, goog = r.Header.Get("Authorization"), r.Header.Get("x-goog-api-key")
+	}))
+	defer srv.Close()
+	old := OpenAIKeyTestEndpoint
+	OpenAIKeyTestEndpoint = srv.URL
+	defer func() { OpenAIKeyTestEndpoint = old }()
+	if err := TestKeyFor(ProviderOpenAI, "sk-test"); err != nil {
+		t.Fatal(err)
+	}
+	if auth != "Bearer sk-test" || goog != "" {
+		t.Errorf("Authorization %q, x-goog-api-key %q", auth, goog)
 	}
 }

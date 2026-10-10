@@ -45,6 +45,13 @@ type warmRun struct {
 // from extra.
 func startWarm(t *testing.T, prep bool, extra ...*fakeSession) *warmRun {
 	t.Helper()
+	return startWarmWith(t, func(o *Options) {
+		o.AdaptiveSessionPrep = prep
+	}, extra...)
+}
+
+func startWarmWith(t *testing.T, configure func(*Options), extra ...*fakeSession) *warmRun {
+	t.Helper()
 	fastTiming(t)
 	q, w, r, p := HandoverQuiet, HandoverWarm, HandoverReserve, handoverPoll
 	HandoverQuiet, HandoverWarm, HandoverReserve, handoverPoll =
@@ -69,13 +76,13 @@ func startWarm(t *testing.T, prep bool, extra ...*fakeSession) *warmRun {
 	cb.OnSessionStart = func() { run.starts.Add(1) }
 	run.ring = audio.NewRing(audio.ChunkBytes * 64)
 	opts := Options{
-		Ring:                run.ring,
-		open:                run.opener.open,
-		Callbacks:           cb,
-		WarmHandover:        true,
-		AdaptiveSessionPrep: prep,
+		Ring:         run.ring,
+		open:         run.opener.open,
+		Callbacks:    cb,
+		WarmHandover: true,
 	}
-	if prep {
+	configure(&opts)
+	if opts.AdaptiveSessionPrep {
 		opts.QuietMoment = run.quiet.Load
 	}
 	tr, err := New(opts)
@@ -442,6 +449,10 @@ func TestTheSwitchWantsTheSamePauseInBoth(t *testing.T) {
 		{"old not quiet long enough", session(short, said), session(long, same), false},
 		{"new not quiet long enough", session(long, said), session(short, same), false},
 		{"nothing said yet", session(long, ""), session(long, ""), false},
+		// The old session's unfinished sentence reads just like the
+		// replacement's finished one; only the sentence end tells them apart.
+		{"old mid-sentence, its words matching", session(long, " One. The maximum was 5.2 seconds and"),
+			session(long, " One. The maximum was 5.2 seconds."), false},
 	} {
 		if got := pauseShared(c.old, c.next); got != c.want {
 			t.Errorf("%s: %v, want %v", c.name, got, c.want)
@@ -515,5 +526,221 @@ func TestQuietIsMeasuredInsideTheBlob(t *testing.T) {
 	h.noteOutput(Message{Audio: blob})
 	if q := h.quietFor(); q < 90*time.Millisecond {
 		t.Errorf("quiet for %v right after a blob ending in 100 ms of silence", q)
+	}
+}
+
+// switchNow brings a warm run to a switch: both sessions finish the same
+// sentence and fall quiet, the replacement having spoken.
+func (r *warmRun) switchNow(t *testing.T) {
+	t.Helper()
+	r.second.push(Message{Audio: voiced(), TargetText: " The meeting starts now."})
+	r.first.push(Message{TargetText: " The meeting starts now."})
+	waitFor(t, "the switch", func() bool { return r.reconnects() == 1 })
+}
+
+// A warming replacement's resumption handles are not the run's: until it is
+// switched to, a reconnect must resume the session actually being heard.
+func TestAWarmingReplacementWritesNoHandle(t *testing.T) {
+	r := startWarm(t, false)
+	stop := keepTalking(r.first)
+	defer func() { stop() }()
+	r.first.push(Message{ResumeHandle: "old-handle"})
+	waitFor(t, "the old handle", func() bool {
+		r.tr.mu.Lock()
+		defer r.tr.mu.Unlock()
+		return r.tr.handle == "old-handle"
+	})
+	r.warn(10 * time.Second)
+	waitFor(t, "the replacement to open", func() bool { return r.opener.attempts() == 2 })
+	r.second.push(Message{ResumeHandle: "warming-handle"})
+	time.Sleep(20 * time.Millisecond)
+	r.tr.mu.Lock()
+	got := r.tr.handle
+	r.tr.mu.Unlock()
+	if got != "old-handle" {
+		t.Errorf("handle = %q while the replacement was warming", got)
+	}
+}
+
+// Quiet at a sentence end and speaking for less than HandoverWarm is not
+// warm: the replacement's opening would be heard.
+func TestTheReplacementMustHaveSpokenForAWhile(t *testing.T) {
+	r := startWarm(t, false)
+	w := HandoverWarm
+	HandoverWarm = 150 * time.Millisecond
+	t.Cleanup(func() { HandoverWarm = w })
+	r.warn(10 * time.Second)
+	waitFor(t, "the replacement to open", func() bool { return r.opener.attempts() == 2 })
+	start := time.Now()
+	r.switchNow(t)
+	if waited := time.Since(start); waited < 140*time.Millisecond {
+		t.Errorf("switched %v after the replacement first spoke, before HandoverWarm", waited)
+	}
+}
+
+// At a warm switch the old session is silenced at once and closed at once —
+// not left to a retirement window in which it would still be heard.
+func TestTheOldSessionIsSilencedAndClosedAtTheSwitch(t *testing.T) {
+	r := startWarm(t, false)
+	grace := RetireGrace
+	RetireGrace = 10 * time.Second
+	t.Cleanup(func() { RetireGrace = grace })
+	r.warn(10 * time.Second)
+	waitFor(t, "the replacement to open", func() bool { return r.opener.attempts() == 2 })
+	r.switchNow(t)
+	waitFor(t, "the old session to close", func() bool { return isClosed(r.first) })
+	select {
+	case r.first.next <- Message{TargetText: " late from the old session"}:
+	default:
+	}
+	time.Sleep(20 * time.Millisecond)
+	for _, s := range r.collect.targets() {
+		if strings.Contains(s, "late from the old session") {
+			t.Error("the old session was heard after the switch")
+		}
+	}
+}
+
+// After the switch the new active session gets each chunk once — it is no
+// longer also the warming one.
+func TestAfterTheSwitchEachChunkIsSentOnce(t *testing.T) {
+	r := startWarm(t, false)
+	r.warn(10 * time.Second)
+	waitFor(t, "the replacement to open", func() bool { return r.opener.attempts() == 2 })
+	r.switchNow(t)
+	before := r.second.chunksSent()
+	for range 10 {
+		r.ring.Write(make([]byte, audio.ChunkBytes))
+	}
+	waitFor(t, "the chunks", func() bool { return r.second.chunksSent() >= before+10 })
+	time.Sleep(20 * time.Millisecond)
+	if got := r.second.chunksSent() - before; got != 10 {
+		t.Errorf("%d sends for 10 chunks", got)
+	}
+}
+
+// A switch the listener cannot hear is not a reconnect to show: the
+// indicator stays on running.
+func TestAWarmSwitchDoesNotShowReconnecting(t *testing.T) {
+	r := startWarm(t, false)
+	r.warn(10 * time.Second)
+	waitFor(t, "the replacement to open", func() bool { return r.opener.attempts() == 2 })
+	r.switchNow(t)
+	if r.collect.sawState(StateReconnecting) {
+		t.Error("a warm switch showed the reconnecting state")
+	}
+}
+
+// The wait spends at most the server's grace less the reserve, and never
+// more than HandoverMaxWait however long the grace.
+func TestTheWaitIsBounded(t *testing.T) {
+	r, m := HandoverReserve, HandoverMaxWait
+	HandoverReserve, HandoverMaxWait = 5*time.Second, 45*time.Second
+	t.Cleanup(func() { HandoverReserve, HandoverMaxWait = r, m })
+	for grace, want := range map[time.Duration]time.Duration{
+		50 * time.Second: 45 * time.Second,
+		30 * time.Second: 25 * time.Second,
+		10 * time.Minute: 45 * time.Second,
+		4 * time.Second:  -time.Second,
+	} {
+		if got := handoverBudget(grace); got != want {
+			t.Errorf("grace %v: budget %v, want %v", grace, got, want)
+		}
+	}
+}
+
+// A replacement that dies as the pause comes is not switched to: the
+// healthy old session would be closed for nothing.
+func TestADeadReplacementIsNeverSwitchedTo(t *testing.T) {
+	third := newFakeSession(nil)
+	r := startWarm(t, false, third)
+	r.warn(10 * time.Second)
+	waitFor(t, "the replacement to open", func() bool { return r.opener.attempts() == 2 })
+	r.second.push(Message{Audio: voiced(), TargetText: " The meeting starts now."})
+	time.Sleep(time.Duration(float64(HandoverWarm) * 1.5))
+	_ = r.second.Close()
+	r.first.push(Message{TargetText: " The meeting starts now."})
+	waitFor(t, "a swap", func() bool { return r.reconnects() == 1 })
+	if r.active().live() == liveSession(r.second) {
+		t.Error("switched to a replacement that had closed")
+	}
+}
+
+// The replacement hears what the active session hears after the same gates:
+// with the silence gate on, held-back silence goes to neither.
+func TestTheSilenceGateAppliesToTheReplacementToo(t *testing.T) {
+	fastTiming(t)
+	hold := silenceHold
+	silenceHold = 5 * time.Millisecond
+	t.Cleanup(func() { silenceHold = hold })
+	r := startWarmWith(t, func(o *Options) { o.SilenceGate = true })
+	r.warn(10 * time.Second)
+	waitFor(t, "the replacement to open", func() bool { return r.opener.attempts() == 2 })
+	waitFor(t, "the replacement to be fed", func() bool {
+		r.tr.mu.Lock()
+		defer r.tr.mu.Unlock()
+		return r.tr.warming != nil
+	})
+	for range 20 {
+		r.ring.Write(make([]byte, audio.ChunkBytes))
+		time.Sleep(time.Millisecond)
+	}
+	time.Sleep(20 * time.Millisecond)
+	a, b := r.first.chunksSent(), r.second.chunksSent()
+	if b > a {
+		t.Errorf("the replacement was sent %d chunks of silence, the active session %d", b, a)
+	}
+	if a >= 20 {
+		t.Fatalf("setup: the silence gate let %d of 20 silent chunks through", a)
+	}
+}
+
+// Closing takes a moment, and a closing session can still deliver what it had
+// received. Whatever the old session says after the swap the replacement says
+// too, so it is muted in the same lock as the swap, before the close begins.
+func TestTheOldSessionIsMutedBeforeItFinishesClosing(t *testing.T) {
+	r := startWarm(t, false)
+	gate := make(chan struct{})
+	r.first.mu.Lock()
+	r.first.closeGate = gate
+	r.first.mu.Unlock()
+	r.warn(10 * time.Second)
+	waitFor(t, "the replacement to open", func() bool { return r.opener.attempts() == 2 })
+	r.switchNow(t)
+	// The supervisor is now inside the old session's Close, held at the gate;
+	// the old receive loop is still running.
+	r.first.push(Message{TargetText: " said while closing", Audio: voiced()})
+	time.Sleep(30 * time.Millisecond)
+	close(gate)
+	for _, s := range r.collect.targets() {
+		if strings.Contains(s, "said while closing") {
+			t.Error("the old session was heard while it closed")
+		}
+	}
+}
+
+// A replacement that has closed is never handed over, and is dropped — the
+// select in handOver can pick a ready pause over a ready death, so this is the
+// only place the outcome is certain.
+func TestAClosedReplacementIsNotClaimed(t *testing.T) {
+	tr, err := New(Options{Ring: audio.NewRing(4096), open: (&recordingOpener{}).open})
+	if err != nil {
+		t.Fatal(err)
+	}
+	next := newSessionHolder()
+	tr.warming = next
+	next.markClosed()
+	if got := tr.claim(next, true, 0); got != nil {
+		t.Error("claimed a replacement that had closed")
+	}
+	if tr.warming != nil {
+		t.Error("the dead replacement is still being fed")
+	}
+	if st := tr.Stats(); st.QuietHandovers+st.ForcedHandovers != 0 {
+		t.Errorf("counted a handover that never happened: %+v", st)
+	}
+	alive := newSessionHolder()
+	if got := tr.claim(alive, true, time.Second); got != alive || tr.Stats().QuietHandovers != 1 {
+		t.Error("a live replacement was not claimed and counted")
 	}
 }
