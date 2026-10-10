@@ -210,6 +210,13 @@ type Callbacks struct {
 	// from the receive loop, so it must not block: anything slow here stalls
 	// the stream for the captions too.
 	OnAudio func(pcm []byte)
+	// OnSessionStart fires once per session, on the receive goroutine,
+	// immediately before that session's first audio reaches OnAudio. The
+	// player uses it to know a session's opening from the rest of its speech
+	// — the far end's synthesis buzzes there, with no word in front of it.
+	// Same rule as OnAudio: called synchronously, so it is ordered with the
+	// audio, and it must not block.
+	OnSessionStart func()
 }
 
 func (c Callbacks) sourceText(t string) {
@@ -237,6 +244,12 @@ func (c Callbacks) turnComplete() {
 		c.OnTurnComplete()
 	}
 }
+func (c Callbacks) sessionStart() {
+	if c.OnSessionStart != nil {
+		c.OnSessionStart()
+	}
+}
+
 func (c Callbacks) audio(pcm []byte) {
 	if c.OnAudio != nil && len(pcm) > 0 {
 		c.OnAudio(pcm)
@@ -336,6 +349,10 @@ type sessionHolder struct {
 	// there is rather than assume the measured 50 s.
 	goAwayAt   time.Time
 	goAwayLeft time.Duration
+
+	// spoke is set by this session's own receive loop when its first audio
+	// arrives, and read nowhere else.
+	spoke bool
 	// abandoned is set when the supervisor gives up waiting for this holder.
 	// A session that opens afterwards has no owner and must not run — see
 	// adopt.
@@ -849,6 +866,11 @@ func (t *Translator) sessionMain(ctx context.Context, holder *sessionHolder, han
 		// listening the callback is nil and the bytes go where they always
 		// went.
 		if len(msg.Audio) > 0 {
+			if !holder.spoke {
+				// Only this receive loop touches spoke.
+				holder.spoke = true
+				t.cb.sessionStart()
+			}
 			t.noteSpeech()
 			// The replacement is speaking, so the session it replaced has
 			// finished covering for it and can go.
