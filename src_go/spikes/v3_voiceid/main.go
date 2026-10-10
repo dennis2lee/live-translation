@@ -241,7 +241,30 @@ type collector struct {
 
 	gaps  []gapEvent
 	mimes map[string]int
+	// blobs is every audio arrival, kept so a run can be replayed offline
+	// through the application's real playback ring — the reserve model above
+	// has no capacity and so cannot say what the real player would drop.
+	blobs []blobEvent
 	text  strings.Builder
+}
+
+// blobEvent is one audio arrival: when, from which session, how much.
+type blobEvent struct {
+	at      time.Duration
+	session int
+	bytes   int
+}
+
+// writeTimeline saves every arrival as CSV: seconds since start, session, bytes.
+func (c *collector) writeTimeline(path string) error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	var b strings.Builder
+	b.WriteString("t_s,session,bytes\n")
+	for _, e := range c.blobs {
+		fmt.Fprintf(&b, "%.4f,%d,%d\n", e.at.Seconds(), e.session, e.bytes)
+	}
+	return os.WriteFile(path, []byte(b.String()), 0o644)
 }
 
 func newCollector(started time.Time) *collector {
@@ -277,6 +300,7 @@ func (c *collector) onAudio(session int, mime string, data []byte) {
 		time.Duration(float64(len(data)) / float64(outRate*2) * float64(time.Second)))
 	c.lastBlob, c.lastSess = now, session
 	c.totalBytes += len(data)
+	c.blobs = append(c.blobs, blobEvent{at: now.Sub(c.started), session: session, bytes: len(data)})
 
 	if c.cur == nil || c.cur.session != session {
 		c.closeTurnLocked()
@@ -325,6 +349,7 @@ func main() {
 	overlap := flag.Bool("overlap", false, "keep the old session open until the new one speaks")
 	outdir := flag.String("outdir", "", "write per-session WAVs here")
 	window := flag.Float64("window", 10, "fingerprint the audio in windows this many seconds long")
+	timeline := flag.String("timeline", "", "write every audio arrival here as CSV, for replaying through the real player")
 	analyze := flag.String("analyze", "", "fingerprint a saved WAV and exit, without touching the API")
 	flag.Parse()
 
@@ -563,6 +588,13 @@ func main() {
 	col.finish()
 
 	report(col, *outdir, swaps, *window)
+	if *timeline != "" {
+		if err := col.writeTimeline(*timeline); err != nil {
+			fmt.Fprintln(os.Stderr, "timeline:", err)
+		} else {
+			fmt.Printf("  timeline: %d arrivals -> %s\n", len(col.blobs), *timeline)
+		}
+	}
 }
 
 func report(col *collector, outdir string, swaps []float64, windowSeconds float64) {
