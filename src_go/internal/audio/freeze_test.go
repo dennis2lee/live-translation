@@ -1099,15 +1099,38 @@ func TestFlushDropsWhatIsQueued(t *testing.T) {
 	}
 }
 
-// A flush during a session's opening keeps the opening watched: unmuting in
-// the first second of a session must not let its buzz through.
+// A flush during a session's opening keeps the opening watched, and the
+// watch still ends where the opening does: restarting it at every m toggle
+// pushed the cutting out into the middle of a session.
 func TestFlushKeepsAnOpeningWatched(t *testing.T) {
-	p, _ := runningPlayer(t)
-	p.MarkSessionStart()
-	p.WriteSpeech(toPCM(natural(0.3)))
-	p.Flush()
-	if !p.freeze.active {
-		t.Error("the flush ended the watch over the session's opening")
+	// watchEnd feeds a session's audio in 50 ms blobs, flushing after
+	// flushAt seconds (never if negative), and reports how much audio had
+	// gone in when the watch ended.
+	watchEnd := func(flushAt float64) float64 {
+		p, _ := runningPlayer(t)
+		p.MarkSessionStart()
+		blob := toPCM(natural(0.05))
+		fed := 0.0
+		for fed < 4 {
+			p.WriteSpeech(blob)
+			fed += 0.05
+			if flushAt >= 0 && fed >= flushAt && fed < flushAt+0.05 {
+				p.Flush()
+				if !p.freeze.active {
+					t.Fatalf("the flush at %.2f s ended the watch", flushAt)
+				}
+			}
+			if !p.freeze.active {
+				return fed
+			}
+		}
+		return fed
+	}
+	base := watchEnd(-1)
+	for _, at := range []float64{0.5, 1.1} {
+		if got := watchEnd(at); math.Abs(got-base) > 0.06 {
+			t.Errorf("flushed at %.1f s, the watch ended at %.2f s instead of %.2f s", at, got, base)
+		}
 	}
 	q, _ := runningPlayer(t)
 	q.Flush()

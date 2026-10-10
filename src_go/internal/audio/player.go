@@ -366,10 +366,15 @@ func (p *Player) Flush() {
 		// Reset ends the watch over a session's opening. If one was being
 		// watched it starts again from here, or an unmute in the first
 		// second of a session let its buzz through.
-		watching := p.freeze.active
+		// It resumes rather than restarts: the window still ends where the
+		// session's opening does, or every m toggle during an opening pushed
+		// the cutting out into the middle of a session, where a cut loses
+		// the end of a real word.
+		watching, origin := p.freeze.active, p.freeze.origin
 		p.freeze.Reset()
 		if watching {
 			p.freeze.MarkSessionStart()
+			p.freeze.origin = origin
 		}
 	}
 	// The converter keeps a few tens of milliseconds in its filter, which

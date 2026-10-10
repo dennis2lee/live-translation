@@ -9,7 +9,8 @@ package platform
 // Korean input source that answer is not guaranteed to be "m"; the scan code
 // does not depend on the layout. Values: macOS virtual key codes
 // (kVK_ANSI_M = 46, kVK_ANSI_F = 3), Windows set-1 scan codes (0x32, 0x21),
-// X11 key codes (58, 41).
+// X11 key codes (58, 41; Wayland would report evdev codes, 50 and 33, but
+// Linux does not ship).
 func ScanCode(letter rune) int { return scanCodeFor(runtimeGOOS(), letter) }
 
 func scanCodeFor(goos string, letter rune) int {

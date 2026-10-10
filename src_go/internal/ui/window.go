@@ -242,8 +242,12 @@ func newBuffer(s config.Settings) *captions.Buffer {
 // Menu items cannot display a bare-digit accelerator, so the rune handler
 // reproduces the behaviour and the item text notes the key — the same
 // compromise the Python build makes with "(9)".
-func (w *Window) bindKeys() {
-	w.win.Canvas().SetOnTypedRune(func(r rune) {
+func (w *Window) bindKeys() { w.bindKeysOn(w.win.Canvas()) }
+
+// bindKeysOn binds the keys on a canvas — the window's, or in a test one
+// that, like the desktop driver's, reports key-downs.
+func (w *Window) bindKeysOn(c fyne.Canvas) {
+	c.SetOnTypedRune(func(r rune) {
 		switch r {
 		case '0':
 			w.ToggleTranslation()
@@ -263,8 +267,8 @@ func (w *Window) bindKeys() {
 	// keyDown). On Windows an IME in Hangul mode turns the press into
 	// VK_PROCESSKEY, which GLFW drops along with its release: there the key
 	// cannot get through, and the Translate menu's Mute item is the way.
-	w.win.Canvas().SetOnTypedKey(w.typedKey)
-	if dc, ok := w.win.Canvas().(desktop.Canvas); ok {
+	c.SetOnTypedKey(w.typedKey)
+	if dc, ok := c.(desktop.Canvas); ok {
 		// A real press — not a repeat — arms the key; see typedKey.
 		dc.SetOnKeyDown(w.keyDown)
 		w.keysArmable = true
@@ -273,9 +277,10 @@ func (w *Window) bindKeys() {
 
 // isKey reports whether ev is the given letter key. Fyne names a letter by
 // asking the current keyboard layout, which under a Korean input source need
-// not say "M", so when the layout gives no name, or a non-ASCII one such as a
-// jamo, the hardware scan code decides. An ASCII name is trusted as it is:
-// AZERTY calls the key in the US M position ",", and that is not M.
+// not say "M". When the layout gives no name — in Fyne v2.8.0 the case for any
+// multi-byte character, and for unmapped ones — the hardware scan code
+// decides. A name it does give is trusted as it is: AZERTY calls the key in
+// the US M position ",", and that is not M.
 func isKey(ev *fyne.KeyEvent, name fyne.KeyName, letter rune) bool {
 	if ev.Name == name {
 		return true
@@ -289,7 +294,14 @@ func isKey(ev *fyne.KeyEvent, name fyne.KeyName, letter rune) bool {
 
 // keyDown arms m and f on a real press. Fyne delivers it for presses only,
 // never repeats, while typedKey also receives the repeats of a held key.
+//
+// Not with Ctrl, Alt or Cmd held: those presses are shortcuts and never reach
+// typedKey, so an armed key would stay armed, and a repeat after the modifier
+// came up would toggle.
 func (w *Window) keyDown(ev *fyne.KeyEvent) {
+	if heldModifiers()&^fyne.KeyModifierShift != 0 {
+		return
+	}
 	switch {
 	case isKey(ev, fyne.KeyM, 'M'):
 		w.keysArmed[fyne.KeyM] = true
@@ -1412,4 +1424,15 @@ func (w *Window) gateClosed() func() bool {
 		return nil
 	}
 	return gate.Closed
+}
+
+// heldModifiers is the set of modifier keys down right now, from the desktop
+// driver; none where the driver cannot say. A variable so a test can hold one.
+var heldModifiers = func() fyne.KeyModifier {
+	if app := fyne.CurrentApp(); app != nil {
+		if d, ok := app.Driver().(desktop.Driver); ok {
+			return d.CurrentKeyModifiers()
+		}
+	}
+	return 0
 }

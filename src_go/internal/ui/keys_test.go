@@ -6,6 +6,7 @@ import (
 
 	"fyne.io/fyne/v2"
 	"fyne.io/fyne/v2/driver/desktop"
+	"fyne.io/fyne/v2/test"
 
 	"github.com/dennis2lee/live-translation/src_go/internal/platform"
 	"github.com/dennis2lee/live-translation/src_go/internal/translator"
@@ -24,17 +25,41 @@ func press(t *testing.T, w *Window, r rune) {
 	typed(r)
 }
 
-// pressKey delivers one press the way the desktop driver does: the key-down,
-// the typed key, then the character the key types. The test canvas reports no
-// key-downs of its own, so the window is told it can expect them.
+// desktopCanvas is a test canvas that, like the desktop driver's, also
+// reports key-downs — the test package's own does not, so without this no
+// test would run the key-down wiring m and f depend on.
+type desktopCanvas struct {
+	fyne.Canvas
+	down, up func(*fyne.KeyEvent)
+}
+
+func (c *desktopCanvas) OnKeyDown() func(*fyne.KeyEvent)     { return c.down }
+func (c *desktopCanvas) SetOnKeyDown(f func(*fyne.KeyEvent)) { c.down = f }
+func (c *desktopCanvas) OnKeyUp() func(*fyne.KeyEvent)       { return c.up }
+func (c *desktopCanvas) SetOnKeyUp(f func(*fyne.KeyEvent))   { c.up = f }
+
+// keyed binds w's keys on a desktop-like canvas and returns it.
+func keyed(t *testing.T, w *Window) *desktopCanvas {
+	t.Helper()
+	c := &desktopCanvas{Canvas: test.NewCanvas()}
+	w.bindKeysOn(c)
+	if c.OnKeyDown() == nil {
+		t.Fatal("no key-down handler is bound")
+	}
+	return c
+}
+
+// pressKey delivers one press the way the desktop driver does, through the
+// canvas's own handlers: the key-down, the typed key, then the character the
+// key types.
 func pressKey(t *testing.T, w *Window, k fyne.KeyName) {
 	t.Helper()
-	w.keysArmable = true
+	c := keyed(t, w)
 	ev := &fyne.KeyEvent{Name: k}
-	w.keyDown(ev)
-	w.win.Canvas().OnTypedKey()(ev)
+	c.OnKeyDown()(ev)
+	c.OnTypedKey()(ev)
 	if len(k) == 1 {
-		w.win.Canvas().OnTypedRune()(rune(strings.ToLower(string(k))[0]))
+		c.OnTypedRune()(rune(strings.ToLower(string(k))[0]))
 	}
 }
 
@@ -200,12 +225,12 @@ func TestOnePressTogglesOnce(t *testing.T) {
 // per repeat landing on whatever state the release catches.
 func TestHoldingMTogglesOnce(t *testing.T) {
 	w := newTestWindow(t)
-	w.keysArmable = true
+	c := keyed(t, w)
 	ev := &fyne.KeyEvent{Name: fyne.KeyM}
-	w.keyDown(ev)
+	c.OnKeyDown()(ev)
 	// An even count: unfiltered, the repeats would land back on unmuted.
 	for range 4 {
-		w.typedKey(ev)
+		c.OnTypedKey()(ev)
 	}
 	if !w.muted {
 		t.Error("holding m left the translation unmuted")
@@ -215,17 +240,27 @@ func TestHoldingMTogglesOnce(t *testing.T) {
 // Under a Korean input source the layout may not name the key "M"; the scan
 // code still identifies it. A Latin name is trusted as it is.
 func TestTheMKeyIsKnownByItsScanCode(t *testing.T) {
-	w := newTestWindow(t)
-	w.keysArmable = true
-	ev := &fyne.KeyEvent{Name: "ㅡ", Physical: fyne.HardwareKey{ScanCode: platform.ScanCode('M')}}
-	w.keyDown(ev)
-	w.typedKey(ev)
-	if !w.muted {
-		t.Error("the M key, named by the Korean layout, did not mute")
+	for _, c := range []struct {
+		letter rune
+		check  func(*Window) bool
+	}{
+		{'M', func(w *Window) bool { return w.muted }},
+		{'F', func(w *Window) bool { return w.win.FullScreen() }},
+	} {
+		w := newTestWindow(t)
+		cv := keyed(t, w)
+		// Fyne v2.8.0 gives a key the layout names with a multi-byte
+		// character no name at all; the scan code is what is left.
+		ev := &fyne.KeyEvent{Physical: fyne.HardwareKey{ScanCode: platform.ScanCode(c.letter)}}
+		cv.OnKeyDown()(ev)
+		cv.OnTypedKey()(ev)
+		if !c.check(w) {
+			t.Errorf("the unnamed %c key did not act", c.letter)
+		}
 	}
 	other := &fyne.KeyEvent{Name: fyne.KeyComma, Physical: fyne.HardwareKey{ScanCode: platform.ScanCode('M')}}
 	if isKey(other, fyne.KeyM, 'M') {
-		t.Error("a key the layout names as a Latin key was taken for M by position")
+		t.Error("a key the layout names was taken for M by position")
 	}
 }
 
@@ -233,14 +268,27 @@ func TestTheMKeyIsKnownByItsScanCode(t *testing.T) {
 // typed key, so Ctrl+M or Cmd+F must not toggle.
 func TestAModifiedPressDoesNotToggle(t *testing.T) {
 	w := newTestWindow(t)
-	w.keysArmable = true
-	w.keyDown(&fyne.KeyEvent{Name: fyne.KeyM}) // Ctrl+M: key-down, then a shortcut
+	c := keyed(t, w)
+	held := fyne.KeyModifier(0)
+	old := heldModifiers
+	heldModifiers = func() fyne.KeyModifier { return held }
+	t.Cleanup(func() { heldModifiers = old })
+
+	// Ctrl+M: the key-down arrives, the typed key does not (a shortcut).
+	held = fyne.KeyModifierControl
+	c.OnKeyDown()(&fyne.KeyEvent{Name: fyne.KeyM})
+	// Ctrl comes up with M still held; the next repeat reaches the typed key.
+	held = 0
+	c.OnTypedKey()(&fyne.KeyEvent{Name: fyne.KeyM})
 	if w.muted {
-		t.Error("a modified m muted")
+		t.Error("a repeat after Ctrl+M toggled the mute")
 	}
-	pressKey(t, w, fyne.KeyM) // and the next plain press still works once
+	// Shift is not a shortcut modifier: Shift+M is still m.
+	held = fyne.KeyModifierShift
+	c.OnKeyDown()(&fyne.KeyEvent{Name: fyne.KeyM})
+	c.OnTypedKey()(&fyne.KeyEvent{Name: fyne.KeyM})
 	if !w.muted {
-		t.Error("the plain press after a modified one did not mute")
+		t.Error("Shift+M did not mute")
 	}
 }
 
