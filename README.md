@@ -144,9 +144,9 @@ own. Set a budget alert with whichever you use.
 | `⌘R` / `Ctrl+R` | Start translating |
 | `⌘,` / `Ctrl+,` | Preferences |
 
-The keys work with the Korean keyboard layout too (`m` and `f` are read by
-physical key, so the input method cannot hold them back). Mute is also in the
-**Translate** menu. A dot beside the caption
+On macOS the keys work with the Korean input source too (`m` and `f` are read
+by key, so the input method cannot hold them back); on Windows, switch to
+English with 한/영 first. Mute is also in the **Translate** menu. A dot beside the caption
 box shows the connection: grey idle, green blinking connecting, green live,
 red error (with the reason printed). Half of it turns deep red while the
 translation is muted.

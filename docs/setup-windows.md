@@ -152,9 +152,12 @@ You can also change the input later from **Settings → Audio Input**.
 | **m** | Mute the translation — captions and speech — and again to unmute |
 | **Ctrl+,** | Preferences |
 
-The keys should work with the Korean input method too, but this has not been
-checked on Windows yet. If **m** does not respond, use **Translate → Mute
-Translation**, or switch the input method to English with the 한/영 key.
+**m** and **f** do not reach LiveCap while the Korean input method is in
+Hangul mode — Windows hands those keys to the input method. Press **한/영** to
+switch to English first, or use **Translate → Mute Translation** and
+**Settings → Full Screen**. To leave full screen, where the menu is hidden,
+press **Esc** (not yet checked on Windows) or switch to English and press
+**f**. The digit keys work either way.
 
 > **In full screen the menu bar is hidden.** Press **f** to come back out.
 
