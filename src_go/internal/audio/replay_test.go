@@ -64,6 +64,7 @@ func replay(arrivals []arrival, audio map[int][]byte, trimMS int) replayResult {
 		blockBytes:  BytesPerSample,
 		trimAbove:   bps * trimMS / 1000,
 		silencePeak: 32768 * math.Pow(10, PlaySilenceDBFS/20),
+		pauseKeep:   bps * PlayPauseKeepMS / 1000,
 	}
 	p.active.Store(st)
 

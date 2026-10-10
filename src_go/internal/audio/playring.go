@@ -176,18 +176,27 @@ func (r *playRing) Trimmed() int64 {
 // chunk for each one it may skip, so a pause plays at no more than double
 // speed rather than vanishing.
 //
+// tail bytes of silence must follow the chunk, already queued, or nothing is
+// skipped. That keeps the last part of every pause and leaves short pauses
+// alone entirely: without it, two 100 ms gaps between words were measured
+// shortened to 60 and 80 ms, enough to run the words together.
+//
 // samplePeak is compared against every 16-bit sample in the chunk, whatever
 // the channel count — interleaved silence is silent on every channel.
-func (r *playRing) skipSilentHead(chunk, keep int, samplePeak int32) int {
-	if chunk <= 0 || chunk%2 != 0 {
+func (r *playRing) skipSilentHead(chunk, keep, tail int, samplePeak int32) int {
+	if chunk <= 0 || chunk%2 != 0 || tail < 0 || tail%2 != 0 {
 		return 0
 	}
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	if r.writePos-r.readPos-int64(chunk) < int64(keep) {
+	queued := r.writePos - r.readPos
+	if queued-int64(chunk) < int64(keep) || queued < int64(chunk+tail) {
 		return 0
 	}
-	for i := 0; i < chunk; i += 2 {
+	// The chunk and the tail behind it must all be silent. The tail is what
+	// is left of the pause after this chunk goes, so it is never shortened
+	// below that — a gap between two words stays a gap.
+	for i := 0; i < chunk+tail; i += 2 {
 		lo := r.buf[int((r.readPos+int64(i))%int64(r.cap))]
 		hi := r.buf[int((r.readPos+int64(i+1))%int64(r.cap))]
 		v := int32(int16(uint16(lo) | uint16(hi)<<8))

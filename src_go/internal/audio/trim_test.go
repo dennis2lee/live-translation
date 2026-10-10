@@ -28,7 +28,7 @@ func TestASilentHeadIsSkippedWhenTheQueueIsLong(t *testing.T) {
 	r := newPlayRing(64)
 	r.Write(samples(fill(4, 0)...))   // 8 bytes of silence at the head
 	r.Write(samples(fill(8, 900)...)) // 16 bytes of speech behind it
-	if got := r.skipSilentHead(8, 4, 33); got != 8 {
+	if got := r.skipSilentHead(8, 4, 0, 33); got != 8 {
 		t.Fatalf("skipped %d bytes, want the 8-byte silent head", got)
 	}
 	if r.Available() != 16 {
@@ -47,7 +47,7 @@ func TestSpeechIsNeverSkipped(t *testing.T) {
 	chunk[2] = 34 // one sample just over the line
 	r.Write(samples(chunk...))
 	r.Write(samples(fill(8, 0)...))
-	if got := r.skipSilentHead(8, 0, 33); got != 0 {
+	if got := r.skipSilentHead(8, 0, 0, 33); got != 0 {
 		t.Errorf("skipped %d bytes of a chunk with speech in it", got)
 	}
 	// Negative excursions count too — silence is about magnitude.
@@ -55,7 +55,7 @@ func TestSpeechIsNeverSkipped(t *testing.T) {
 	chunk[2] = -34
 	r2.Write(samples(chunk...))
 	r2.Write(samples(fill(8, 0)...))
-	if got := r2.skipSilentHead(8, 0, 33); got != 0 {
+	if got := r2.skipSilentHead(8, 0, 0, 33); got != 0 {
 		t.Errorf("skipped %d bytes of a chunk with a negative peak", got)
 	}
 }
@@ -67,7 +67,7 @@ func TestOnlyTheHeadIsEverTrimmed(t *testing.T) {
 	r.Write(samples(fill(4, 5000)...)) // speech at the head
 	r.Write(samples(fill(4, 0)...))    // silence behind it
 	r.Write(samples(fill(8, 0)...))
-	if got := r.skipSilentHead(8, 0, 33); got != 0 {
+	if got := r.skipSilentHead(8, 0, 0, 33); got != 0 {
 		t.Errorf("trimmed %d bytes past speech at the head", got)
 	}
 }
@@ -77,10 +77,10 @@ func TestOnlyTheHeadIsEverTrimmed(t *testing.T) {
 func TestTrimmingNeverLeavesLessThanTheCushion(t *testing.T) {
 	r := newPlayRing(64)
 	r.Write(samples(fill(8, 0)...)) // 16 bytes, all silent
-	if got := r.skipSilentHead(8, 9, 33); got != 0 {
+	if got := r.skipSilentHead(8, 9, 0, 33); got != 0 {
 		t.Errorf("trimmed to %d bytes against a cushion of 9", r.Available())
 	}
-	if got := r.skipSilentHead(8, 8, 33); got != 8 {
+	if got := r.skipSilentHead(8, 8, 0, 33); got != 8 {
 		t.Errorf("did not trim when exactly the cushion would remain: skipped %d", got)
 	}
 }
@@ -92,7 +92,7 @@ func TestTrimmingReadsAcrossTheWrap(t *testing.T) {
 	r.Read(make([]byte, 12))           // head now at 12 of 16
 	r.Write(samples(fill(4, 0)...))    // 8 silent bytes: 4 before the wrap, 4 after
 	r.Write(samples(fill(2, 7000)...)) // speech behind
-	if got := r.skipSilentHead(8, 0, 33); got != 8 {
+	if got := r.skipSilentHead(8, 0, 0, 33); got != 8 {
 		t.Fatalf("skipped %d across the wrap, want 8", got)
 	}
 	dst := make([]byte, 4)
@@ -106,7 +106,7 @@ func TestTrimmingReadsAcrossTheWrap(t *testing.T) {
 func TestAnOddChunkIsRefused(t *testing.T) {
 	r := newPlayRing(64)
 	r.Write(samples(fill(16, 0)...))
-	if got := r.skipSilentHead(3, 0, 33); got != 0 {
+	if got := r.skipSilentHead(3, 0, 0, 33); got != 0 {
 		t.Errorf("skipped %d bytes on an odd chunk size", got)
 	}
 }
@@ -114,10 +114,15 @@ func TestAnOddChunkIsRefused(t *testing.T) {
 // --- through the device callback ------------------------------------------
 
 func trimmingPlayer(trimBytes int) (*Player, *playState) {
+	// pauseKeep is left at zero here: these tests are about the threshold and
+	// the volume, and the pause rule has tests of its own.
 	p := NewPlayer("", TranslatedRate)
 	p.devRate, p.devChan = TranslatedRate, 1
 	st := &playState{
-		ring:        newPlayRing(4096),
+		// A second of audio. It was 4096 bytes — 43 ms — and that quietly
+		// truncated the 100 ms gap the word-gap test writes, so the test
+		// passed whatever PlayPauseKeepMS was set to. Found by mutation.
+		ring:        newPlayRing(TranslatedRate * BytesPerSample),
 		prebuffer:   0,
 		blockBytes:  BytesPerSample,
 		trimAbove:   trimBytes,
@@ -175,12 +180,19 @@ func TestAZeroThresholdTrimsNothing(t *testing.T) {
 // player — a test that passes with trimming off would prove nothing.
 func TestADriftingStreamWithBurstsLosesNoSpeech(t *testing.T) {
 	const bps = TranslatedRate * BytesPerSample
-	// 400 ms of speech then 100 ms of exact silence, repeated: a pause share
-	// close to the 17% of exact-zero chunks measured in real model audio.
+	// Four words with 100 ms gaps between them, then a 500 ms pause before
+	// the next sentence — the shape of the measured run, where the median
+	// pause was 130 ms and the ones that could be trimmed ran to 600 ms. The
+	// word gaps are never trimmable (PlayPauseKeepMS), so everything the
+	// player sheds has to come out of the sentence pauses.
 	var pcm []byte
 	for len(pcm) < bps*400 {
+		for range 4 {
+			pcm = append(pcm, samples(fill(TranslatedRate*4/10, 6000)...)...)
+			pcm = append(pcm, samples(fill(TranslatedRate/10, 0)...)...)
+		}
 		pcm = append(pcm, samples(fill(TranslatedRate*4/10, 6000)...)...)
-		pcm = append(pcm, samples(fill(TranslatedRate/10, 0)...)...)
+		pcm = append(pcm, samples(fill(TranslatedRate/2, 0)...)...)
 	}
 	audio := map[int][]byte{1: pcm}
 
@@ -206,5 +218,55 @@ func TestADriftingStreamWithBurstsLosesNoSpeech(t *testing.T) {
 	}
 	if r.maxQueue > float64(PlayRingMS)/1000 {
 		t.Errorf("queue reached %.2f s, past the ring", r.maxQueue)
+	}
+}
+
+// --- the end of every pause is kept ----------------------------------------
+
+// The chunk can go only if enough silence follows it to stay behind. A gap
+// between two words is short, and shortening it runs the words together.
+func TestTheEndOfAPauseIsKept(t *testing.T) {
+	r := newPlayRing(128)
+	r.Write(samples(fill(4, 0)...))    // 8-byte silent chunk at the head
+	r.Write(samples(fill(3, 0)...))    // only 6 bytes of silence behind it
+	r.Write(samples(fill(8, 5000)...)) // then speech
+	if got := r.skipSilentHead(8, 0, 8, 33); got != 0 {
+		t.Errorf("skipped into the last %d bytes of a pause that had to keep 8", 6)
+	}
+	r2 := newPlayRing(128)
+	r2.Write(samples(fill(8, 0)...)) // 8-byte chunk + 8 bytes of tail
+	r2.Write(samples(fill(8, 5000)...))
+	if got := r2.skipSilentHead(8, 0, 8, 33); got != 8 {
+		t.Errorf("a pause with a full tail behind the chunk was not trimmed: skipped %d", got)
+	}
+}
+
+// A gap of 100 ms between words — the commonest pause measured — is shorter
+// than one chunk plus the kept tail, so it is never touched at all.
+func TestAGapBetweenWordsIsLeftAlone(t *testing.T) {
+	p, st := trimmingPlayer(2)
+	st.pauseKeep = TranslatedRate * BytesPerSample * PlayPauseKeepMS / 1000
+	// 100 ms, written out rather than taken from the constant: this is the
+	// requirement — the commonest measured gap must survive — and a test that
+	// borrowed the constant would agree with any value it was changed to.
+	gap := TranslatedRate * 100 / 1000
+	st.ring.Write(samples(fill(gap, 0)...))
+	st.ring.Write(samples(fill(1024, 6000)...))
+	if got, want := st.ring.Available(), (gap+1024)*BytesPerSample; got != want {
+		t.Fatalf("setup: %d bytes queued, want %d — the gap did not fit", got, want)
+	}
+	p.onPlayback(make([]byte, 960), nil, 480) // one 20 ms chunk
+	if st.ring.Trimmed() != 0 {
+		t.Errorf("trimmed %d bytes out of a 100 ms gap between words", st.ring.Trimmed())
+	}
+}
+
+// The tail has to be in the queue already. Silence that has not arrived yet
+// might be a short gap, and guessing that it is long is how words get joined.
+func TestTheTailMustAlreadyBeQueued(t *testing.T) {
+	r := newPlayRing(128)
+	r.Write(samples(fill(4, 0)...)) // the chunk, and nothing behind it yet
+	if got := r.skipSilentHead(8, 0, 8, 33); got != 0 {
+		t.Errorf("trimmed on silence that had not arrived: %d bytes", got)
 	}
 }

@@ -75,6 +75,12 @@ const (
 	// Skipping a pause is free; skipping the end of a word is the defect this
 	// exists to remove.
 	PlaySilenceDBFS = -60.0
+
+	// PlayPauseKeepMS is how much of every pause is never trimmed. Pauses
+	// shorter than this plus one chunk are left alone entirely — most of them
+	// are gaps between words, and 83 of 180 pauses in the measured run were
+	// 100 ms or less.
+	PlayPauseKeepMS = 100
 )
 
 // Player speaks the translated audio the model sends back.
@@ -108,6 +114,8 @@ type playState struct {
 	trimAbove int
 	// silencePeak is PlaySilenceDBFS as a 16-bit sample, before gain.
 	silencePeak float64
+	// pauseKeep is PlayPauseKeepMS in bytes.
+	pauseKeep int
 }
 
 type Player struct {
@@ -210,6 +218,7 @@ func (p *Player) Start() (OutputDevice, error) {
 		blockBytes:  frameBytes,
 		trimAbove:   p.devRate * frameBytes * PlayTrimAboveMS / 1000,
 		silencePeak: 32768 * math.Pow(10, PlaySilenceDBFS/20),
+		pauseKeep:   p.devRate * frameBytes * PlayPauseKeepMS / 1000,
 	}
 	p.primed.Store(false)
 
@@ -398,7 +407,7 @@ func (p *Player) onPlayback(out, _ []byte, frames uint32) {
 	// exact silence qualifies, which is what muted audio is.
 	if state.trimAbove > 0 {
 		gain := math.Float64frombits(p.gain.Load())
-		state.ring.skipSilentHead(len(block), state.trimAbove,
+		state.ring.skipSilentHead(len(block), state.trimAbove, state.pauseKeep,
 			int32(state.silencePeak*gain))
 	}
 
