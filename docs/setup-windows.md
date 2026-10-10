@@ -71,7 +71,8 @@ in Preferences.
 1. Go to <https://aistudio.google.com/apikey> and sign in with a Google account.
 2. Click **Create API key** and copy it. It starts with `AIza`.
 3. **Turn on billing.** The translation model is not on the free tier, so a key
-   without billing fails with *"credits are depleted"*.
+   without billing stops with *"Billing credits exhausted"* or *"Billing
+   required"* in the caption box.
    - In AI Studio, open the key's project and set up billing, or go to
      <https://console.cloud.google.com/billing>.
    - The key and the billing account must be in the **same project**. This is
@@ -89,7 +90,7 @@ in Preferences.
 | | Gemini | OpenAI |
 |---|---|---|
 | First translated speech | 3–5 s after you start | under 1 s |
-| Spoken voice | changes at every reconnect | follows the speaker's voice |
+| Spoken voice | changes at every reconnect | follows the speaker's voice (not yet measured across reconnects) |
 | Name and jargon hints (Words tab) | yes | no |
 | Cost | ~$0.037 / min | ~$0.034 / min |
 

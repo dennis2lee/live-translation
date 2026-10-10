@@ -1,0 +1,58 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="960" height="460" viewBox="0 0 960 460" role="img" aria-label="LiveCap translating Korean speech into English captions">
+  <defs>
+    <linearGradient id="stage" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#0b0f14"/>
+      <stop offset="1" stop-color="#000000"/>
+    </linearGradient>
+    <linearGradient id="glow" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0" stop-color="#3b7bbf" stop-opacity="0"/>
+      <stop offset="0.5" stop-color="#3b7bbf" stop-opacity="0.35"/>
+      <stop offset="1" stop-color="#3b7bbf" stop-opacity="0"/>
+    </linearGradient>
+    <filter id="soft" x="-20%" y="-50%" width="140%" height="200%">
+      <feGaussianBlur stdDeviation="18"/>
+    </filter>
+    <style>
+      .ui   { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif; }
+      .ko   { font-family: "Apple SD Gothic Neo", "Malgun Gothic", "Noto Sans KR", sans-serif; }
+      .cap  { font-size: 30px; font-weight: 600; fill: #ffffff; }
+      .dim  { fill-opacity: 0.55; }
+      @keyframes pulse { 0%, 100% { opacity: 1 } 50% { opacity: 0.35 } }
+      .live { animation: pulse 2.4s ease-in-out infinite; }
+    </style>
+  </defs>
+
+  <!-- the window -->
+  <rect x="0" y="0" width="960" height="460" rx="18" fill="url(#stage)"/>
+  <rect x="0" y="0" width="960" height="40" rx="18" fill="#1c2128"/>
+  <rect x="0" y="22" width="960" height="18" fill="#1c2128"/>
+  <circle cx="26" cy="20" r="7" fill="#ff5f57"/>
+  <circle cx="50" cy="20" r="7" fill="#febc2e"/>
+  <circle cx="74" cy="20" r="7" fill="#28c840"/>
+  <text x="480" y="26" text-anchor="middle" class="ui" font-size="14" fill="#8b949e">LiveCap</text>
+
+  <!-- what is being said -->
+  <g class="ui" transform="translate(48 82)">
+    <rect width="420" height="64" rx="32" fill="#161b22" stroke="#30363d"/>
+    <circle cx="32" cy="32" r="16" fill="#238636"/>
+    <path d="M32 22a5 5 0 0 1 5 5v6a5 5 0 0 1-10 0v-6a5 5 0 0 1 5-5zm-9 11a9 9 0 0 0 18 0M32 42v4" stroke="#fff" stroke-width="2" fill="none" stroke-linecap="round"/>
+    <text x="62" y="27" font-size="12" fill="#8b949e" letter-spacing="1">SPEAKER · KOREAN</text>
+    <text x="62" y="47" class="ko" font-size="17" fill="#e6edf3">오늘 회의를 시작하겠습니다.</text>
+  </g>
+  <g class="ui" transform="translate(500 99)">
+    <path d="M0 15h56" stroke="#3b7bbf" stroke-width="2" stroke-dasharray="4 5"/>
+    <path d="M56 9l10 6-10 6z" fill="#3b7bbf"/>
+    <rect x="80" y="0" width="150" height="30" rx="15" fill="#1f6feb" fill-opacity="0.15" stroke="#1f6feb" stroke-opacity="0.6"/>
+    <text x="155" y="20" text-anchor="middle" font-size="13" fill="#79c0ff">Gemini · OpenAI</text>
+  </g>
+
+  <!-- the caption box: fixed, 90% wide, bottom-aligned, newest line steady -->
+  <rect x="80" y="290" width="800" height="70" fill="url(#glow)" filter="url(#soft)"/>
+  <rect x="48" y="236" width="864" height="150" rx="24" fill="#1B4965"/>
+  <text x="480" y="294" text-anchor="middle" class="ui cap">Good morning, everyone. Let's begin today's meeting.</text>
+  <text x="480" y="344" text-anchor="middle" class="ui cap dim">First, a quick look at last week's progress</text>
+
+  <!-- direction hint and the status dot, just below the box -->
+  <text x="868" y="414" text-anchor="end" class="ui" font-size="15" fill="#8b949e">KO→EN</text>
+  <circle cx="892" cy="409" r="8" fill="#2ea043" class="live"/>
+</svg>

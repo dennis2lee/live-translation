@@ -1,97 +1,136 @@
-<div align="center">
+<p align="center">
+  <img src="src_go/packaging/AppIcon.png" width="148" alt="LiveCap app icon">
+</p>
 
-# LiveCap
+<h1 align="center">LiveCap</h1>
 
-**Live speech translation, as captions you can put on a big screen.**
+<p align="center">
+  <b>Live speech translation, as captions you can put on a big screen.</b><br>
+  Someone speaks Korean — the room reads English a few seconds later.<br>
+  Press one key and it goes the other way.
+</p>
 
-Someone speaks Korean — the room reads English, a few seconds later.
-Flip one key and it goes the other way.
+<p align="center">
+  <img alt="macOS" src="https://img.shields.io/badge/macOS-Apple%20silicon-111111?style=flat-square&logo=apple&logoColor=white">
+  <img alt="Windows" src="https://img.shields.io/badge/Windows-x64-0078D6?style=flat-square&logo=windows&logoColor=white">
+  <img alt="Google Gemini" src="https://img.shields.io/badge/Google-Gemini%20Live-4285F4?style=flat-square&logo=googlegemini&logoColor=white">
+  <img alt="OpenAI" src="https://img.shields.io/badge/OpenAI-Realtime%20Translate-412991?style=flat-square&logo=openai&logoColor=white">
+  <img alt="Go" src="https://img.shields.io/badge/Go-1.26-00ADD8?style=flat-square&logo=go&logoColor=white">
+  <img alt="License" src="https://img.shields.io/badge/license-PolyForm%20Strict-8a6d3b?style=flat-square">
+</p>
 
-macOS · Windows · Google Gemini or OpenAI
+<p align="center">
+  <a href="docs/setup-macos.md"><img alt="Set up on macOS" src="https://img.shields.io/badge/Set%20up%20on-macOS-111111?style=for-the-badge&logo=apple&logoColor=white"></a>
+  &nbsp;
+  <a href="docs/setup-windows.md"><img alt="Set up on Windows" src="https://img.shields.io/badge/Set%20up%20on-Windows-0078D6?style=for-the-badge&logo=windows&logoColor=white"></a>
+  &nbsp;
+  <a href="https://github.com/dennis2lee/live-translation/releases"><img alt="Download" src="https://img.shields.io/badge/Download-Releases-2ea043?style=for-the-badge&logo=github&logoColor=white"></a>
+</p>
 
-[Set up on a Mac](docs/setup-macos.md) · [Set up on Windows](docs/setup-windows.md) · [Releases](https://github.com/dennis2lee/live-translation/releases)
-
-</div>
+<p align="center">
+  <img src="docs/assets/caption-demo.svg" width="860" alt="LiveCap turning Korean speech into an English caption box, with a green live indicator">
+</p>
 
 ---
 
-## What it is for
+## 🎯 What it is for
 
 A sermon, a conference talk, a meeting with a guest who does not share your
 language. Plug the mixer into the laptop, put LiveCap full screen on the
-projector, press **0**. The speaker does nothing different.
+projector, press **`0`**. The speaker does nothing different.
 
-- **Captions built for reading from across a room.** Large text, a fixed box
-  that does not jump around, the newest line always in the same place, lines
-  released at reading pace instead of in bursts.
-- **Or hear it.** The translation can be spoken aloud, in the model's voice or
-  a voice installed on the computer.
-- **It keeps going.** Sessions are replaced behind the scenes every few
-  minutes; the new one is warmed up in advance and switched in during a pause,
-  so the listener does not hear the seam.
-- **One key per job.** `0` start/stop, `1` Korean→English, `2` English→Korean,
-  `f` full screen, `m` mute. Works with the Korean keyboard layout too.
+<table>
+  <tr>
+    <td width="33%" valign="top">
+      <h3>📺 Built for the back row</h3>
+      Large text in a box that never jumps. The newest line stays in the same
+      place, and lines arrive at reading pace instead of in bursts.
+    </td>
+    <td width="33%" valign="top">
+      <h3>🔊 Or listen to it</h3>
+      The translation can be spoken aloud, in the model's voice or a voice
+      installed on the computer. Mute it any time with <code>m</code>.
+    </td>
+    <td width="33%" valign="top">
+      <h3>♾️ Hours, not minutes</h3>
+      Sessions are renewed behind the scenes. The next one is warmed up
+      unheard and switched in during a pause, so nobody hears the seam.
+    </td>
+  </tr>
+  <tr>
+    <td valign="top">
+      <h3>🎵 Skips the music</h3>
+      An on-device classifier holds back songs and instrumentals, so a
+      worship set or a video clip is not translated.
+    </td>
+    <td valign="top">
+      <h3>🔑 Two engines</h3>
+      Google Gemini Live or OpenAI Realtime Translate, chosen in Preferences.
+      Your key, your account, your bill — no middleman server.
+    </td>
+    <td valign="top">
+      <h3>📝 Every word kept</h3>
+      Each session is saved as a timestamped Markdown transcript, with
+      reconnects marked where they happened.
+    </td>
+  </tr>
+</table>
 
-## How it works
+## ⚙️ How it works
 
 ```mermaid
 flowchart LR
     A["🎤 Mic or mixer"] --> B["LiveCap<br/>resample · filter · send"]
-    B -- "16–24 kHz audio" --> C["Gemini Live<br/>or OpenAI Realtime"]
+    B -- "live audio" --> C["☁️ Gemini Live<br/>or OpenAI Realtime"]
     C -- "translated text" --> D["📺 Captions"]
     C -- "translated speech" --> E["🔊 Optional voice"]
-    B --> F["📝 Transcript<br/>(Markdown)"]
+    B --> F["📝 Transcript"]
 ```
 
-The cloud model listens to the audio stream and translates as it goes — there
-is no "press to talk", no waiting for the end of a sentence. LiveCap's job is
-everything around it: clean audio in, steady captions out, and keeping the
-connection alive for hours.
+The cloud model listens to the audio stream and translates as it goes — no
+push-to-talk, no waiting for a sentence to end. LiveCap does everything
+around it: clean audio in, steady captions out, and a connection that stays up
+for hours.
 
-## Highlights
+## 🚀 Get started in three steps
+
+| | |
+|:---:|---|
+| **1** | **Download** the latest build from [Releases](https://github.com/dennis2lee/live-translation/releases) — `macos-arm64.zip` or `x64.msi`. |
+| **2** | **Get an API key** from [Google AI Studio](https://aistudio.google.com/apikey) or [OpenAI](https://platform.openai.com/api-keys), with billing turned on. |
+| **3** | **Paste it** into **Preferences → API**, press **Test Key**, then press **`0`**. |
+
+The full walkthroughs cover the one-time security prompt both systems show for
+an unsigned app, microphone permission, and what to do if something is off:
+**[🍎 macOS guide](docs/setup-macos.md)** · **[🪟 Windows guide](docs/setup-windows.md)**
+
+## ✨ Highlights
 
 | | |
 |---|---|
-| **Two engines** | Google `gemini-3.5-live-translate-preview` or OpenAI `gpt-realtime-translate`, chosen in Preferences. Captions behave the same with either. |
-| **Fast** | First caption in about 3 s with Gemini; OpenAI's first translated speech arrives in under a second. |
-| **Seamless reconnects** | Gemini ends a session about every nine minutes (LiveCap renews an OpenAI session itself, every 50). LiveCap opens the replacement early, feeds it the same audio unheard, and switches in a shared pause. Measured on Gemini: the silence at a reconnect fell from 2.4–3.6 s to 0.5–1.2 s — an ordinary pause between sentences. |
-| **Music filter** | An on-device classifier (a pure-Go port of Google's YAMNet) holds back songs and instrumental music, so a worship set or a video clip is not translated. |
-| **Cleaner speech** | Removes a buzzing artifact the cloud model produces at the start of a session, measured and verified with signal processing, not by ear alone. |
-| **Readable captions** | Fixed box, bottom-aligned text, paced line release, optional "complete phrases only" mode, clear-on-silence, every colour and size adjustable. |
-| **Transcripts** | Every session saved as Markdown with timestamps, reconnects marked inline. |
-| **Your key stays yours** | Stored encrypted (or in the system keychain), never in a settings file, never in a log, never in a URL. |
-| **Native** | Go and Fyne. One small app, no Electron, no Python, no runtime to install. |
+| ⚡ **Fast** | First caption in about 3 s with Gemini; OpenAI's first translated speech arrives in under a second. |
+| 🔁 **Seamless reconnects** | Gemini ends a session about every nine minutes (LiveCap renews an OpenAI session itself, every 50). The replacement is opened early, fed the same audio unheard, and switched in a pause after the same sentence in both. Measured on Gemini: the silence at a reconnect fell from 2.4–3.6 s to 0.5–1.2 s — an ordinary pause between sentences. |
+| 🎚️ **Cleaner speech** | Removes a buzzing artifact the cloud model produces at the start of a session — found and verified with signal processing, not by ear alone. |
+| 🎵 **Music filter** | A pure-Go port of Google's YAMNet audio classifier, running on the device. No audio leaves the machine for it. |
+| 🔤 **Readable captions** | Fixed box, bottom-aligned text, paced line release, an optional "complete phrases only" mode, clear-on-silence, and every colour and size adjustable. |
+| 🔒 **Your key stays yours** | Stored encrypted or in the system keychain — never in a settings file, never in a log, never in a URL. |
+| 🪶 **Native and small** | Go and Fyne. One app, no Electron, no Python, no runtime to install. |
 
-## Get started
+## 🤝 Choosing a provider
 
-1. **Download** the latest build from
-   [Releases](https://github.com/dennis2lee/live-translation/releases) —
-   `macos-arm64.zip` or `x64.msi`.
-2. **Get an API key** from [Google AI Studio](https://aistudio.google.com/apikey)
-   or [OpenAI](https://platform.openai.com/api-keys), with billing turned on.
-3. **Paste it** into **Preferences → API**, press **Test Key**, then press
-   **0**.
-
-The full walkthroughs, including the security prompts both systems show for an
-unsigned app, are here:
-
-- 🍎 **[macOS setup guide](docs/setup-macos.md)**
-- 🪟 **[Windows setup guide](docs/setup-windows.md)**
-
-## Choosing a provider
-
-| | Google Gemini | OpenAI |
+| | <img src="https://img.shields.io/badge/-Gemini-4285F4?style=flat-square&logo=googlegemini&logoColor=white" alt="Gemini"> | <img src="https://img.shields.io/badge/-OpenAI-412991?style=flat-square&logo=openai&logoColor=white" alt="OpenAI"> |
 |---|---|---|
 | Model | `gemini-3.5-live-translate-preview` | `gpt-realtime-translate` |
 | First translated speech | 3.3–5.2 s | ~0.5 s |
-| Spoken voice | picked by the model, changes at each reconnect | follows the speaker |
+| Spoken voice | picked by the model, changes at each reconnect | follows the speaker's voice (whether it holds across reconnects is not yet measured) |
 | Name / jargon hints | ✅ | — |
 | Cost | ~$0.037 per minute | ~$0.034 per minute |
 
 A 30-minute session costs about **$1.10** either way. You pay the provider
 directly; LiveCap has no account and no server of its own.
 
-## Keyboard
+<details>
+<summary><b>⌨️ Keyboard</b></summary>
 
 | Key | Action |
 |---|---|
@@ -104,31 +143,33 @@ directly; LiveCap has no account and no server of its own.
 | `⌘R` / `Ctrl+R` | Start translating |
 | `⌘,` / `Ctrl+,` | Preferences |
 
-A dot in the corner of the caption box shows the connection: grey idle, green
-blinking connecting, green live, red error (with the reason printed). Half of
-it turns deep red while the speech is muted.
+The keys work with the Korean keyboard layout too. A dot beside the caption
+box shows the connection: grey idle, green blinking connecting, green live,
+red error (with the reason printed). Half of it turns deep red while the
+speech is muted.
 
-## Measured, not guessed
+</details>
 
-Every constant in LiveCap that affects what you see or hear came from a
-measurement, and the measurement is written down next to it:
+## 🔬 Measured, not guessed
 
-- Caption pacing comes from the timing of 93 real fragments: the model answers
-  on a one-second beat, so the idle timeout is 1.6 s, not 1.2.
-- The music filter's thresholds come from scoring speech against backing music
-  at known levels, and its output was checked against Google's reference
-  interpreter.
-- The reconnect switch was tuned on recorded sessions. Two sessions
+Every constant that affects what you see or hear came from a measurement, and
+the measurement is written down next to it.
+
+- **Caption pacing** comes from the timing of 93 real fragments: the model
+  answers on a one-second beat, so the idle timeout is 1.6 s, not 1.2.
+- **The music filter's** thresholds come from scoring speech against backing
+  music at known levels, and its output was checked against Google's
+  reference interpreter.
+- **The reconnect switch** was tuned on recorded sessions. Two sessions
   translating the same speech rarely fall silent together for half a second,
   and a fresh OpenAI session runs a sentence ahead of the old one — so the
   switch waits until both are 200 ms into a pause after the *same* sentence,
-  compared by character bigrams.
-- Audio changes were verified with signal processing — spectral and
-  periodicity measurements on recorded model output — and with mutation
-  testing: defects are planted in the code on purpose to prove the tests catch
-  them.
+  compared by character bigrams and by their numbers.
+- **Audio changes** were verified with signal processing on recorded model
+  output, and every change goes through adversarial review and mutation
+  testing — defects planted on purpose to prove the tests catch them.
 
-## Honest limits
+## 🚧 Honest limits
 
 - **Windows** builds and installs cleanly in testing but **has not yet been run
   on a real Windows PC** by its author.
@@ -141,9 +182,12 @@ measurement, and the measurement is written down next to it:
 - OpenAI's endpoint accepts no vocabulary hints, and its limit on session
   length has not been measured.
 
-## Building from source
+<details>
+<summary><b>🛠️ Building from source</b></summary>
 
 Requires Go 1.26 on macOS. The Windows installer cross-builds from the Mac.
+Building it yourself for your own noncommercial use is allowed; distributing
+the result, or a changed version, is not — see the license below.
 
 ```bash
 git clone https://github.com/dennis2lee/live-translation.git
@@ -170,12 +214,28 @@ src_go/
 Measurement programs live in `src_go/spikes/`; their findings are in
 [`src_go/spikes/RESULTS.md`](src_go/spikes/RESULTS.md).
 
-## License
+</details>
 
-Copyright © 2026 Pyeongwoo Lee. All rights reserved.
+## 📜 License
 
-Proprietary — not open-source software. No permission is granted to use, copy,
-modify or distribute it without prior written permission. See
-[LICENSE](LICENSE).
+**Source available — not open source.** LiveCap is published under the
+[PolyForm Strict License 1.0.0](LICENSE). In plain terms (the license text is
+what counts):
 
-Contact: Pyeongwoo Lee — <dennis2.lee@gmail.com>
+| | |
+|---|---|
+| ✅ | Read and study the source code. |
+| ✅ | Use LiveCap for **noncommercial** purposes — personal use, study, religious observance, and use by charities, schools, research and public bodies. |
+| ❌ | **Commercial use.** |
+| ❌ | **Redistributing** it, in source or built form. |
+| ❌ | **Changing it**, or building new works on it, without permission. |
+| ❌ | Removing or altering the copyright and author notice. |
+
+Want to do something the license does not allow? Ask:
+<a href="mailto:dennis2.lee@gmail.com">dennis2.lee@gmail.com</a>.
+
+---
+
+<p align="center">
+  <sub>Copyright © 2026 Pyeongwoo Lee. All rights reserved except as granted in the <a href="LICENSE">LICENSE</a>.</sub>
+</p>
