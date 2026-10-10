@@ -3,6 +3,7 @@ package netcheck
 import (
 	"strings"
 	"testing"
+	"time"
 )
 
 // The round trip that matters is to the server the chosen provider's
@@ -25,5 +26,33 @@ func TestTheUploadVerdictFollowsTheProvider(t *testing.T) {
 	}
 	if !strings.HasPrefix(openai.Verdict(), "Too slow") {
 		t.Errorf("400 kbit/s judged enough for OpenAI: %q", openai.Verdict())
+	}
+}
+
+// RunFor measures the round trip to the chosen provider's server and judges
+// the upload by that provider's rate. Either half going back to Gemini's
+// silently undoes the other provider's check.
+func TestRunForWiresTheProvider(t *testing.T) {
+	var host string
+	ml, mu, md := measureLatency, measureUpload, measureDownload
+	t.Cleanup(func() { measureLatency, measureUpload, measureDownload = ml, mu, md })
+	measureLatency = func(h string, _, _ int, _ time.Duration) Latency {
+		host = h
+		return Latency{Host: h, SamplesMS: []float64{20, 20, 20}}
+	}
+	// 1.5 Mbit/s: comfortable for Gemini (4 × 256), only enough for OpenAI
+	// (4 × 512).
+	tp := func(string, int, time.Duration) Throughput {
+		return Throughput{BytesMoved: 1500 * 1000 / 8, Seconds: 1}
+	}
+	measureUpload, measureDownload = tp, tp
+
+	g := RunFor("gemini")
+	if host != LiveAPIHost || g.NeedKbps != 256 || strings.HasPrefix(g.Verdict(), "Enough") {
+		t.Errorf("gemini: host %q, need %.0f, verdict %q", host, g.NeedKbps, g.Verdict())
+	}
+	o := RunFor("openai")
+	if host != OpenAIHost || o.NeedKbps != 512 || !strings.HasPrefix(o.Verdict(), "Enough for one session") {
+		t.Errorf("openai: host %q, need %.0f, verdict %q", host, o.NeedKbps, o.Verdict())
 	}
 }

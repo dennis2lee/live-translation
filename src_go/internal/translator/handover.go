@@ -137,8 +137,15 @@ func (t *Translator) handOver(ctx context.Context, old *sessionHolder) *sessionH
 					"new_end", next.sentenceEnded.Load(),
 					"match", similarity(lastSentence(old.recentText()), lastSentence(next.recentText())))
 			}
-			// A song is better than a pause: nobody is listening at all.
-			if t.adaptivePrep && t.quietMoment != nil && t.quietMoment() {
+			// A song is better than a pause: nobody is listening at all. But
+			// the gate withholds input, not output — the old session is still
+			// translating what was said just before the song, and switching
+			// then muted it mid-sentence (the red team's third round). So the
+			// gate also waits for both to fall quiet, which with no input
+			// going out they do within seconds; the replacement need not be
+			// warm, since nothing is being said for it to warm up on.
+			if t.adaptivePrep && t.quietMoment != nil && t.quietMoment() &&
+				old.quietFor() >= HandoverQuiet && next.quietFor() >= HandoverQuiet {
 				slog.Info("switching sessions under the music gate",
 					"waited", time.Since(started).Round(time.Millisecond))
 				t.notePreppedSwap(time.Since(started))

@@ -365,6 +365,14 @@ func HostFor(provider string) string {
 	return LiveAPIHost
 }
 
+// The measurements RunFor makes, indirected so a test can check what it
+// asks for and what it judges against without the network.
+var (
+	measureLatency  = MeasureLatency
+	measureUpload   = MeasureUpload
+	measureDownload = MeasureDownload
+)
+
 // Run runs the whole check for Gemini. Blocking — call it off the UI
 // goroutine.
 func Run() Report { return RunFor("gemini") }
@@ -374,11 +382,11 @@ func Run() Report { return RunFor("gemini") }
 // takes.
 func RunFor(provider string) Report {
 	report := Report{
-		Latency:  MeasureLatency(HostFor(provider), LiveAPIPort, LatencySamples, LatencyTimeout),
+		Latency:  measureLatency(HostFor(provider), LiveAPIPort, LatencySamples, LatencyTimeout),
 		NeedKbps: KbpsFor(provider),
 	}
-	report.Upload = MeasureUpload("", UploadBytes, Timeout)
-	report.Download = MeasureDownload("", DownloadBytes, Timeout)
+	report.Upload = measureUpload("", UploadBytes, Timeout)
+	report.Download = measureDownload("", DownloadBytes, Timeout)
 	slog.Info("network check", "verdict", report.Verdict())
 	for _, line := range report.SummaryLines() {
 		slog.Info("  " + line)

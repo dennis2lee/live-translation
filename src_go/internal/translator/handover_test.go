@@ -349,7 +349,6 @@ func TestAReplacementThatDiesWarmingFallsBackToACold(t *testing.T) {
 func TestTheMusicGateIsAMomentToo(t *testing.T) {
 	r := startWarm(t, true)
 	stop := keepTalking(r.first)
-	defer stop()
 	r.warn(10 * time.Second)
 	waitFor(t, "the replacement to open", func() bool { return r.opener.attempts() == 2 })
 	time.Sleep(20 * time.Millisecond)
@@ -357,9 +356,35 @@ func TestTheMusicGateIsAMomentToo(t *testing.T) {
 		t.Fatal("switched before the gate closed")
 	}
 	r.quiet.Store(true)
+	// The gate withholds input, not output: the old session is still
+	// translating what was said before the song, and must be let finish.
+	time.Sleep(40 * time.Millisecond)
+	if r.reconnects() != 0 {
+		t.Fatal("switched under the gate while the old session was still speaking")
+	}
+	stop()
+	// Then it is switched, though the replacement has never spoken: nothing
+	// is being said for it to warm up on, and nobody is listening.
 	waitFor(t, "the switch under the gate", func() bool { return r.reconnects() == 1 })
 	if st := r.tr.Stats(); st.PreppedSwaps != 1 || st.QuietHandovers != 1 {
 		t.Errorf("prepped %d quiet %d", st.PreppedSwaps, st.QuietHandovers)
+	}
+}
+
+// The red team's reproduction: a sentence the old session is finishing when
+// the gate closes reaches the screen whole.
+func TestASentenceFinishingAsTheSongStartsIsNotCut(t *testing.T) {
+	r := startWarm(t, true)
+	r.warn(10 * time.Second)
+	waitFor(t, "the replacement to open", func() bool { return r.opener.attempts() == 2 })
+	r.first.push(Message{Audio: voiced(), TargetText: " Now let us"})
+	r.quiet.Store(true)
+	time.Sleep(10 * time.Millisecond)
+	r.first.push(Message{Audio: voiced(), TargetText: " sing together."})
+	waitFor(t, "the switch", func() bool { return r.reconnects() == 1 })
+	got := strings.Join(r.collect.targets(), "")
+	if !strings.Contains(got, " sing together.") {
+		t.Errorf("captions %q: the old session was cut off mid-sentence", got)
 	}
 }
 
@@ -484,6 +509,20 @@ func TestLastSentenceAndSimilarity(t *testing.T) {
 		t.Errorf("lastSentence = %q", got)
 	}
 	if got := lastSentence(" Costs were 2.5 billion. Revenue was 1.5."); got != "Revenue was 1.5" {
+		t.Errorf("lastSentence = %q", got)
+	}
+	// A full stop after a number, before a word, is a sentence end: the
+	// decimal test needs a digit on both sides, not either.
+	if got := lastSentence(" The year was 2019. Then it rose."); got != "Then it rose" {
+		t.Errorf("lastSentence = %q", got)
+	}
+	if got := lastSentence(" It rose. 2020 was better."); got != "2020 was better" {
+		t.Errorf("lastSentence = %q", got)
+	}
+	// OpenAI's fragments sometimes drop their leading space ("serverwas",
+	// measured), so a sentence end can sit right against a number. A digit
+	// after the stop is not enough to make it a decimal point.
+	if got := lastSentence(" It rose.2020 was better."); got != "2020 was better" {
 		t.Errorf("lastSentence = %q", got)
 	}
 	// Measured pairs from spike o3_handover: one sentence translated by two

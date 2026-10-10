@@ -465,6 +465,12 @@ func TestACloseReasonIsRedacted(t *testing.T) {
 	if err == nil || strings.Contains(err.Error(), "abcdef") {
 		t.Errorf("err = %v", err)
 	}
+	// And it is fatal: the bare close reason carries no invalid_api_key
+	// code, and retrying a wrong key only ends in "Repeated connection
+	// failures".
+	if got := FatalReason(err); got != "API key is not valid" {
+		t.Errorf("FatalReason = %q for %v", got, err)
+	}
 }
 
 // The key test speaks each provider's dialect: OpenAI's in a bearer header.
@@ -537,5 +543,100 @@ func TestCloseFreesAReaderWithAFullChannel(t *testing.T) {
 	case <-s.readerDone:
 	case <-time.After(2 * time.Second):
 		t.Fatal("the reader never ended")
+	}
+}
+
+// gateStream is a resampler whose Process can be held mid-conversion, and
+// which records being closed during one — the libsoxr crash, made
+// deterministic. A send loop racing Close cannot pin this on its own: Close
+// shuts the socket first, so the sender usually stops before overlapping.
+type gateStream struct {
+	mu        sync.Mutex
+	inProcess bool
+	hold      chan struct{}
+	entered   chan struct{}
+	closedMid bool
+}
+
+func (g *gateStream) Process(in []float32) ([]float32, error) {
+	g.mu.Lock()
+	g.inProcess = true
+	g.mu.Unlock()
+	close(g.entered)
+	<-g.hold
+	g.mu.Lock()
+	g.inProcess = false
+	g.mu.Unlock()
+	return in, nil
+}
+func (g *gateStream) Drain() ([]float32, error) { return nil, nil }
+func (g *gateStream) Close() {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	if g.inProcess {
+		g.closedMid = true
+	}
+}
+
+func TestTheResamplerIsNeverClosedMidConversion(t *testing.T) {
+	newFakeOpenAI(t)
+	s := openFake(t, SessionConfig{}).(*openAISession)
+	real := s.resampler
+	g := &gateStream{hold: make(chan struct{}), entered: make(chan struct{})}
+	s.wmu.Lock()
+	s.resampler = g
+	s.wmu.Unlock()
+	defer real.Close()
+
+	go func() { _ = s.SendAudio(make([]byte, 3200)) }()
+	<-g.entered
+	closed := make(chan struct{})
+	go func() { _ = s.Close(); close(closed) }()
+	time.Sleep(50 * time.Millisecond) // Close is now waiting, or wrongly done
+	close(g.hold)
+	<-closed
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	if g.closedMid {
+		t.Error("the resampler was closed while a conversion was running")
+	}
+}
+
+// A server that stops reading must fail the send in bounded time, so the
+// session is replaced; without a deadline sendLoop hangs until the 50-minute
+// self-warning.
+func TestAStalledSendFailsInsteadOfHanging(t *testing.T) {
+	old := openAIWriteTimeout
+	openAIWriteTimeout = 100 * time.Millisecond
+	t.Cleanup(func() { openAIWriteTimeout = old })
+	up := websocket.Upgrader{}
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		c, err := up.Upgrade(w, r, nil)
+		if err != nil {
+			return
+		}
+		defer c.Close()
+		<-r.Context().Done()
+	}))
+	defer srv.Close()
+	oldEP := OpenAIEndpoint
+	OpenAIEndpoint = "ws" + strings.TrimPrefix(srv.URL, "http")
+	defer func() { OpenAIEndpoint = oldEP }()
+
+	s := openFake(t, SessionConfig{})
+	chunk := tone(16000, 16000, 440)
+	failed := make(chan error, 1)
+	go func() {
+		for {
+			if err := s.SendAudio(chunk); err != nil {
+				failed <- err
+				return
+			}
+		}
+	}()
+	select {
+	case <-failed:
+	case <-time.After(5 * time.Second):
+		t.Fatal("a send to a server that stopped reading never failed")
 	}
 }
