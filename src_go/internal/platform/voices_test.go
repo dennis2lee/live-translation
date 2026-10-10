@@ -11,7 +11,7 @@ import (
 func TestTheVoiceHintNamesThisPlatformsScreen(t *testing.T) {
 	for _, tc := range []struct{ goos, want string }{
 		{"darwin", "System Settings"},
-		{"windows", "Settings → Time & language"},
+		{"windows", "Settings→Time & language"},
 		{"linux", "Install a speech voice"},
 	} {
 		got := voiceInstallHintFor(tc.goos)
@@ -36,5 +36,15 @@ func TestVoiceInstallHintUsesTheRunningPlatform(t *testing.T) {
 	goosOverride = "windows"
 	if got := VoiceInstallHint(); got != voiceInstallHintFor("windows") {
 		t.Errorf("VoiceInstallHint() = %q, want the windows hint", got)
+	}
+}
+
+// Fyne draws an arrow with a space after it as the arrow and a replacement
+// glyph, so a path in a UI string is written "A→B", never "A → B".
+func TestVoiceHintsKeepTheArrowTight(t *testing.T) {
+	for _, goos := range []string{"darwin", "windows", "linux"} {
+		if got := voiceInstallHintFor(goos); strings.Contains(got, " →") || strings.Contains(got, "→ ") {
+			t.Errorf("hint for %s has a spaced arrow: %q", goos, got)
+		}
 	}
 }

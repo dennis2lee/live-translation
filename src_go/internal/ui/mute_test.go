@@ -1,6 +1,7 @@
 package ui
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/dennis2lee/live-translation/src_go/internal/config"
@@ -298,5 +299,44 @@ func TestThePulseDimsBothHalves(t *testing.T) {
 	}
 	if left.A != right.A {
 		t.Errorf("halves pulse apart: left alpha %d, right alpha %d", left.A, right.A)
+	}
+}
+
+// The key itself, not the method: every other test here calls
+// ToggleSpeechMute directly, so a binding that stopped reaching it would pass
+// them all. m, M and ㅡ (what the m key types under the Korean input source)
+// must each mute the sound and split the dot, and press again to undo.
+func TestTheMKeyMutesAndSplitsTheDot(t *testing.T) {
+	for _, key := range []rune{'m', 'M', 'ㅡ'} {
+		w, _ := speakingWindow(t)
+		w.startPlayer()
+		typed := w.win.Canvas().OnTypedRune()
+		if typed == nil {
+			t.Fatal("no key handler is bound")
+		}
+		typed(key)
+		if !w.speechMuted || !w.view.SpeechMuted() {
+			t.Errorf("%q: muted %v, dot split %v", key, w.speechMuted, w.view.SpeechMuted())
+		}
+		typed(key)
+		if w.speechMuted || w.view.SpeechMuted() {
+			t.Errorf("%q pressed again: muted %v, dot split %v", key, w.speechMuted, w.view.SpeechMuted())
+		}
+	}
+}
+
+// With speech off there is nothing to mute, and the notice says where to turn
+// it on: the Output tab, named as it is, with the arrow drawn whole.
+func TestTheSpeechOffNoticeNamesARealTab(t *testing.T) {
+	w := newTestWindow(t)
+	w.win.Canvas().OnTypedRune()('m')
+	if w.notice != speechOffNotice {
+		t.Fatalf("notice = %q", w.notice)
+	}
+	if !strings.Contains(w.notice, "Output") || strings.Contains(w.notice, " →") || strings.Contains(w.notice, "→ ") {
+		t.Errorf("notice = %q", w.notice)
+	}
+	if w.view.SpeechMuted() {
+		t.Error("the dot claims a mute with speech off")
 	}
 }

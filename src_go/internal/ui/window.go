@@ -798,11 +798,17 @@ func (w *Window) speechGain() float64 {
 // Gain rather than Stop: reopening an output device takes long enough to clip
 // the first word, and mute is pressed when someone walks in — it has to be
 // instant in both directions. Captions are unaffected, which is the point.
+// speechOffNotice is what m says when there is no speech to mute.
+const speechOffNotice = "Speaking the translation is off — turn it on in Preferences→Output"
+
 func (w *Window) ToggleSpeechMute() {
 	if !w.settings.SpeakTranslation {
 		// Saying nothing here looks like the key is dead. It is not — there is
 		// simply nothing to mute.
-		w.showNotice("Speaking the translation is off — turn it on in Preferences → Audio")
+		// No spaces around the arrow — Fyne draws "→ " as an arrow and a
+		// replacement glyph (measured, in this very notice) — and the tab is
+		// Output, not the Audio it was before Preferences was split.
+		w.showNotice(speechOffNotice)
 		return
 	}
 	w.speechMuted = !w.speechMuted
