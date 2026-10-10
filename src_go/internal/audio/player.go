@@ -330,16 +330,21 @@ func (p *Player) msOf(bytes int64) int64 {
 func (p *Player) Write(pcm []byte) { p.write(pcm, false) }
 
 // WriteSpeech queues the model's translated speech. It is Write with the
-// freeze gate in the path, which delays it by 210 ms and removes the
-// buzz the far end's synthesis makes at session boundaries. Everything that
+// freeze gate in the path, which removes the buzz the far end's synthesis
+// makes as a session opens; it holds audio back only during an opening. Everything that
 // is not the model's audio — a chosen local voice, the test chime — goes
 // through Write and is never touched.
 func (p *Player) WriteSpeech(pcm []byte) { p.write(pcm, true) }
 
-// ResetSpeech drops the model audio the freeze gate is holding. Call it when
-// the model's stream is about to be replaced — a translator restart, a switch
-// between a local voice and the model — or the last 210 ms of the old stream
-// plays seconds later, in front of the new one.
+// ResetSpeech drops the model audio the freeze gate is holding, and ends any
+// opening it is watching. Call it when the model's stream is about to be
+// replaced — a translator restart, a switch between a local voice and the
+// model — or audio held from the old stream plays in front of the new one.
+//
+// It covers what has reached the gate. A blob the old session's receive loop
+// is already delivering when the translator stops can still arrive after it:
+// Translator.Stop closes sessions without waiting for those loops, and
+// guarding against one stray blob is not worth making Stop block on them.
 func (p *Player) ResetSpeech() {
 	p.mu.Lock()
 	defer p.mu.Unlock()

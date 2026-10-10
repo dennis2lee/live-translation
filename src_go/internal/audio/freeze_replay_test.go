@@ -10,13 +10,11 @@ import (
 
 // TestFreezeGateOnRecordedAudio runs the gate over a real recording of the
 // model's audio, the sessions back to back with each one's start marked, as
-// the player receives them. It skips without a recording; see
-// TestReplayRecordedRun for how to make one.
+// the player receives them, at ten alignments of the 10 ms grid. It skips
+// without a recording; see TestReplayRecordedRun for how to make one.
 //
-// Every freeze within freezeStartMS of a session's first audio must be
-// removed whole, and every other one must keep its first freezeKeepMS — at
-// every frame alignment, since in the application the 10 ms grid lines up
-// with the start of playback rather than with anything in the audio.
+// It checks what the gate is for: it finds openings, the same ones at every
+// alignment, and it never cuts anywhere else.
 func TestFreezeGateOnRecordedAudio(t *testing.T) {
 	dir := os.Getenv("REPLAY_DIR")
 	if dir == "" {
@@ -52,20 +50,24 @@ func TestFreezeGateOnRecordedAudio(t *testing.T) {
 		}
 		g.Process(make([]float32, TranslatedRate))
 		counts[len(g.cutLog)]++
-		for i, c := range g.cutLog {
-			onset := g.runStarts[i]
+		for _, onset := range g.runStarts {
 			opening := false
 			for _, st := range starts {
 				if onset >= st && onset-st <= int64(TranslatedRate*freezeStartMS/1000) {
 					opening = true
 				}
 			}
-			whole := c.from < onset
-			if opening != whole {
-				t.Errorf("offset %d ms: freeze at %.2f s (opening=%v) was cut whole=%v",
-					off, float64(onset)/TranslatedRate, opening, whole)
+			if !opening {
+				t.Errorf("offset %d ms: cut at %.2f s, which is not a session's opening",
+					off, float64(onset)/TranslatedRate)
 			}
 		}
 	}
-	t.Logf("freezes found per alignment: %v", counts)
+	t.Logf("cuts per alignment: %v", counts)
+	if len(counts) != 1 {
+		t.Errorf("the number of openings found depends on the alignment: %v", counts)
+	}
+	if counts[0] > 0 {
+		t.Error("no opening freeze found in the recording at all")
+	}
 }

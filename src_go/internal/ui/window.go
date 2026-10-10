@@ -499,8 +499,8 @@ func (w *Window) restartTranslator() {
 		w.translator.Stop()
 		w.translator = nil
 	}
-	// The player outlives the translator here. Without this the old
-	// session's last 210 ms, held by the freeze gate, would play in front of
+	// The player outlives the translator here. Without this, audio the
+	// freeze gate holds from the old session's opening would play in front of
 	// the new session's first words — possibly in the other language.
 	w.resetSpeech()
 	tr, err := w.makeTranslator(w.capture.Ring, apiKey)
@@ -647,7 +647,6 @@ func (w *Window) startVoice() {
 		"target", w.settings.TargetLanguageCode)
 }
 
-// stopVoice detaches it, and hands the output path back to the model's audio.
 // translatorCallbacks is how the translator reaches the window. A method of
 // its own so the wiring — which callback hops to the UI goroutine and which
 // must not — can be tested without a session.
@@ -701,6 +700,7 @@ func (w *Window) resetSpeech() {
 	}
 }
 
+// stopVoice detaches it, and hands the output path back to the model's audio.
 func (w *Window) stopVoice() {
 	// Model audio from before the local voice took over is still held by the
 	// freeze gate; it must not play first when the model's voice comes back.

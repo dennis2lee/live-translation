@@ -2,60 +2,51 @@ package audio
 
 import "math"
 
-// freezeGate removes the model's frozen-and-fading buzz from the translated
-// speech before it is played.
+// freezeGate removes the buzz the far end's speech synthesis makes as a
+// session opens.
 //
 // # What it removes
 //
-// The far end's speech synthesis sometimes stops tracking and repeats one
-// frame while it fades: pitch, timbre and periodicity hold still — pitch to
-// within a hertz — while the level falls by a few decibels every 40 ms. A
-// user heard it and called it a "zzzing".
+// The synthesis sometimes repeats one frame while it fades: pitch, timbre and
+// periodicity held still — pitch to within a hertz — while the level falls a
+// few decibels every 40 ms. A user heard it as a "zzzing" and pointed to one.
 //
 // Measured on 12.6 minutes of the model's audio, twelve sessions: 15 such
-// stretches. 8 open a session, 0.27–0.84 s into its first audio; 6 are the
-// replaced session's last word, held; 1 is mid-session with the same
-// signature (282 Hz held to 0.05% for 160 ms).
+// stretches. 8 come 0.27–0.84 s into a session's first audio, mostly where
+// the opening syllable stops tracking. 6 are the replaced session's last word,
+// and 1 is mid-session.
 //
-// The test is the shape. It can fire on natural speech — a synthetic vowel
-// faded at a flat pitch is taken for a freeze — and relies on such fades
-// being rare, which is measured: about 25 minutes of macOS voices, monotone,
-// singing and Korean ones among them, produced one hit at ten alignments.
+// # Only at a session's opening
 //
-// # Two cuts
+// At an opening the freeze is removed whole, and that costs no word because
+// the speech carries on after it: on two transcriptions each, the gated
+// openings read the same as the raw ones. Everywhere else the frozen frame is
+// the end of a real word — in "question" it is nearly all of the last vowel
+// and nasal — and any cut there lost the word: removed whole, "quest-" and
+// "play" for "plan"; trimmed to its first 50 ms, still "quest-". Those are
+// left alone. They are short, too: 49–136 ms above -30 dBFS.
 //
-// At a session's opening there is no word in front of the freeze, and it is
-// removed whole: the cut reaches a hop before the first frozen window, after
-// following the freeze back over any frames that are frozen but not yet
-// fading, so it starts before the buzz does. On the recording, every opening
-// freeze went from 58–136 ms above -30 dBFS to none, and measured from an
-// independently found onset none of its energy was left.
-//
-// Anywhere else the frozen frame is the last sound of a word, held too long,
-// and removing it whole cut words short — "question" to "quest-", "plan" to
-// "play". There the first freezeKeepMS stay and the held tail goes: 49–136
-// ms of tone above -30 dBFS became 37–56 ms, and no word was lost on two
-// transcriptions of every event ("question" came back as "questions").
-//
-// Which cut applies is decided by where the session began, which the
-// translator reports (MarkSessionStart), not by listening for a silence.
-// Silence looked like a handover and was not: paragraph pauses run 1.0–2.3
-// s, three to five a minute, against 1.9–2.8 s at a handover.
+// So the gate works in episodes. The translator reports each session's first
+// audio (MarkSessionStart); for the next freezeStartMS the gate holds audio
+// back while it decides, then lets everything go and passes audio straight
+// through until the next session. The hold falls in the silence every
+// handover already carries, and the play queue's silence trimming takes the
+// extra back out: over six minutes of recorded arrivals the delay to the
+// listener went from 0.636 s to 0.660 s. Outside the eight cuts not one
+// sample of the 18 million was changed, and the eight openings transcribed
+// the same with and without them.
 //
 // # How
 //
 // 40 ms windows are measured every 10 ms. A freeze starts at a window when it
 // and the three windows 40, 80 and 120 ms after it share pitch (within 1%),
 // timbre (10%) and periodicity (0.05), each falling at least 2 dB below the
-// one before; it runs on while the next window 40 ms later still does. On a
-// 40 ms grid the cut began 0–70 ms into the freeze, at its loudest, and left
-// a median 64% of its energy playing.
-//
-// Deciding needs 160 ms past the start, and the opening cut reaches 60 ms
-// before it, so audio leaves here 210 ms after it arrives. End to end, over
-// six minutes of recorded arrivals, the delay to the listener went from
-// 0.64 s to 0.81 s. The gate holds that much, so a stream that pauses leaves
-// it waiting: Reset drops it when the stream is about to change.
+// one before; it runs on while the next window 40 ms later still does. A
+// confirmed freeze is followed back over windows that are already frozen but
+// not yet fading, and the cut starts one hop before that, so it starts
+// before the buzz does: measured from an onset found independently, by
+// period-to-period correlation, nothing of an opening freeze is left. On a
+// 40 ms grid the cut began 0–70 ms late and left a median 64%.
 //
 // Pitch is the autocorrelation peak; timbre is the RMS of the first
 // difference over the RMS of the signal, which follows the spectral centroid
@@ -66,9 +57,10 @@ type freezeGate struct {
 	fadeOut, fadeIn      int
 	back                 int // freezeBackMS in hops
 
-	// sessionStarts are the input indices where recent sessions' first audio
-	// began, as the translator reported them.
-	sessionStarts []int64
+	// active is true for an episode: from a session's first audio until no
+	// freeze can start any more. origin is that first audio's input index.
+	active bool
+	origin int64
 
 	buf   []float32 // unreleased samples
 	base  int64     // input index of buf[0]
@@ -127,27 +119,10 @@ const (
 	// that waited for the fade left 16–21% of them playing.
 	freezeBackMS = 40
 
-	// A freeze that begins within freezeStartMS of a session's first audio is
-	// that session's opening buzz and is removed whole. Anywhere else it is
-	// the last sound of a word held too long, and only what follows the first
-	// freezeKeepMS goes, faded over freezeTailFadeMS.
-	//
-	// Measured: removing session-end freezes whole cut the end off two words
-	// in six — "question" became "quest-", "plan" became "play" — because the
-	// held frame is the word's final phoneme. Keeping 30, 50 or 70 ms lost no
-	// word in any of them, on two transcriptions each; 50 is the margin. The
-	// eight session-opening freezes lost no word removed whole: they start
-	// 0.27–0.84 s into the new session's audio, with no word in front of
-	// them.
-	//
-	// The session boundary comes from the translator, not from the audio. A
-	// silence of 500 ms or more looked like a handover and was not: natural
-	// paragraph pauses run 1.0–2.3 s, three to five a minute, against
-	// 1.9–2.8 s at a handover, and four of six session-end freezes followed
-	// one and were removed whole — "plan" among them.
-	freezeStartMS    = 1200
-	freezeKeepMS     = 50
-	freezeTailFadeMS = 20
+	// freezeStartMS is how long after a session's first audio a freeze can
+	// start and still be removed: the eight measured openings began
+	// 0.27–0.84 s in.
+	freezeStartMS = 1200
 )
 
 func newFreezeGate(rate int) *freezeGate {
@@ -175,15 +150,24 @@ func (g *freezeGate) Muted() int64 { return g.muted }
 // back to the model — or the held tail of the old stream plays seconds later
 // in front of the new one.
 func (g *freezeGate) Reset() {
-	starts, muted, log := g.runStarts, g.muted, g.cutLog
+	starts, muted, log, total := g.runStarts, g.muted, g.cutLog, g.total
 	*g = *newFreezeGate(g.rate)
 	g.runStarts, g.muted, g.cutLog = starts, muted, log
+	g.total, g.base = total, total
 }
 
-// Process takes mono samples in and returns what may be played, 210 ms
-// behind. The returned slice is reused by the next call.
+// Process takes mono samples in and returns what may be played: straight
+// through between openings, up to 210 ms behind during one. The returned
+// slice is reused by the next call.
 func (g *freezeGate) Process(in []float32) []float32 {
 	g.out = g.out[:0]
+	if !g.active {
+		// Between openings there is nothing to decide and nothing to hold.
+		g.total += int64(len(in))
+		g.base = g.total
+		g.out = append(g.out, in...)
+		return g.out
+	}
 	g.buf = append(g.buf, in...)
 	g.total += int64(len(in))
 
@@ -206,6 +190,9 @@ func (g *freezeGate) Process(in []float32) []float32 {
 		if g.open || (len(g.cuts) > 0 && k*int64(g.hop) < g.cuts[len(g.cuts)-1].to) {
 			continue
 		}
+		if (k*int64(g.hop))-g.origin > int64(g.rate*freezeStartMS/1000) {
+			continue
+		}
 		if g.startsAt(k) {
 			// Follow it back over windows that are the same frame but not yet
 			// fading, then one hop further: the first fully frozen window
@@ -214,10 +201,6 @@ func (g *freezeGate) Process(in []float32) []float32 {
 			b := g.backTo(k)
 			onset := b * int64(g.hop)
 			c := cut{from: onset - int64(g.hop), to: (k+span)*int64(g.hop) + int64(g.win), fade: g.fadeOut}
-			if !g.opensSession(onset) {
-				tail := g.rate * freezeTailFadeMS / 1000
-				c.from, c.fade = onset+int64(g.rate*freezeKeepMS/1000+tail), tail
-			}
 			g.cuts = append(g.cuts, c)
 			g.open, g.runRef, g.runLast = true, g.feat(k), k+span
 			g.runStarts = append(g.runStarts, onset)
@@ -234,6 +217,9 @@ func (g *freezeGate) Process(in []float32) []float32 {
 	}
 	g.release(limit)
 	g.trim()
+	if g.done() {
+		g.finish()
+	}
 	return g.out
 }
 
@@ -276,24 +262,39 @@ func (g *freezeGate) same(ref, f frameFeat) bool {
 		f.level > freezeFloorDB
 }
 
-// MarkSessionStart records that the next sample received is a new session's
-// first audio.
+// MarkSessionStart opens an episode: the next sample is a session's first
+// audio. An episode still running is finished first.
 func (g *freezeGate) MarkSessionStart() {
-	g.sessionStarts = append(g.sessionStarts, g.total)
-	if len(g.sessionStarts) > 8 {
-		g.sessionStarts = g.sessionStarts[1:]
+	if g.active {
+		g.finish()
 	}
+	g.active = true
+	g.origin = g.total
+	g.base = g.total
+	h := (g.total + int64(g.hop) - 1) / int64(g.hop)
+	g.featBase, g.next = h, h
+	g.feats = g.feats[:0]
+	g.cuts = g.cuts[:0]
+	g.open = false
 }
 
-// opensSession reports whether onset lies within freezeStartMS of a
-// session's first audio.
-func (g *freezeGate) opensSession(onset int64) bool {
-	for _, st := range g.sessionStarts {
-		if onset >= st-int64(g.rate*freezeBackMS/1000) && onset-st <= int64(g.rate*freezeStartMS/1000) {
-			return true
-		}
+// done reports whether the episode can end: no freeze can start any more
+// and none is still running.
+func (g *freezeGate) done() bool {
+	return !g.open && g.next*int64(g.hop)-g.origin > int64(g.rate*freezeStartMS/1000)
+}
+
+// finish releases everything held, with every cut applied, and ends the
+// episode. A freeze still running ends where it has been measured to.
+func (g *freezeGate) finish() {
+	if g.open {
+		g.open = false
+		g.cutLog = append(g.cutLog, g.cuts[len(g.cuts)-1])
 	}
-	return false
+	g.release(g.total)
+	g.active = false
+	g.cuts = g.cuts[:0]
+	g.feats = g.feats[:0]
 }
 
 func (g *freezeGate) startsAt(k int64) bool {
