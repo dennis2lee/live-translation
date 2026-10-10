@@ -444,11 +444,13 @@ func (g *freezeGate) features(window []float32) frameFeat {
 	}
 	// One lag is more than 1% of the period above about 240 Hz, so a frozen
 	// high voice read as a moving one. A parabola through the peak and its
-	// neighbours places it between lags.
+	// neighbours places it between lags. Only at an interior maximum: at
+	// the edge of the search a higher neighbour outside it would throw the
+	// vertex far away (a 40 Hz tone read as -585 Hz).
 	lag := float64(bestLag)
 	if bestLag > 0 && bestLag+1 < len(x) {
 		a, c := acf(bestLag-1), acf(bestLag+1)
-		if d := a - 2*best + c; d < 0 {
+		if d := a - 2*best + c; d < 0 && a <= best && c <= best {
 			lag += 0.5 * (a - c) / d
 		}
 	}

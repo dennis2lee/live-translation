@@ -1029,3 +1029,51 @@ func TestEverySampleWrittenIsPlayed(t *testing.T) {
 		t.Errorf("%.0f of %d samples reached the ring (%.1f%%)", got, len(in), 100*r)
 	}
 }
+
+// The same through the model's path, which the gate sits on: a whole opening,
+// with enough silence after it for the episode to finish and release.
+func TestEverySampleOfTheModelsSpeechIsPlayed(t *testing.T) {
+	p, st := runningPlayer(t)
+	in := concat(natural(1.0), silence(1.5))
+	p.MarkSessionStart()
+	for i := 0; i < len(in); i += 10 {
+		p.WriteSpeech(toPCM(in[i:min(i+10, len(in))]))
+	}
+	got := float64(st.ring.Available()/2) / 2
+	if r := got / float64(len(in)); r < 0.97 || r > 1.0 {
+		t.Errorf("%.0f of %d samples reached the ring (%.1f%%)", got, len(in), 100*r)
+	}
+}
+
+// A session that ends within its own opening hands what the gate holds to the
+// next one. TestANewSessionMidOpeningLosesNothing pins that in the gate; this
+// pins that nothing between the player's entry point and the gate drops it.
+func TestASecondMarkMidOpeningLosesNothingInThePlayer(t *testing.T) {
+	p, st := runningPlayer(t)
+	first, second := natural(0.5), concat(natural(0.5), silence(1.5))
+	p.MarkSessionStart()
+	p.WriteSpeech(toPCM(first))
+	p.MarkSessionStart()
+	p.WriteSpeech(toPCM(second))
+	want := len(first) + len(second)
+	got := float64(st.ring.Available()/2) / 2
+	if r := got / float64(want); r < 0.97 || r > 1.0 {
+		t.Errorf("%.0f of %d samples reached the ring (%.1f%%)", got, want, 100*r)
+	}
+}
+
+// Interpolation moves the pitch by at most half a lag. At the edge of the
+// search the peak is not a maximum, and a parabola through it extrapolates:
+// a 40 Hz tone read as -585 Hz before the guard.
+func TestPitchStaysInsideTheSearch(t *testing.T) {
+	g := newFreezeGate(fr)
+	lo := float64(fr) / (float64(g.lagHi) + 0.5)
+	hi := float64(fr) / (float64(g.lagLo) - 0.5)
+	for hz := 30.0; hz <= 700; hz += 3.7 {
+		w := voiced(float64(freezeWindowMS)/1000, func(float64) float64 { return hz },
+			func(float64) float64 { return -6 })
+		if f := g.features(w).f0; !(f >= lo && f <= hi) {
+			t.Errorf("a %.1f Hz tone reads %.1f Hz, outside %.1f–%.1f", hz, f, lo, hi)
+		}
+	}
+}

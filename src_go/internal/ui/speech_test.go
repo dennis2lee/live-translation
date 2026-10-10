@@ -532,8 +532,9 @@ func TestASessionStartReachesThePlayer(t *testing.T) {
 	if marks != 1 {
 		t.Errorf("the player saw %d session starts, want 1", marks)
 	}
-	if speech, _ := player.speechCounts(); speech != 1 {
-		t.Errorf("the model's audio reached WriteSpeech %d times, want 1", speech)
+	if speech, resets := player.speechCounts(); speech != 1 || resets != 0 {
+		t.Errorf("WriteSpeech %d times, ResetSpeech %d times, want 1 and 0 — a session start "+
+			"must not drop what the last session's opening still holds", speech, resets)
 	}
 }
 
