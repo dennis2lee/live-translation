@@ -436,7 +436,7 @@ func (p *prefsDialog) outputTab() fyne.CanvasObject {
 	// the complete-phrases check: a bare-digit or bare-letter shortcut cannot
 	// be shown as a menu accelerator, so the only place a user can find out
 	// about it is the label.
-	muteHint := widget.NewLabel("Press m while translating to mute and unmute.")
+	muteHint := widget.NewLabel("Press m to mute the translation — captions and speech — and again to unmute.")
 	muteHint.Wrapping = fyne.TextWrapWord
 
 	p.toneStatus = widget.NewLabel("Not running.")

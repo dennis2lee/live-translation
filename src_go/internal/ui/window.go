@@ -111,12 +111,14 @@ type Window struct {
 	// it so a restart can be driven without opening a socket; nil means
 	// newTranslator.
 	buildTranslator func(ring *audio.Ring, apiKey string) (*translator.Translator, error)
-	// speechMuted is the m key. It is a runtime override on the gain and is
-	// deliberately *not* persisted: Settings.SpeakTranslation is the durable
-	// switch, and a second durable switch for the same thing gives a silent
-	// launch no way to explain itself. A mute that outlived a restart is
-	// indistinguishable from the feature being broken.
-	speechMuted bool
+	// muted is the m key: the whole translation is muted — no captions on
+	// screen, no speech, the dot half red — while the session goes on
+	// translating and the transcript goes on recording, so unmuting is
+	// instant and nothing is lost from the record. Independent of
+	// SpeakTranslation since 1.9.1: it mutes what the room sees, not only
+	// what it hears. Deliberately *not* persisted: a mute that outlived a
+	// restart is indistinguishable from the feature being broken.
+	muted bool
 
 	// musicGate filters the send path for the running session; nil when the
 	// feature is off or the model could not be had. yamnet is the loaded
@@ -248,7 +250,7 @@ func (w *Window) bindKeys() {
 		// ㅡ and ㄹ are what the m and f keys type under the Korean input
 		// source, where the rune is the jamo and never 'm' or 'f'.
 		case 'm', 'M', 'ㅡ':
-			w.ToggleSpeechMute()
+			w.ToggleMute()
 		case 'f', 'F', 'ㄹ':
 			// Full screen hides the menu on the platforms that draw it in the
 			// window, so this is the way back out — and the only reliable one,
@@ -442,11 +444,10 @@ func (w *Window) applySpeechChanges(old config.Settings) {
 
 	switch {
 	case !next.SpeakTranslation:
-		// Turning the feature off in Preferences is the durable decision, so
-		// the transient override has nothing left to override. Leaving it set
-		// would make the next Apply that turns speech back on produce silence.
-		w.speechMuted = false
-		w.view.SetSpeechMuted(false)
+		// The mute is not cleared: it mutes the captions too, and turning
+		// speech off says nothing about whether the room should see them.
+		// Turning speech back on starts the player at speechGain, which
+		// honours the mute.
 		w.stopPlayer()
 	case player == nil:
 		// Off→on, or a device that failed to open last time. Retrying on Apply
@@ -665,7 +666,13 @@ func (w *Window) translatorCallbacks() translator.Callbacks {
 	return translator.Callbacks{
 		// Every one of these arrives on a translator goroutine, so each
 		// hops to the UI goroutine before touching anything.
-		OnSource: func(text string) { fyne.Do(func() { w.view.SetSourceText(text) }) },
+		OnSource: func(text string) {
+			fyne.Do(func() {
+				if !w.muted {
+					w.view.SetSourceText(text)
+				}
+			})
+		},
 		OnTarget: func(text string) { fyne.Do(func() { w.onTargetText(text) }) },
 		OnState: func(s translator.State, detail string) {
 			fyne.Do(func() { w.onStateChanged(s, detail) })
@@ -787,40 +794,37 @@ func (w *Window) startPlayer() {
 // sets a gain goes through here, so muting cannot be undone by an unrelated
 // Apply and unmuting cannot resurrect a stale volume.
 func (w *Window) speechGain() float64 {
-	if w.speechMuted {
+	if w.muted {
 		return 0
 	}
 	return w.settings.SpeechVolume
 }
 
-// ToggleSpeechMute silences the spoken translation without closing the device.
+// ToggleMute mutes the whole translation, or unmutes it: the captions go
+// from the screen, the speech goes silent, and the left half of the dot turns
+// red. Whether speech is switched on does not matter — the key mutes what the
+// room sees as well as what it hears.
 //
-// Gain rather than Stop: reopening an output device takes long enough to clip
-// the first word, and mute is pressed when someone walks in — it has to be
-// instant in both directions. Captions are unaffected, which is the point.
-// speechOffNotice is what m says when there is no speech to mute.
-const speechOffNotice = "Speaking the translation is off — turn it on in Preferences→Output"
-
-func (w *Window) ToggleSpeechMute() {
-	if !w.settings.SpeakTranslation {
-		// Saying nothing here looks like the key is dead. It is not — there is
-		// simply nothing to mute.
-		// No spaces around the arrow — Fyne draws "→ " as an arrow and a
-		// replacement glyph (measured, in this very notice) — and the tab is
-		// Output, not the Audio it was before Preferences was split.
-		w.showNotice(speechOffNotice)
-		return
-	}
-	w.speechMuted = !w.speechMuted
+// The session keeps running and the transcript keeps recording: unmuting is
+// instant, and the record has no hole in it. The screen is cleared both ways —
+// going in, so nothing lingers; coming out, so what was said while muted does
+// not arrive all at once and stale.
+//
+// Speech is silenced by gain rather than by stopping the device: reopening
+// one takes long enough to clip the first word, and mute is pressed when
+// someone walks in — it has to be instant in both directions.
+func (w *Window) ToggleMute() {
+	w.muted = !w.muted
 	if player := w.player.Load(); player != nil {
 		player.SetVolume(w.speechGain())
 	}
-	w.view.SetSpeechMuted(w.speechMuted)
-	slog.Info("speech mute toggled", "muted", w.speechMuted)
-	if w.speechMuted {
-		w.showNotice("Speech muted — press m to unmute")
+	w.view.SetMuted(w.muted)
+	w.ClearCaptions()
+	slog.Info("translation mute toggled", "muted", w.muted)
+	if w.muted {
+		w.showNotice("Translation muted — press m to unmute")
 	} else {
-		w.showNotice("Speech unmuted")
+		w.showNotice("Translation unmuted")
 	}
 }
 
@@ -1116,8 +1120,14 @@ func (w *Window) checkInputLevel(peak float64) {
 
 // --- display --------------------------------------------------------------
 
+// pushLines puts the buffer's lines on screen — none while muted. The
+// buffer itself carries on, because it is also what feeds the transcript.
 func (w *Window) pushLines() {
-	w.view.SetLines(w.buffer.DisplayLines())
+	if w.muted {
+		w.view.SetLines(nil)
+	} else {
+		w.view.SetLines(w.buffer.DisplayLines())
+	}
 	w.refreshOverlay()
 }
 

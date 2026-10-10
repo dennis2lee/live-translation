@@ -113,9 +113,9 @@ type CaptionView struct {
 	hintAlpha float32
 	indicator Indicator
 	dotAlpha  float32
-	// speechMuted turns the left half of the dot red. Runtime-only, like the
-	// gain override it mirrors — see Window.ToggleSpeechMute.
-	speechMuted bool
+	// muted turns the left half of the dot red: the translation is muted,
+	// captions and speech both. Runtime-only — see Window.ToggleMute.
+	muted bool
 	// musicGated shows the ♪ beside the dot while the music gate is closed.
 	// Captions going quiet mid-session must be explainable from the screen —
 	// the same reasoning that put the error cause next to the red dot.
@@ -212,19 +212,19 @@ func (v *CaptionView) SetMusicGated(gated bool) {
 // MusicGated reports whether the ♪ is showing.
 func (v *CaptionView) MusicGated() bool { return v.musicGated }
 
-// SetSpeechMuted colours the left half of the status dot, so the m key has a
+// SetMuted colours the left half of the status dot, so the m key has a
 // standing consequence on screen. The notice it prints scrolls away; a muted
 // session that outlives the notice must still be readable from the box.
-func (v *CaptionView) SetSpeechMuted(muted bool) {
-	if v.speechMuted == muted {
+func (v *CaptionView) SetMuted(muted bool) {
+	if v.muted == muted {
 		return
 	}
-	v.speechMuted = muted
+	v.muted = muted
 	v.Refresh()
 }
 
-// SpeechMuted reports whether the dot is showing the mute half.
-func (v *CaptionView) SpeechMuted() bool { return v.speechMuted }
+// Muted reports whether the dot is showing the mute half.
+func (v *CaptionView) Muted() bool { return v.muted }
 
 // SetIndicator blinks while connecting and holds steady otherwise.
 func (v *CaptionView) SetIndicator(state Indicator) {
@@ -664,7 +664,7 @@ func (r *captionRenderer) dotPixel(x, y, w, h int) color.NRGBA {
 		return color.NRGBA{}
 	}
 	v := r.view
-	left, right := dotHalves(v.indicator, v.speechMuted)
+	left, right := dotHalves(v.indicator, v.muted)
 	fill := right
 	// Pixel centres, so the split lands between columns rather than through
 	// one, and an odd width does not favour a side.

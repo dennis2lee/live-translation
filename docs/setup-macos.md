@@ -136,7 +136,7 @@ You can also change the input later from **Settings → Audio Input**.
 | **2** | English → Korean |
 | **9** | Show only finished phrases (steadier, a beat later) |
 | **f** | Full screen on and off |
-| **m** | Mute the spoken translation |
+| **m** | Mute the translation — captions and speech — and again to unmute |
 | **⌘,** | Preferences |
 
 **Translate → Clear Captions** empties the caption box.
@@ -151,7 +151,7 @@ The keys work with the Korean input source too.
 | Green, blinking | Connecting |
 | Green | Translating |
 | Red | Error. The reason is printed in the caption box. |
-| Left half deep red | The spoken translation is muted (**m**) |
+| Left half deep red | The translation is muted (**m**) |
 
 ## Step 8 — Make it look right
 

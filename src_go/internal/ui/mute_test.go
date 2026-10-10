@@ -22,9 +22,9 @@ func TestMuteSilencesThePlayer(t *testing.T) {
 	w.startPlayer()
 	player := factory.last()
 
-	w.ToggleSpeechMute()
+	w.ToggleMute()
 
-	if !w.speechMuted {
+	if !w.muted {
 		t.Error("m did not mute")
 	}
 	if got := lastVolume(t, player); got != 0 {
@@ -39,7 +39,7 @@ func TestMuteDoesNotCloseTheDevice(t *testing.T) {
 	w.startPlayer()
 	player := factory.last()
 
-	w.ToggleSpeechMute()
+	w.ToggleMute()
 
 	if _, stops := player.counts(); stops != 0 {
 		t.Errorf("Stop called %d times on mute, want 0", stops)
@@ -58,10 +58,10 @@ func TestPressingMTwiceRestoresTheVolume(t *testing.T) {
 	w.startPlayer()
 	player := factory.last()
 
-	w.ToggleSpeechMute()
-	w.ToggleSpeechMute()
+	w.ToggleMute()
+	w.ToggleMute()
 
-	if w.speechMuted {
+	if w.muted {
 		t.Error("the second m did not unmute")
 	}
 	if got := lastVolume(t, player); got != 0.6 {
@@ -74,7 +74,7 @@ func TestPressingMTwiceRestoresTheVolume(t *testing.T) {
 func TestAPlayerStartedWhileMutedIsSilent(t *testing.T) {
 	w, factory := speakingWindow(t)
 	w.startPlayer()
-	w.ToggleSpeechMute()
+	w.ToggleMute()
 
 	w.stopPlayer()
 	w.startPlayer()
@@ -90,7 +90,7 @@ func TestMovingTheVolumeWhileMutedStaysSilent(t *testing.T) {
 	w, factory := speakingWindow(t)
 	w.startPlayer()
 	player := factory.last()
-	w.ToggleSpeechMute()
+	w.ToggleMute()
 
 	next := w.settings
 	next.SpeechVolume = 0.3
@@ -100,50 +100,9 @@ func TestMovingTheVolumeWhileMutedStaysSilent(t *testing.T) {
 		t.Errorf("gain = %v after moving the slider while muted, want 0", got)
 	}
 
-	w.ToggleSpeechMute()
+	w.ToggleMute()
 	if got := lastVolume(t, player); got != 0.3 {
 		t.Errorf("gain after unmute = %v, want the new volume 0.3", got)
-	}
-}
-
-// Preferences is the durable switch. Turning speech off there and on again must
-// speak, or the transient override outlives the thing it was overriding.
-func TestTurningSpeechOffClearsTheMute(t *testing.T) {
-	w, factory := speakingWindow(t)
-	w.startPlayer()
-	w.ToggleSpeechMute()
-
-	off := w.settings
-	off.SpeakTranslation = false
-	w.applySettings(off)
-
-	if w.speechMuted {
-		t.Fatal("mute survived turning speech off in Preferences")
-	}
-
-	on := w.settings
-	on.SpeakTranslation = true
-	w.applySettings(on)
-
-	if got := lastVolume(t, factory.last()); got == 0 {
-		t.Error("speech turned back on is still silent")
-	}
-}
-
-// With the feature off there is nothing to mute, and a key that does nothing
-// silently reads as a key that is broken.
-func TestMuteWithSpeechOffSaysSo(t *testing.T) {
-	w := newTestWindow(t)
-	factory := &speakerFactory{}
-	w.newSpeaker = factory.build
-
-	w.ToggleSpeechMute()
-
-	if w.speechMuted {
-		t.Error("m muted a feature that is switched off")
-	}
-	if w.notice == "" {
-		t.Error("m with speech off said nothing")
 	}
 }
 
@@ -152,7 +111,7 @@ func TestMuteWithSpeechOffSaysSo(t *testing.T) {
 func TestMuteWithNoPlayerRunning(t *testing.T) {
 	w, factory := speakingWindow(t)
 
-	w.ToggleSpeechMute()
+	w.ToggleMute()
 	w.startPlayer()
 
 	if got := lastVolume(t, factory.last()); got != 0 {
@@ -208,39 +167,16 @@ func TestMutingShowsOnTheDot(t *testing.T) {
 	w, _ := speakingWindow(t)
 	w.startPlayer()
 
-	if w.view.SpeechMuted() {
+	if w.view.Muted() {
 		t.Fatal("setup: the dot started muted")
 	}
-	w.ToggleSpeechMute()
-	if !w.view.SpeechMuted() {
+	w.ToggleMute()
+	if !w.view.Muted() {
 		t.Error("m muted the sound but not the dot")
 	}
-	w.ToggleSpeechMute()
-	if w.view.SpeechMuted() {
+	w.ToggleMute()
+	if w.view.Muted() {
 		t.Error("m unmuted the sound but left the dot red")
-	}
-}
-
-// Turning the feature off in Preferences clears the override on the gain. The
-// dot has to follow, or it would claim a mute that no longer exists — and no
-// key would clear it, because m refuses to act when speech is off.
-func TestTurningSpeechOffClearsTheMuteHalf(t *testing.T) {
-	w, _ := speakingWindow(t)
-	w.startPlayer()
-	w.ToggleSpeechMute()
-	if !w.view.SpeechMuted() {
-		t.Fatal("setup: the dot is not showing the mute")
-	}
-
-	old := w.settings
-	w.settings.SpeakTranslation = false
-	w.applySpeechChanges(old)
-
-	if w.speechMuted {
-		t.Error("the gain override survived speech being turned off")
-	}
-	if w.view.SpeechMuted() {
-		t.Error("the dot still claims a mute that no key can now clear")
 	}
 }
 
@@ -267,7 +203,7 @@ func TestTheDotIsDrawnAsASplitDisc(t *testing.T) {
 		t.Errorf("unmuted halves differ: %v vs %v", leftPix, rightPix)
 	}
 
-	v.speechMuted = true
+	v.muted = true
 	leftPix = r.dotPixel(n/4, n/2, n, n)
 	rightPix = r.dotPixel(3*n/4, n/2, n, n)
 	if leftPix == rightPix {
@@ -287,7 +223,7 @@ func TestTheDotIsDrawnAsASplitDisc(t *testing.T) {
 func TestThePulseDimsBothHalves(t *testing.T) {
 	v := NewCaptionView(config.Default())
 	v.indicator = IndicatorBusy
-	v.speechMuted = true
+	v.muted = true
 	v.dotAlpha = 0.5
 	r := &captionRenderer{view: v}
 
@@ -303,7 +239,7 @@ func TestThePulseDimsBothHalves(t *testing.T) {
 }
 
 // The key itself, not the method: every other test here calls
-// ToggleSpeechMute directly, so a binding that stopped reaching it would pass
+// ToggleMute directly, so a binding that stopped reaching it would pass
 // them all. m, M and ㅡ (what the m key types under the Korean input source)
 // must each mute the sound and split the dot, and press again to undo.
 func TestTheMKeyMutesAndSplitsTheDot(t *testing.T) {
@@ -315,28 +251,99 @@ func TestTheMKeyMutesAndSplitsTheDot(t *testing.T) {
 			t.Fatal("no key handler is bound")
 		}
 		typed(key)
-		if !w.speechMuted || !w.view.SpeechMuted() {
-			t.Errorf("%q: muted %v, dot split %v", key, w.speechMuted, w.view.SpeechMuted())
+		if !w.muted || !w.view.Muted() {
+			t.Errorf("%q: muted %v, dot split %v", key, w.muted, w.view.Muted())
 		}
 		typed(key)
-		if w.speechMuted || w.view.SpeechMuted() {
-			t.Errorf("%q pressed again: muted %v, dot split %v", key, w.speechMuted, w.view.SpeechMuted())
+		if w.muted || w.view.Muted() {
+			t.Errorf("%q pressed again: muted %v, dot split %v", key, w.muted, w.view.Muted())
 		}
 	}
 }
 
-// With speech off there is nothing to mute, and the notice says where to turn
-// it on: the Output tab, named as it is, with the arrow drawn whole.
-func TestTheSpeechOffNoticeNamesARealTab(t *testing.T) {
+// m mutes the translation whether or not speech is on: the room sees nothing
+// and the dot says so.
+func TestMuteWorksWithSpeechOff(t *testing.T) {
 	w := newTestWindow(t)
-	w.win.Canvas().OnTypedRune()('m')
-	if w.notice != speechOffNotice {
-		t.Fatalf("notice = %q", w.notice)
+	if w.settings.SpeakTranslation {
+		t.Fatal("setup: speech is on")
 	}
-	if !strings.Contains(w.notice, "Output") || strings.Contains(w.notice, " →") || strings.Contains(w.notice, "→ ") {
-		t.Errorf("notice = %q", w.notice)
+	w.ToggleMute()
+	if !w.muted || !w.view.Muted() {
+		t.Errorf("muted %v, dot %v", w.muted, w.view.Muted())
 	}
-	if w.view.SpeechMuted() {
-		t.Error("the dot claims a mute with speech off")
+	w.ToggleMute()
+	if w.muted || w.view.Muted() {
+		t.Errorf("unmuted: muted %v, dot %v", w.muted, w.view.Muted())
+	}
+}
+
+// While muted no caption reaches the screen, though the buffer — which also
+// feeds the transcript — goes on taking them. Unmuting shows what is said
+// from then on, not what piled up while muted.
+func TestMuteHidesTheCaptions(t *testing.T) {
+	w := newTestWindow(t)
+	w.onTargetText(" Good morning everyone.")
+	w.pushLines()
+	if len(w.view.lines) == 0 {
+		t.Fatal("setup: nothing on screen")
+	}
+	w.ToggleMute()
+	if len(w.view.lines) != 0 {
+		t.Error("captions stayed on screen when muted")
+	}
+	w.onTargetText(" Said while muted.")
+	w.pushLines()
+	if len(w.view.lines) != 0 {
+		t.Error("a caption reached the screen while muted")
+	}
+	if len(w.buffer.DisplayLines()) == 0 {
+		t.Error("the buffer stopped taking captions, so the transcript would have a hole")
+	}
+	w.ToggleMute()
+	if len(w.view.lines) != 0 {
+		t.Error("what was said while muted arrived all at once on unmuting")
+	}
+	w.onTargetText(" And now we continue.")
+	w.pushLines()
+	got := ""
+	for _, l := range w.view.lines {
+		got += l.Text
+	}
+	if !strings.Contains(got, "continue") || strings.Contains(got, "muted") {
+		t.Errorf("after unmuting the screen shows %q", got)
+	}
+}
+
+// The source line is captions too.
+func TestMuteHidesTheSourceText(t *testing.T) {
+	w := newTestWindow(t)
+	w.ToggleMute()
+	cb := w.translatorCallbacks()
+	cb.OnSource("안녕하세요")
+	if w.view.source != "" {
+		t.Errorf("source line %q while muted", w.view.source)
+	}
+}
+
+// Turning speech off does not lift the mute — it mutes the captions as well —
+// and turning speech back on while muted stays silent.
+func TestTurningSpeechOffKeepsTheMute(t *testing.T) {
+	w, factory := speakingWindow(t)
+	w.startPlayer()
+	w.ToggleMute()
+
+	off := w.settings
+	off.SpeakTranslation = false
+	w.applySettings(off)
+	if !w.muted || !w.view.Muted() {
+		t.Fatal("turning speech off lifted the translation mute")
+	}
+
+	on := w.settings
+	on.SpeakTranslation = true
+	w.applySettings(on)
+	if got := lastVolume(t, factory.last()); got != 0 {
+		t.Errorf("speech turned back on while muted plays at %v", got)
 	}
 }

@@ -49,7 +49,8 @@ projector, press **`0`**. The speaker does nothing different.
     <td width="33%" valign="top">
       <h3>🔊 Or listen to it</h3>
       The translation can be spoken aloud, in the model's voice or a voice
-      installed on the computer. Mute it any time with <code>m</code>.
+      installed on the computer. Press <code>m</code> to mute the
+      translation — captions and speech — any time.
     </td>
     <td width="33%" valign="top">
       <h3>♾️ Built for long sessions</h3>
@@ -139,14 +140,14 @@ own. Set a budget alert with whichever you use.
 | `2` | English → Korean |
 | `9` | Complete phrases only |
 | `f` | Full screen |
-| `m` | Mute the spoken translation |
+| `m` | Mute the translation — captions and speech |
 | `⌘R` / `Ctrl+R` | Start translating |
 | `⌘,` / `Ctrl+,` | Preferences |
 
 The keys work with the Korean keyboard layout too. A dot beside the caption
 box shows the connection: grey idle, green blinking connecting, green live,
 red error (with the reason printed). Half of it turns deep red while the
-speech is muted.
+translation is muted.
 
 </details>
 

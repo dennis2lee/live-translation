@@ -85,8 +85,8 @@ func TestEveryKeyDoesItsJob(t *testing.T) {
 			w, _ := speakingWindow(t)
 			w.startPlayer()
 			press(t, w, key)
-			if !w.speechMuted || !w.view.SpeechMuted() {
-				t.Errorf("muted %v, dot %v", w.speechMuted, w.view.SpeechMuted())
+			if !w.muted || !w.view.Muted() {
+				t.Errorf("muted %v, dot %v", w.muted, w.view.Muted())
 			}
 		})
 	}
@@ -153,7 +153,7 @@ func TestKeysStillWorkAfterPreferences(t *testing.T) {
 		t.Fatalf("%T still has focus after Preferences closed — every key goes to it", f)
 	}
 	press(t, w, 'm')
-	if !w.view.SpeechMuted() {
+	if !w.view.Muted() {
 		t.Error("m did nothing after Preferences")
 	}
 }
