@@ -88,6 +88,8 @@ var fatalErrors = []struct{ marker, message string }{
 	// and would otherwise be reported as Gemini's free-tier problem.
 	{"insufficient_quota", "OpenAI credit exhausted — add credit at platform.openai.com"},
 	{"invalid_api_key", "API key is not valid"},
+	// OpenAI's own close reason for a bad key, which carries no code.
+	{"incorrect api key provided", "API key is not valid"},
 	{"401 unauthorized", "API key is not valid"},
 	{"model_not_found", "Model not found — check the model name"},
 	{"credits are depleted", "Billing credits exhausted — set up billing in AI Studio"},

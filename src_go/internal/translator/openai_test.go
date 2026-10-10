@@ -176,7 +176,10 @@ func TestTheOpenAISessionAsksForItsLanguage(t *testing.T) {
 func TestOpenAIAudioGoesUpAt24kHz(t *testing.T) {
 	f := newFakeOpenAI(t)
 	s := openFake(t, SessionConfig{})
-	in := tone(audio.TargetRate, audio.TargetRate, 440)
+	// Literal rates, not the constants: 24 kHz is what the endpoint takes,
+	// and a test built from openAISendRate would only check it against
+	// itself.
+	in := tone(16000, 16000, 440)
 	for i := 0; i < len(in); i += 3200 {
 		if err := s.SendAudio(in[i:min(i+3200, len(in))]); err != nil {
 			t.Fatal(err)
@@ -187,15 +190,15 @@ func TestOpenAIAudioGoesUpAt24kHz(t *testing.T) {
 	waitFor(t, "the audio", func() bool {
 		f.mu.Lock()
 		defer f.mu.Unlock()
-		return len(f.audio) >= 2*openAISendRate*9/10
+		return len(f.audio) >= 2*24000*9/10
 	})
 	f.mu.Lock()
 	got := append([]byte(nil), f.audio...)
 	f.mu.Unlock()
-	if n := len(got) / 2; n > openAISendRate {
-		t.Errorf("%d samples for one second, want at most %d", n, openAISendRate)
+	if n := len(got) / 2; n > 24000 {
+		t.Errorf("%d samples for one second, want at most 24000", n)
 	}
-	if hz := zeroCrossingHz(got, openAISendRate); math.Abs(hz-440) > 5 {
+	if hz := zeroCrossingHz(got, 24000); math.Abs(hz-440) > 5 {
 		t.Errorf("the tone arrived at %.1f Hz, want 440", hz)
 	}
 }
@@ -220,23 +223,26 @@ func zeroCrossingHz(pcm []byte, rate int) float64 {
 func TestOpenAIAudioComesBackAt24kHz(t *testing.T) {
 	f := newFakeOpenAI(t)
 	s := openFake(t, SessionConfig{})
-	in := tone(openAIReceiveRate, openAIReceiveRate, 300) // one second
+	// 48 kHz, literally: measured 2026-10-10 (19 200-byte deltas, 146 over
+	// 31 s). OpenAI's documentation says 24 kHz, so the constant is the one
+	// most likely to be "corrected" — which would play an octave low.
+	in := tone(48000, 48000, 300) // one second
 	for i := 0; i < len(in); i += 19200 {
 		f.send(map[string]any{"type": "session.output_audio.delta",
 			"delta": base64.StdEncoding.EncodeToString(in[i:min(i+19200, len(in))])})
 	}
 	var got []byte
-	for len(got) < 2*audio.TranslatedRate*9/10 {
+	for len(got) < 2*24000*9/10 {
 		msg, err := s.Receive()
 		if err != nil {
 			t.Fatal(err)
 		}
 		got = append(got, msg.Audio...)
 	}
-	if n := len(got) / 2; n > audio.TranslatedRate {
-		t.Errorf("%d samples for one second, want at most %d", n, audio.TranslatedRate)
+	if n := len(got) / 2; n > 24000 {
+		t.Errorf("%d samples for one second, want at most 24000", n)
 	}
-	if hz := zeroCrossingHz(got, audio.TranslatedRate); math.Abs(hz-300) > 5 {
+	if hz := zeroCrossingHz(got, 24000); math.Abs(hz-300) > 5 {
 		t.Errorf("the tone came back at %.1f Hz, want 300", hz)
 	}
 }
@@ -476,5 +482,60 @@ func TestTheOpenAIKeyTestUsesABearerHeader(t *testing.T) {
 	}
 	if auth != "Bearer sk-test" || goog != "" {
 		t.Errorf("Authorization %q, x-goog-api-key %q", auth, goog)
+	}
+}
+
+// A server that stops reading must not hold Close: the supervisor closes
+// sessions from its own goroutine, and a Close stuck behind a stalled write
+// stalls the reconnect with it.
+func TestCloseDoesNotWaitForAStalledWrite(t *testing.T) {
+	up := websocket.Upgrader{}
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		c, err := up.Upgrade(w, r, nil)
+		if err != nil {
+			return
+		}
+		defer c.Close()
+		<-r.Context().Done() // upgrade, then never read
+	}))
+	defer srv.Close()
+	old := OpenAIEndpoint
+	OpenAIEndpoint = "ws" + strings.TrimPrefix(srv.URL, "http")
+	defer func() { OpenAIEndpoint = old }()
+
+	s := openFake(t, SessionConfig{})
+	chunk := tone(16000, 16000, 440) // a second per send fills buffers fast
+	sending := make(chan struct{})
+	go func() {
+		close(sending)
+		for s.SendAudio(chunk) == nil {
+		}
+	}()
+	<-sending
+	time.Sleep(300 * time.Millisecond) // long enough for the writer to stall
+	done := make(chan struct{})
+	go func() { _ = s.Close(); close(done) }()
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("Close waited behind a stalled write")
+	}
+}
+
+// The reader ends even with its channel full: Close drains it. Without the
+// drain, a reader blocked handing over its 65th message never sees the
+// closed socket.
+func TestCloseFreesAReaderWithAFullChannel(t *testing.T) {
+	f := newFakeOpenAI(t)
+	s := openFake(t, SessionConfig{}).(*openAISession)
+	for range 100 {
+		f.send(map[string]any{"type": "session.output_transcript.delta", "delta": " x"})
+	}
+	time.Sleep(50 * time.Millisecond) // the reader fills the channel and blocks
+	_ = s.Close()
+	select {
+	case <-s.readerDone:
+	case <-time.After(2 * time.Second):
+		t.Fatal("the reader never ended")
 	}
 }

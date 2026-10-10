@@ -631,8 +631,8 @@ func (p *prefsDialog) networkTab() fyne.CanvasObject {
 	// Wrapping, like the two labels above. Without it this one sentence set the
 	// minimum width of the whole dialog to 720 px.
 	intro := widget.NewLabel(fmt.Sprintf(
-		"A session needs about %.0f kbit/s upstream and a steady round trip to the provider's server.",
-		netcheck.AudioKbps))
+		"A session needs about %.0f kbit/s upstream with Gemini, %.0f with OpenAI, and a steady round trip to the provider's server.",
+		netcheck.AudioKbps, netcheck.OpenAIAudioKbps))
 	intro.Wrapping = fyne.TextWrapWord
 
 	return container.NewVBox(
@@ -1154,7 +1154,7 @@ func (p *prefsDialog) runNetworkTest() {
 	provider := p.selectedProvider()
 
 	go func() {
-		report := netcheck.RunFor(netcheck.HostFor(string(provider)))
+		report := netcheck.RunFor(string(provider))
 		fyne.Do(func() {
 			p.netBusy = false
 			p.runTest.Enable()

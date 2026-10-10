@@ -38,6 +38,8 @@ type warmRun struct {
 	ring     *audio.Ring
 	extra    []*fakeSession
 	extraIdx atomic.Int32
+	// openDelay holds the replacement's open, in nanoseconds.
+	openDelay atomic.Int64
 }
 
 // startWarm runs a translator with warm handover on, up to the first
@@ -64,6 +66,7 @@ func startWarmWith(t *testing.T, configure func(*Options), extra ...*fakeSession
 		case 0:
 			return run.first, nil
 		case 1:
+			time.Sleep(time.Duration(run.openDelay.Load()))
 			return run.second, nil
 		}
 		i := int(run.extraIdx.Add(1)) - 1
@@ -435,6 +438,9 @@ func TestTheSwitchWantsTheSamePauseInBoth(t *testing.T) {
 		said  = " The average delay was 3.3 seconds. The maximum was 5.2 seconds."
 		same  = " average delay of 3.3 seconds. And the maximum was 5.2 seconds."
 		ahead = " The maximum was 5.2 seconds. This figure is a bit higher than expected."
+		// The red team's case: the replacement a numeric sentence ahead.
+		saidFirst = " The average delay was 3.3 seconds."
+		aheadNum  = " The average delay was 3.3 seconds. The maximum was 5.2 seconds."
 	)
 	long, short := 250*time.Millisecond, 150*time.Millisecond
 	for _, c := range []struct {
@@ -444,6 +450,9 @@ func TestTheSwitchWantsTheSamePauseInBoth(t *testing.T) {
 	}{
 		{"the same sentence, both quiet", session(long, said), session(long, same), true},
 		{"the replacement a sentence ahead", session(long, said), session(long, ahead), false},
+		{"the replacement a numeric sentence ahead", session(long, saidFirst), session(long, aheadNum), false},
+		{"the same shape, different numbers", session(long, " Sales rose 5% in the first quarter."),
+			session(long, " Sales rose 7% in the second quarter."), false},
 		{"old mid-sentence", session(long, said+" This figure"), session(long, same), false},
 		{"new mid-sentence", session(long, said), session(long, same+" This"), false},
 		{"old not quiet long enough", session(short, said), session(long, same), false},
@@ -468,6 +477,13 @@ func TestLastSentenceAndSimilarity(t *testing.T) {
 		t.Errorf("lastSentence = %q", got)
 	}
 	if got := lastSentence("No terminator at all"); got != "No terminator at all" {
+		t.Errorf("lastSentence = %q", got)
+	}
+	// A decimal point is not a sentence end.
+	if got := lastSentence(" One. The average delay was 3.3 seconds."); got != "The average delay was 3.3 seconds" {
+		t.Errorf("lastSentence = %q", got)
+	}
+	if got := lastSentence(" Costs were 2.5 billion. Revenue was 1.5."); got != "Revenue was 1.5" {
 		t.Errorf("lastSentence = %q", got)
 	}
 	// Measured pairs from spike o3_handover: one sentence translated by two
@@ -742,5 +758,43 @@ func TestAClosedReplacementIsNotClaimed(t *testing.T) {
 	alive := newSessionHolder()
 	if got := tr.claim(alive, true, time.Second); got != alive || tr.Stats().QuietHandovers != 1 {
 		t.Error("a live replacement was not claimed and counted")
+	}
+}
+
+// Warm means speaking for HandoverWarm since the first blob — not since the
+// latest. Measured from the latest, a replacement that talks without pause
+// is never warm until it stops, and then only HandoverWarm later.
+func TestWarmthCountsFromTheFirstBlob(t *testing.T) {
+	r := startWarm(t, false)
+	w := HandoverWarm
+	HandoverWarm = 150 * time.Millisecond
+	t.Cleanup(func() { HandoverWarm = w })
+	r.warn(10 * time.Second)
+	waitFor(t, "the replacement to open", func() bool { return r.opener.attempts() == 2 })
+	stop := keepTalking(r.second)
+	time.Sleep(250 * time.Millisecond)
+	stop() // ends with " and that is all."
+	stopped := time.Now()
+	r.first.push(Message{TargetText: " and that is all."})
+	waitFor(t, "the switch", func() bool { return r.reconnects() == 1 })
+	if d := time.Since(stopped); d > 120*time.Millisecond {
+		t.Errorf("switched %v after the replacement stopped talking; warm since its first blob, it was due within the %v pause",
+			d, HandoverQuiet)
+	}
+}
+
+// The wait's deadline is set by the server's grace, which runs from the
+// warning — so time spent opening the replacement comes out of it, and the
+// switch is not pushed back by a slow connect.
+func TestASlowOpenComesOutOfTheBudget(t *testing.T) {
+	r := startWarm(t, false)
+	stop := keepTalking(r.first) // never a pause: the deadline decides
+	defer stop()
+	r.openDelay.Store(int64(300 * time.Millisecond))
+	warned := time.Now()
+	r.warn(HandoverReserve + 350*time.Millisecond)
+	waitFor(t, "the forced switch", func() bool { return r.reconnects() == 1 })
+	if d := time.Since(warned); d > 520*time.Millisecond {
+		t.Errorf("switched %v after the warning; the grace allowed %v", d, 350*time.Millisecond)
 	}
 }

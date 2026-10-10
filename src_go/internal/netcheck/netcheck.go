@@ -58,8 +58,13 @@ const (
 	// long the whole check can take when the network is dead.
 	LatencyTimeout = 3 * time.Second
 
-	// AudioKbps is 16000 samples/s × 2 bytes × 8 bits, one way.
+	// AudioKbps is 16000 samples/s × 2 bytes × 8 bits, one way — Gemini's.
 	AudioKbps = 256.0
+
+	// OpenAIAudioKbps is what an OpenAI session sends: 24000 samples/s × 2
+	// bytes × 8 bits is 384, and the audio goes as base64 inside JSON, a
+	// third more again.
+	OpenAIAudioKbps = 512.0
 
 	// UploadComfortableKbps is the headroom over the bare audio rate. Below
 	// this, a session works until anything else on the network wants bandwidth.
@@ -158,6 +163,17 @@ type Report struct {
 	Latency  Latency
 	Upload   Throughput
 	Download Throughput
+	// NeedKbps is the upload the chosen provider's audio takes; zero means
+	// Gemini's AudioKbps.
+	NeedKbps float64
+}
+
+// need is the upload this report judges against.
+func (r Report) need() float64 {
+	if r.NeedKbps > 0 {
+		return r.NeedKbps
+	}
+	return AudioKbps
 }
 
 // Verdict is one line saying whether this connection can carry a session.
@@ -171,16 +187,16 @@ func (r Report) Verdict() string {
 		// Latency worked, so the network is up; only the speed test failed.
 		return fmt.Sprintf("Latency is %.0f ms, but the speed test could not run — %s",
 			r.Latency.MedianMS(), orDefault(r.Upload.Err, "no data"))
-	case r.Upload.Kbps() < AudioKbps:
+	case r.Upload.Kbps() < r.need():
 		return fmt.Sprintf("Too slow — %.0f kbit/s up cannot carry the %.0f kbit/s of audio a session needs",
-			r.Upload.Kbps(), AudioKbps)
+			r.Upload.Kbps(), r.need())
 	case r.Latency.MedianMS() > LatencyPoorMS:
 		return fmt.Sprintf("Usable, but %.0f ms to the API will leave the captions noticeably behind the speaker",
 			r.Latency.MedianMS())
 	case r.Latency.JitterMS() > JitterPoorMS:
 		return fmt.Sprintf("Unsteady — latency swings by %.0f ms, so expect captions to stall and then catch up",
 			r.Latency.JitterMS())
-	case r.Upload.Kbps() < UploadComfortableKbps:
+	case r.Upload.Kbps() < r.need()*UploadComfortableKbps/AudioKbps:
 		return fmt.Sprintf("Enough for one session (%.0f kbit/s up), but with little to spare for anything else on this network",
 			r.Upload.Kbps())
 	default:
@@ -331,6 +347,15 @@ func MeasureUpload(url string, nbytes int, timeout time.Duration) Throughput {
 	return flow
 }
 
+// KbpsFor is the upload a provider's sessions take: "openai", or anything
+// else for Gemini.
+func KbpsFor(provider string) float64 {
+	if provider == "openai" {
+		return OpenAIAudioKbps
+	}
+	return AudioKbps
+}
+
 // HostFor is the server a provider's sessions connect to: "openai", or
 // anything else for Gemini.
 func HostFor(provider string) string {
@@ -340,14 +365,18 @@ func HostFor(provider string) string {
 	return LiveAPIHost
 }
 
-// Run runs the whole check against Gemini. Blocking — call it off the UI
+// Run runs the whole check for Gemini. Blocking — call it off the UI
 // goroutine.
-func Run() Report { return RunFor(LiveAPIHost) }
+func Run() Report { return RunFor("gemini") }
 
-// RunFor runs the whole check, measuring the round trip to host — the server
-// the chosen provider's sessions connect to.
-func RunFor(host string) Report {
-	report := Report{Latency: MeasureLatency(host, LiveAPIPort, LatencySamples, LatencyTimeout)}
+// RunFor runs the whole check for a provider: the round trip to the server
+// its sessions connect to, and the upload judged against what its audio
+// takes.
+func RunFor(provider string) Report {
+	report := Report{
+		Latency:  MeasureLatency(HostFor(provider), LiveAPIPort, LatencySamples, LatencyTimeout),
+		NeedKbps: KbpsFor(provider),
+	}
 	report.Upload = MeasureUpload("", UploadBytes, Timeout)
 	report.Download = MeasureDownload("", DownloadBytes, Timeout)
 	slog.Info("network check", "verdict", report.Verdict())

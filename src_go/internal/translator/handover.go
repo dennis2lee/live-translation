@@ -280,7 +280,23 @@ func pauseShared(old, next *sessionHolder) bool {
 		!old.sentenceEnded.Load() || !next.sentenceEnded.Load() {
 		return false
 	}
-	return similarity(lastSentence(old.recentText()), lastSentence(next.recentText())) >= HandoverMatch
+	a, b := lastSentence(old.recentText()), lastSentence(next.recentText())
+	return digits(a) == digits(b) && similarity(a, b) >= HandoverMatch
+}
+
+// digits is every digit in s, in order. Two sentences built the same way —
+// "Sales rose 5% in the first quarter", "… 7% in the second" — score well
+// above HandoverMatch on their shared words, and the numbers are what tell
+// them apart. A translation keeps a number as a number, so two sessions
+// translating one sentence agree on its digits.
+func digits(s string) string {
+	var b strings.Builder
+	for _, r := range s {
+		if unicode.IsDigit(r) {
+			b.WriteRune(r)
+		}
+	}
+	return b.String()
 }
 
 // recentTextBytes is how much of a session's captions noteText keeps: a few
@@ -309,14 +325,33 @@ func (h *sessionHolder) recentText() string {
 
 // lastSentence is the final complete sentence of text, without the text
 // before it.
+//
+// A full stop between two digits is a decimal point, not a sentence end:
+// cutting " The average delay was 3.3 seconds." at it left "3 seconds", and
+// two different numeric sentences shrank to tails that matched (the red
+// team's second round).
 func lastSentence(text string) string {
 	t := strings.TrimRight(text, " \t\n\"'”’)")
 	t = strings.TrimRightFunc(t, isTerminator)
-	if i := strings.LastIndexFunc(t, isTerminator); i >= 0 {
-		_, size := utf8.DecodeRuneInString(t[i:])
-		t = t[i+size:]
+	for i := len(t); i > 0; {
+		r, size := utf8.DecodeLastRuneInString(t[:i])
+		i -= size
+		if isTerminator(r) && !decimalPoint(t, i, size) {
+			return strings.TrimSpace(t[i+size:])
+		}
 	}
 	return strings.TrimSpace(t)
+}
+
+// decimalPoint reports whether the terminator at t[i:i+size] is a full stop
+// with a digit on each side.
+func decimalPoint(t string, i, size int) bool {
+	if t[i] != '.' || i == 0 || i+size >= len(t) {
+		return false
+	}
+	before, _ := utf8.DecodeLastRuneInString(t[:i])
+	after, _ := utf8.DecodeRuneInString(t[i+size:])
+	return unicode.IsDigit(before) && unicode.IsDigit(after)
 }
 
 func isTerminator(r rune) bool {

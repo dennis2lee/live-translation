@@ -83,6 +83,8 @@ type openAISession struct {
 	timer   *time.Timer
 	closeMu sync.Once
 	done    chan struct{}
+	// readerDone is closed when readLoop has ended.
+	readerDone chan struct{}
 }
 
 type openAIResult struct {
@@ -129,12 +131,13 @@ func openOpenAI(ctx context.Context, apiKey string, cfg SessionConfig) (*openAIS
 		return nil, err
 	}
 	s := &openAISession{
-		conn:      conn,
-		resampler: rs,
-		down:      down,
-		msgs:      make(chan openAIResult, 64),
-		goAway:    make(chan struct{}),
-		done:      make(chan struct{}),
+		conn:       conn,
+		resampler:  rs,
+		down:       down,
+		msgs:       make(chan openAIResult, 64),
+		goAway:     make(chan struct{}),
+		done:       make(chan struct{}),
+		readerDone: make(chan struct{}),
 	}
 	// The reader starts first, so a failed write below still leaves Close a
 	// reader to end: its drain waits for msgs to close, and the reader is
@@ -187,9 +190,15 @@ func openAIConfig(cfg SessionConfig) map[string]any {
 	}
 }
 
+// openAIWriteTimeout bounds one write. A server that stops reading would
+// otherwise hold the write lock for ever — and with it SendAudio and the
+// lock Close needs.
+var openAIWriteTimeout = 10 * time.Second
+
 func (s *openAISession) write(v any) error {
 	s.wmu.Lock()
 	defer s.wmu.Unlock()
+	_ = s.conn.SetWriteDeadline(time.Now().Add(openAIWriteTimeout))
 	return s.conn.WriteJSON(v)
 }
 
@@ -243,6 +252,7 @@ func (s *openAISession) Receive() (Message, error) {
 // its text is what names the cause, so it rides along with the read error
 // for FatalReason to find.
 func (s *openAISession) readLoop() {
+	defer close(s.readerDone)
 	defer close(s.msgs)
 	defer s.down.Close()
 	var lastErr error
@@ -310,9 +320,15 @@ func (s *openAISession) Close() error {
 		if s.timer != nil {
 			s.timer.Stop()
 		}
-		s.wmu.Lock()
+		// The close frame and the socket first, and without the write lock:
+		// gorilla allows both alongside a write, and a write stalled on a
+		// server that stopped reading held that lock — Close waited behind
+		// it (the red team's second round). Closing the socket is what
+		// unblocks the stalled write.
 		_ = s.conn.WriteControl(websocket.CloseMessage,
 			websocket.FormatCloseMessage(websocket.CloseNormalClosure, ""), time.Now().Add(time.Second))
+		err = s.conn.Close()
+		s.wmu.Lock()
 		// Under the write lock, never outside it. SendAudio runs the
 		// resampler holding this lock, and on macOS that is libsoxr: closing
 		// it while a send was converting freed the handle under the C call,
@@ -322,7 +338,6 @@ func (s *openAISession) Close() error {
 		// is reachable in ordinary use.
 		s.resampler.Close()
 		s.wmu.Unlock()
-		err = s.conn.Close()
 		// Drain, so a reader blocked on a full channel can see the closed
 		// socket and leave.
 		go func() {
