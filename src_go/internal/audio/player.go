@@ -43,6 +43,38 @@ const (
 
 	// PlayCallbackMS is the device callback period asked for.
 	PlayCallbackMS = 20
+
+	// PlayTrimAboveMS is the queue length above which silence is skipped
+	// rather than played. See playRing.skipSilentHead for why the queue grows
+	// at all.
+	//
+	// Measured by replaying a recorded six-minute run — the real audio at its
+	// real arrival times — through onPlayback (replay_test.go):
+	//
+	//	trim off   16 cuts, 1.81 s of speech lost   queue avg 1.42 s
+	//	 400 ms     0 cuts                          queue avg 0.29 s
+	//	 800 ms     0 cuts, 3.0 s of pause skipped  queue avg 0.63 s, max 1.16
+	//	1200 ms     0 cuts                          queue avg 0.93 s
+	//
+	// Every value removes the cuts; the choice is between latency and
+	// cushion. The queue is also what covers the network pausing — gaps of
+	// 0.87 s and 1.76 s were recorded in another run — and a gap the queue
+	// cannot cover is silence, which loses nothing, where a cut loses words.
+	// 800 rides out gaps up to 0.8 s and leaves 0.84 s of room under
+	// PlayRingMS for a new session's opening burst (about 1 s in 0.4 s).
+	PlayTrimAboveMS = 800
+
+	// PlaySilenceDBFS is the loudest a 20 ms chunk may peak and still count as
+	// silence that can be skipped.
+	//
+	// The model's audio has no clean gap between pause and speech: 17% of
+	// chunks are exact digital zero, most speech peaks between -20 and 0
+	// dBFS, and word tails and breaths fill everything in between. -60 dBFS
+	// is deliberately deep in the quiet end — 21% of chunks fall under it,
+	// almost all of them pause, while a soft consonant at -50 is left alone.
+	// Skipping a pause is free; skipping the end of a word is the defect this
+	// exists to remove.
+	PlaySilenceDBFS = -60.0
 )
 
 // Player speaks the translated audio the model sends back.
@@ -71,6 +103,11 @@ type playState struct {
 	ring       *playRing
 	prebuffer  int
 	blockBytes int
+	// trimAbove is PlayTrimAboveMS in bytes at the device format; zero turns
+	// silence trimming off.
+	trimAbove int
+	// silencePeak is PlaySilenceDBFS as a 16-bit sample, before gain.
+	silencePeak float64
 }
 
 type Player struct {
@@ -168,9 +205,11 @@ func (p *Player) Start() (OutputDevice, error) {
 
 	frameBytes := BytesPerSample * p.devChan
 	state := &playState{
-		ring:       newPlayRing(max(frameBytes, p.devRate*frameBytes*PlayRingMS/1000)),
-		prebuffer:  p.devRate * frameBytes * PlayPrebufferMS / 1000,
-		blockBytes: frameBytes,
+		ring:        newPlayRing(max(frameBytes, p.devRate*frameBytes*PlayRingMS/1000)),
+		prebuffer:   p.devRate * frameBytes * PlayPrebufferMS / 1000,
+		blockBytes:  frameBytes,
+		trimAbove:   p.devRate * frameBytes * PlayTrimAboveMS / 1000,
+		silencePeak: 32768 * math.Pow(10, PlaySilenceDBFS/20),
 	}
 	p.primed.Store(false)
 
@@ -253,7 +292,7 @@ func (p *Player) Stop() {
 		starved, starvedBytes, dropped := state.ring.Stats()
 		slog.Info("audio playback stopped",
 			"starved_callbacks", starved, "silence_ms", p.msOf(starvedBytes),
-			"dropped_ms", p.msOf(dropped))
+			"dropped_ms", p.msOf(dropped), "trimmed_ms", p.msOf(state.ring.Trimmed()))
 	}
 }
 
@@ -351,6 +390,16 @@ func (p *Player) onPlayback(out, _ []byte, frames uint32) {
 			return
 		}
 		p.primed.Store(true)
+	}
+
+	// Keep the queue short by skipping silence, never speech. The threshold
+	// follows the volume, because Write applies the gain before the ring: at
+	// a low volume the same pause sits lower, and at zero — muted — only
+	// exact silence qualifies, which is what muted audio is.
+	if state.trimAbove > 0 {
+		gain := math.Float64frombits(p.gain.Load())
+		state.ring.skipSilentHead(len(block), state.trimAbove,
+			int32(state.silencePeak*gain))
 	}
 
 	if n := state.ring.Read(block); n < len(block) {

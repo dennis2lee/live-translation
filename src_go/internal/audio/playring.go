@@ -39,6 +39,8 @@ type playRing struct {
 	// one callback, and slog has no business on this thread anyway.
 	starved      int64
 	starvedBytes int64
+	// trimmed is silence skipped to keep the queue short. See skipSilentHead.
+	trimmed int64
 }
 
 // newPlayRing builds a ring of the given size in bytes.
@@ -147,4 +149,53 @@ func (r *playRing) Stats() (starved, starvedBytes, dropped int64) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	return r.starved, r.starvedBytes, r.dropped
+}
+
+// Trimmed is how much silence skipSilentHead has discarded, in bytes.
+func (r *playRing) Trimmed() int64 {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.trimmed
+}
+
+// skipSilentHead discards the oldest queued chunk if it is silence and the
+// queue is longer than keep bytes. It reports how many bytes it skipped.
+//
+// This is what keeps the queue from ever reaching the cap. The model sends
+// about 1% more audio than wall-clock time (378 s in 374 s, measured over six
+// minutes of continuous speech), so a player running at exactly real time
+// falls slowly behind; and a new session's first audio arrives in a burst,
+// about a second of it in 0.4 s. Once the slow drift has filled the ring, the
+// burst overflows it, and overflow discards the *oldest* audio — the last
+// words of the session being replaced, cut out in three or four jumps within
+// half a second. Measured: 16 cuts, 1.81 s of speech, in six minutes.
+//
+// Skipping silence instead loses nothing anyone hears. Only the head is ever
+// looked at, so no speech is reordered or skipped past, and it stops at the
+// first chunk with anything in it. One chunk per call: the caller plays one
+// chunk for each one it may skip, so a pause plays at no more than double
+// speed rather than vanishing.
+//
+// samplePeak is compared against every 16-bit sample in the chunk, whatever
+// the channel count — interleaved silence is silent on every channel.
+func (r *playRing) skipSilentHead(chunk, keep int, samplePeak int32) int {
+	if chunk <= 0 || chunk%2 != 0 {
+		return 0
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.writePos-r.readPos-int64(chunk) < int64(keep) {
+		return 0
+	}
+	for i := 0; i < chunk; i += 2 {
+		lo := r.buf[int((r.readPos+int64(i))%int64(r.cap))]
+		hi := r.buf[int((r.readPos+int64(i+1))%int64(r.cap))]
+		v := int32(int16(uint16(lo) | uint16(hi)<<8))
+		if v > samplePeak || v < -samplePeak {
+			return 0
+		}
+	}
+	r.readPos += int64(chunk)
+	r.trimmed += int64(chunk)
+	return chunk
 }
