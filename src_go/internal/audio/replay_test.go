@@ -28,6 +28,9 @@ func TestReplayRecordedRun(t *testing.T) {
 	if dir == "" {
 		t.Skip("REPLAY_DIR not set — see the comment for how to record one")
 	}
+	if _, err := os.Stat(filepath.Join(dir, "timeline.csv")); err != nil {
+		t.Skip("this recording has no timeline.csv — record it with -timeline")
+	}
 	arrivals, audio := loadRecording(t, dir)
 
 	for _, trimMS := range []int{0, 400, 800, 1200, PlayTrimAboveMS} {

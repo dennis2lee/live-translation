@@ -18,13 +18,26 @@ import "math"
 //
 // # Only at a session's opening
 //
-// At an opening the freeze is removed whole, and that costs no word because
-// the speech carries on after it: on two transcriptions each, the gated
-// openings read the same as the raw ones. Everywhere else the frozen frame is
-// the end of a real word — in "question" it is nearly all of the last vowel
-// and nasal — and any cut there lost the word: removed whole, "quest-" and
-// "play" for "plan"; trimmed to its first 50 ms, still "quest-". Those are
-// left alone. They are short, too: 49–136 ms above -30 dBFS.
+// At an opening the freeze is removed whole. Everywhere else it is left
+// alone, because there it is the end of a real word and every cut tried lost
+// the word: removed whole, "question" became "quest-" and "plan" became
+// "play"; trimmed to its first 50 ms, still "quest-". The transcriber caught
+// those reliably.
+//
+// What removing an opening costs is not established by measurement. Measured
+// by spectral envelope, the frozen frame's sound had not been heard before
+// the freeze in 6 of 8 openings — the same as at a session's end — so the cut
+// removes whatever sound that frame stood for. The transcriber cannot say
+// whether that matters: it read every gated opening the same as the raw one,
+// but it also missed a control cut of the syllable just before each freeze in
+// 7 of 8. The case for cutting openings is the user's ear: the opening they
+// reported (tl s03, 0.80 s) is heard as the buzz, not as a word, and removing
+// the first 500 ms of fresh sessions sounded clean to them.
+//
+// The freezes left alone are not small. Over two recordings, 5 of 10
+// handovers end the replaced session on one, as loud as the openings (peaks
+// -4 to -15 dBFS) and up to twice as long (330–450 ms detected, 48–135 ms
+// above -30 dBFS). That is an open problem: this gate does not touch it.
 //
 // So the gate works in episodes. The translator reports each session's first
 // audio (MarkSessionStart); for the next freezeStartMS the gate holds audio
@@ -41,7 +54,8 @@ import "math"
 // 40 ms windows are measured every 10 ms. A freeze starts at a window when it
 // and the three windows 40, 80 and 120 ms after it share pitch (within 1%),
 // timbre (10%) and periodicity (0.05), each falling at least 2 dB below the
-// one before; it runs on while the next window 40 ms later still does. A
+// one before; it runs on, hop by hop, while each window is still that frame,
+// fading from the one 40 ms before it. A
 // confirmed freeze is followed back over windows that are already frozen but
 // not yet fading, and the cut starts one hop before that, so it starts
 // before the buzz does: measured from an onset found independently, by
@@ -83,6 +97,9 @@ type freezeGate struct {
 	// cutLog keeps every finished cut, for the log and the tests. Freezes
 	// are rare, so it does not grow in practice.
 	cutLog []cut
+	// carry is audio released outside Process — by MarkSessionStart ending an
+	// episode early — waiting for the next Process to hand it out first.
+	carry []float32
 }
 
 // cut is a silenced stretch [from, to) with a fade of fade samples ending at
@@ -151,16 +168,19 @@ func (g *freezeGate) Muted() int64 { return g.muted }
 // in front of the new one.
 func (g *freezeGate) Reset() {
 	starts, muted, log, total := g.runStarts, g.muted, g.cutLog, g.total
-	*g = *newFreezeGate(g.rate)
+	*g = *newFreezeGate(g.rate) // also drops carry: Reset is for discarding
 	g.runStarts, g.muted, g.cutLog = starts, muted, log
 	g.total, g.base = total, total
 }
 
 // Process takes mono samples in and returns what may be played: straight
-// through between openings, up to 210 ms behind during one. The returned
-// slice is reused by the next call.
+// through between openings, and during one about 210–220 ms behind,
+// depending on where the 10 ms grid falls, and longer while a freeze that
+// started late in the opening is still running. The returned slice is reused
+// by the next call.
 func (g *freezeGate) Process(in []float32) []float32 {
-	g.out = g.out[:0]
+	g.out = append(g.out[:0], g.carry...)
+	g.carry = g.carry[:0]
 	if !g.active {
 		// Between openings there is nothing to decide and nothing to hold.
 		g.total += int64(len(in))
@@ -223,15 +243,17 @@ func (g *freezeGate) Process(in []float32) []float32 {
 	return g.out
 }
 
-// extend grows the open cut while the window 40 ms on is still the same
-// fading frame.
+// extend grows the open cut one hop at a time while each new window is
+// still the frozen frame, fading from the window 40 ms before it. Stepping
+// 40 ms at a time stopped up to 40 ms short of the freeze's end, and a freeze
+// cut off by the next sound ends loud.
 func (g *freezeGate) extend() {
 	for g.open {
-		n := g.runLast + int64(g.step)
+		n := g.runLast + 1
 		if n >= g.featBase+int64(len(g.feats)) {
 			return
 		}
-		if !g.continues(g.runRef, g.feat(g.runLast), g.feat(n)) {
+		if !g.continues(g.runRef, g.feat(n-int64(g.step)), g.feat(n)) {
 			g.open = false
 			g.cutLog = append(g.cutLog, g.cuts[len(g.cuts)-1])
 			return
@@ -263,10 +285,16 @@ func (g *freezeGate) same(ref, f frameFeat) bool {
 }
 
 // MarkSessionStart opens an episode: the next sample is a session's first
-// audio. An episode still running is finished first.
+// audio. An episode still running is finished first, and what it was holding
+// is handed out by the next Process, before the new session's audio.
 func (g *freezeGate) MarkSessionStart() {
 	if g.active {
+		// A session that delivered less than an opening's worth. What it
+		// left held is still speech, and goes out ahead of the new session.
+		g.out = g.out[:0]
 		g.finish()
+		g.carry = append(g.carry, g.out...)
+		g.out = g.out[:0]
 	}
 	g.active = true
 	g.origin = g.total
@@ -363,7 +391,7 @@ func (g *freezeGate) gain(n int64) float64 {
 func (g *freezeGate) trim() {
 	keep := g.next - int64(g.back)
 	if g.open {
-		keep = min(keep, g.runLast)
+		keep = min(keep, g.runLast-int64(g.step))
 	}
 	if drop := keep - g.featBase; drop > 0 && drop <= int64(len(g.feats)) {
 		g.feats = append(g.feats[:0], g.feats[drop:]...)

@@ -1,6 +1,7 @@
 package audio
 
 import (
+	"fmt"
 	"math"
 	"math/rand/v2"
 	"testing"
@@ -103,16 +104,23 @@ func frozenLate(hold float64) []float32 {
 func frozen() []float32 { return frozenFor(0.28, 7) }
 
 // gate runs in through a fresh gate in 250 ms blobs — the size the model
-// sends — as one session that opens at its first sample, with enough silence
-// after it that nothing of interest is still held.
+// sends — as one session that opens at its first sample, followed by enough
+// silence for the opening to be decided and the episode to end. Every test
+// that uses it therefore also checks that all of the audio came back out:
+// a gate that cut the freeze and then held everything after it passed every
+// test until this did.
 func gate(in []float32) ([]float32, *freezeGate) {
 	g := newFreezeGate(fr)
 	g.MarkSessionStart()
-	in = concat(in, silence(0.5))
+	in = concat(in, silence(float64(freezeStartMS)/1000+0.5))
 	var out []float32
 	blob := fr / 4
 	for i := 0; i < len(in); i += blob {
 		out = append(out, g.Process(in[i:min(i+blob, len(in))])...)
+	}
+	if len(out) != len(in) || g.active {
+		panic(fmt.Sprintf("gate held back %d of %d samples (still watching: %v)",
+			len(in)-len(out), len(in), g.active))
 	}
 	return out, g
 }
@@ -168,7 +176,9 @@ func TestNaturalSpeechPassesUntouched(t *testing.T) {
 func TestTheSpeechBeforeAFreezeIsKept(t *testing.T) {
 	speech := natural(0.6)
 	out, _ := gate(concat(speech, frozen()))
-	keep := len(speech) - fr*(freezeHopMS+freezeFadeOutMS)/1000 - fr*freezeHopMS/1000
+	// The freeze starts on the grid here, so the cut takes exactly its
+	// one-hop lead and the fade before it, and nothing earlier.
+	keep := len(speech) - fr*(freezeHopMS+freezeFadeOutMS)/1000
 	for i := 0; i < keep; i++ {
 		if out[i] != speech[i] {
 			t.Fatalf("speech %d ms before the freeze was altered",
@@ -248,12 +258,11 @@ func TestOnlyFrozenAndFadingTogetherCounts(t *testing.T) {
 
 // --- the cut itself is inaudible --------------------------------------------
 
-// splatter is the share of the energy in x[a:b] above 1 kHz. The test
-// signals have three harmonics and nothing above about 700 Hz, so anything up
-// there around a cut is the cut's own click.
-func splatter(x []float32, a, b int) float64 {
+// highBand returns the energy of x[a:b] above 1 kHz and in all, Hann-
+// windowed. The test signals have three harmonics and nothing of their own
+// above about 700 Hz, so what a cut adds up there is its click.
+func highBand(x []float32, a, b int) (hi, all float64) {
 	n := b - a
-	var hi, all float64
 	for k := 0; k <= n/2; k++ {
 		var re, im float64
 		for i := 0; i < n; i++ {
@@ -269,13 +278,23 @@ func splatter(x []float32, a, b int) float64 {
 			hi += e
 		}
 	}
-	return hi / all
+	return hi, all
 }
 
-// The cut must not click, at either end and at any alignment. Measured
-// above 1 kHz, where these signals have nothing of their own: a hard cut puts
-// 900–27 500 ppm of the energy there, a 1 ms fade up to 1 350, 3 ms at most 4,
-// the 10 ms fades none. The limit sits between 3 ms and 2 ms.
+// clickAdded is how much energy above 1 kHz the gate put into out[a:b] that
+// in did not already have, as a share of in's energy there. Measured against
+// the input, so an abrupt sound that follows the freeze is not counted as the
+// gate's click.
+func clickAdded(in, out []float32, a, b int) float64 {
+	hiIn, allIn := highBand(in, a, b)
+	hiOut, _ := highBand(out, a, b)
+	return max(0, hiOut-hiIn) / allIn
+}
+
+// The cut must not click, at either end and at any alignment. Measured above
+// 1 kHz, where these signals have nothing of their own: a hard cut adds
+// 900–27 500 ppm of the energy there, a 1 ms fade up to 1 350, 3 ms at most
+// 4, the 10 ms fades none. The limit sits between 3 ms and 2 ms.
 func TestTheCutDoesNotClick(t *testing.T) {
 	const limit = 10e-6
 	win := fr * 30 / 1000
@@ -291,8 +310,8 @@ func TestTheCutDoesNotClick(t *testing.T) {
 			"fade out": int(c.from) - c.fade/2,
 			"fade in":  int(c.to) + fr*freezeFadeInMS/2000,
 		} {
-			if got := splatter(out, at-win/2, at+win/2); got > limit {
-				t.Errorf("offset %d ms, %s: %.0f ppm above 1 kHz, limit %.0f",
+			if got := clickAdded(concat(in, silence(2)), out, at-win/2, at+win/2); got > limit {
+				t.Errorf("offset %d ms, %s: adds %.0f ppm above 1 kHz, limit %.0f",
 					off, name, got*1e6, limit*1e6)
 			}
 		}
@@ -306,6 +325,7 @@ func TestNothingIsLostOrReordered(t *testing.T) {
 	rng := rand.New(rand.NewPCG(1, 2))
 	in := concat(natural(0.7), silence(0.1), natural(0.9))
 	g := newFreezeGate(fr)
+	g.MarkSessionStart() // without this the gate passes through and holds nothing to test
 	var out []float32
 	for i := 0; i < len(in); {
 		n := 1 + rng.IntN(fr/5)
@@ -569,14 +589,14 @@ func TestMarkSessionStartReachesTheGate(t *testing.T) {
 	}
 }
 
-// The window has to cover the openings that were measured: the latest began
-// 0.84 s into its session.
+// The window has to cover the openings that were measured — the latest began
+// 0.84 s into its session — with room to spare.
 func TestAFreezeLateInTheOpeningIsStillRemoved(t *testing.T) {
-	lead := natural(0.9)
+	lead := natural(1.0)
 	f := frozen()
 	out, g := gate(concat(lead, f))
 	if len(g.runStarts) != 1 {
-		t.Fatalf("a freeze 0.9 s into the session: %d cuts, want 1", len(g.runStarts))
+		t.Fatalf("a freeze 1.0 s into the session: %d cuts, want 1", len(g.runStarts))
 	}
 	if left := energy(out[len(lead):len(lead)+len(f)]) / energy(f); left > 0.01 {
 		t.Errorf("%.1f%% of it still plays", 100*left)
@@ -619,5 +639,186 @@ func TestTheWindowHoldsWhenAudioArrivesAllAtOnce(t *testing.T) {
 	g.Process(in)
 	if len(g.runStarts) != 0 {
 		t.Error("a freeze 1.5 s in was cut because it arrived in the same call as the opening")
+	}
+}
+
+// A session that delivers less than an opening's worth, then a new session:
+// what the gate was holding is still speech and must come out, ahead of the
+// new session's audio. It used to be released into a buffer the next call
+// cleared — 210 ms of speech gone at every such handover.
+func TestANewSessionMidOpeningLosesNothing(t *testing.T) {
+	g := newFreezeGate(fr)
+	g.MarkSessionStart()
+	first := natural(0.75)
+	second := concat(natural(1.0), silence(2.0))
+	var out []float32
+	out = append(out, g.Process(first)...)
+	g.MarkSessionStart()
+	out = append(out, g.Process(second)...)
+	in := concat(first, second)
+	if len(out) != len(in) {
+		t.Fatalf("%d of %d samples came out", len(out), len(in))
+	}
+	for i := range in {
+		if out[i] != in[i] {
+			t.Fatalf("sample %d differs: the first session's held tail was lost or reordered", i)
+		}
+	}
+}
+
+// A session start off the 10 ms grid: the window index has to round up, or
+// the first window reaches before the samples it may read.
+func TestASessionStartOffTheGrid(t *testing.T) {
+	g := newFreezeGate(fr)
+	g.Process(natural(0.0137)) // 329 samples, not a multiple of a hop
+	g.MarkSessionStart()
+	in := concat(natural(0.6), frozen(), silence(2.0))
+	var out []float32
+	for i := 0; i < len(in); i += fr / 4 {
+		out = append(out, g.Process(in[i:min(i+fr/4, len(in))])...)
+	}
+	if len(g.runStarts) != 1 {
+		t.Errorf("%d freezes found after an off-grid start, want 1", len(g.runStarts))
+	}
+	if len(out) != len(in) {
+		t.Errorf("%d of %d samples came out", len(out), len(in))
+	}
+}
+
+// The other side of each threshold: a freeze just inside every one must still
+// be cut, so tightening any of them shows. Each was placed with the gate's own
+// features: it is found as shipped and lost when that one threshold is
+// tightened as named.
+func TestNearHitsAreFreezes(t *testing.T) {
+	cases := map[string][]float32{
+		"fading 2.2 dB per 40 ms (lost at 2.5)": frozenFor(0.28, 2.2),
+		"timbre drifting (lost at 7%)": voicedMix(0.28, func(float64) float64 { return 174 },
+			func(t float64) float64 { return -6 - 7*t/0.04 },
+			func(t float64) (float64, float64) {
+				m := math.Exp(0.8 * t / 0.28)
+				return 0.5 * m, 0.25 * m
+			}),
+		"periodicity drifting (lost at 0.03)":       jittered(func(t float64) float64 { return 0.06 * t / 0.12 }),
+		"periodicity 0.55 throughout (lost at 0.6)": steadyNoise(0.65),
+		"quiet, from -44 dBFS (lost at a -50 floor)": voiced(0.28, func(float64) float64 { return 174 },
+			func(t float64) float64 { return -44 - 2.5*t/0.04 }),
+	}
+	for name, in := range cases {
+		_, g := gate(concat(natural(0.5), in, natural(0.3)))
+		if len(g.runStarts) != 1 {
+			t.Errorf("%s: %d cuts, want 1", name, len(g.runStarts))
+		}
+	}
+}
+
+// Following back stops at a change of pitch too. A glide from 200 Hz runs
+// into the freeze at 174 Hz with the timbre unchanged; the walk must stop
+// where the pitch stops moving, not run the full 40 ms up the glide.
+func TestFollowingBackStopsWherePitchMoves(t *testing.T) {
+	const at, glide = 0.3, 0.06
+	tone := voiced(at+0.28, func(t float64) float64 {
+		if t >= at {
+			return 174
+		}
+		return 174 + 26*min(1, (at-t)/glide)
+	}, func(t float64) float64 { return -6 - 7*max(0, t-at)/0.04 })
+	lead := natural(0.4)
+	_, g := gate(concat(lead, tone))
+	if len(g.runStarts) != 1 {
+		t.Fatalf("%d freezes, want 1", len(g.runStarts))
+	}
+	freezeAt := len(lead) + int(at*fr)
+	if early := (freezeAt - int(g.runStarts[0])) * 1000 / fr; early > 20 {
+		t.Errorf("onset placed %d ms before the freeze, up the glide", early)
+	}
+}
+
+// After the cut the sound comes back within the fade-in and is untouched
+// from there on.
+func TestTheSoundAfterTheCutIsBackWithinTheFade(t *testing.T) {
+	lead := natural(0.6)
+	in := concat(lead, frozen(), natural(0.5))
+	out, g := gate(in)
+	c := g.cutLog[0]
+	back := int(c.to) + fr*10/1000
+	for i := back; i < len(in); i++ {
+		if out[i] != in[i] {
+			t.Fatalf("the sound after the cut is still altered %d ms after it",
+				(i-int(c.to))*1000/fr)
+		}
+	}
+}
+
+// audibleIn reports the first sample of x[a:b] louder than -50 dBFS, or -1.
+func audibleIn(x []float32, a, b int) int {
+	floor := float32(math.Pow(10, -50.0/20))
+	for i := a; i < b; i++ {
+		if x[i] > floor || x[i] < -floor {
+			return i
+		}
+	}
+	return -1
+}
+
+// A freeze that starts late in the opening and runs past its end must be cut
+// to its end: the episode cannot close while a cut is still open. Energy is
+// too blunt a measure here — what is left of a slow fade is a small share of
+// it — so nothing of the freeze may be audible.
+func TestAFreezeRunningPastTheWindowIsCutToItsEnd(t *testing.T) {
+	// Fading 4 dB per 40 ms, inside the 4–12 measured, for half a second:
+	// it is still sounding well after the window closes at 1.2 s. (A fade
+	// a hair over the 2 dB threshold is a near-hit, tested elsewhere; here
+	// the question is only whether the episode waits for the cut to end.)
+	lead := natural(1.15)
+	f := frozenFor(0.5, 4)
+	out, g := gate(concat(lead, f))
+	if len(g.runStarts) != 1 {
+		t.Fatalf("%d freezes, want 1", len(g.runStarts))
+	}
+	if i := audibleIn(out, len(lead), len(lead)+len(f)-fr/100); i >= 0 {
+		t.Errorf("the freeze is still audible %d ms in", (i-len(lead))*1000/fr)
+	}
+}
+
+// When speech follows a freeze straight away, the freeze has not faded out
+// by its end, so the cut has to reach its last frozen sample.
+func TestTheCutReachesTheEndOfTheFreeze(t *testing.T) {
+	lead := natural(0.6)
+	f := frozenFor(0.2, 7) // ends at about -41 dBFS, still audible
+	in := concat(lead, f, natural(0.4))
+	out, _ := gate(in)
+	// The last fully frozen window can end up to a hop before the freeze
+	// does; the fade back in covers the rest.
+	end := len(lead) + len(f) - fr*freezeHopMS/1000
+	if i := audibleIn(out, len(lead), end); i >= 0 {
+		t.Errorf("the freeze is still audible %d ms in, %d ms before its end",
+			(i-len(lead))*1000/fr, (len(lead)+len(f)-i)*1000/fr)
+	}
+}
+
+// The fade back in, where the input itself runs on smoothly: the frame
+// freezes and fades for 160 ms, then unfreezes — the pitch starts to glide —
+// at the level it had reached, with no break in phase or level. Anything the
+// output gains above 1 kHz there is the cut's own click. (Where speech starts
+// abruptly after a freeze, its own onset hides a short fade.)
+func TestTheFadeBackInDoesNotClick(t *testing.T) {
+	const frozenFor = 0.16
+	for off := 0; off < 40; off += 3 {
+		tone := voiced(0.5, func(t float64) float64 {
+			return 174 + 300*max(0, t-frozenFor)
+		}, func(t float64) float64 {
+			return -6 - 7*min(t, frozenFor)/0.04
+		})
+		lead := concat(silence(float64(off)/1000), natural(0.6))
+		in := concat(lead, tone)
+		out, g := gate(in)
+		if len(g.cutLog) != 1 {
+			t.Fatalf("offset %d: %d cuts, want 1", off, len(g.cutLog))
+		}
+		at := int(g.cutLog[0].to) + fr*freezeFadeInMS/2000
+		win := fr * 30 / 1000
+		if got := clickAdded(concat(in, silence(2)), out, at-win/2, at+win/2); got > 10e-6 {
+			t.Errorf("offset %d ms: the fade back in adds %.0f ppm above 1 kHz", off, got*1e6)
+		}
 	}
 }

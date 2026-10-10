@@ -354,7 +354,7 @@ func (p *Player) ResetSpeech() {
 }
 
 // MarkSessionStart tells the freeze gate that the next WriteSpeech is a new
-// session's first audio. See freezeGate.opensSession.
+// session's first audio. See freezeGate.MarkSessionStart.
 func (p *Player) MarkSessionStart() {
 	p.mu.Lock()
 	defer p.mu.Unlock()
