@@ -921,12 +921,20 @@ func (w *Window) ToggleMute() {
 	}
 	w.muted = next
 	if player := w.player.Load(); player != nil {
-		player.SetVolume(w.speechGain())
 		// The gain is applied as audio is written, so what is already queued
 		// would play on at the old volume — up to two seconds of it. Flushed
 		// both ways: nothing more is heard after a mute, and nothing queued
-		// silently during one delays what comes after.
-		player.Flush()
+		// silently during one delays what comes after. The order follows the
+		// direction: muting silences first, so nothing written between the two
+		// is heard; unmuting flushes first, so nothing current written
+		// between them is thrown away.
+		if w.muted {
+			player.SetVolume(w.speechGain())
+			player.Flush()
+		} else {
+			player.Flush()
+			player.SetVolume(w.speechGain())
+		}
 	}
 	w.view.SetMuted(w.muted)
 	w.syncActions()

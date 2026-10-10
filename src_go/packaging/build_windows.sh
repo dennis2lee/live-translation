@@ -92,7 +92,7 @@ wixl -v -a x64 -o "$MSI" "$DIST/livecap.wxs"
 echo
 echo "  $(du -h "$MSI" | cut -f1)  $MSI"
 echo
-echo "Untested on Windows. Install it there and check, in this order:"
+echo "Not yet run on Windows since 1.0. Install it there and check, in this order:"
 echo "  1. it installs and the Start menu entry launches it"
 echo "  2. the caption window opens and Korean renders"
 echo "  3. Settings > Audio Input lists the capture devices"

@@ -392,3 +392,23 @@ func TestALocalVoiceSpeaksNothingFromTheMute(t *testing.T) {
 	}
 	w.voice = nil
 }
+
+// Muting silences before it flushes, so nothing written between the two is
+// heard; unmuting flushes before it restores the volume, so nothing current
+// written between them is thrown away.
+func TestMuteOrdersVolumeAndFlushByDirection(t *testing.T) {
+	w, factory := speakingWindow(t)
+	w.startPlayer()
+	p := factory.last()
+	p.mu.Lock()
+	p.calls = nil
+	p.mu.Unlock()
+	w.ToggleMute()
+	w.ToggleMute()
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	want := []string{"volume", "flush", "flush", "volume"}
+	if strings.Join(p.calls, ",") != strings.Join(want, ",") {
+		t.Errorf("calls %v, want %v", p.calls, want)
+	}
+}

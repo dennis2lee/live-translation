@@ -26,6 +26,8 @@ type fakeSpeaker struct {
 	resets       int
 	sessionMarks int
 	flushes      int
+	// calls is the order of SetVolume and Flush.
+	calls []string
 }
 
 func (f *fakeSpeaker) Start() (audio.OutputDevice, error) {
@@ -80,6 +82,7 @@ func (f *fakeSpeaker) ResetSpeech() {
 func (f *fakeSpeaker) Flush() {
 	f.mu.Lock()
 	f.flushes++
+	f.calls = append(f.calls, "flush")
 	f.mu.Unlock()
 }
 
@@ -93,6 +96,7 @@ func (f *fakeSpeaker) SetVolume(v float64) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.volumes = append(f.volumes, v)
+	f.calls = append(f.calls, "volume")
 }
 
 func (f *fakeSpeaker) counts() (starts, stops int) {

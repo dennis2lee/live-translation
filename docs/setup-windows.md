@@ -159,7 +159,8 @@ switch to English first, or use **Translate → Mute Translation** and
 press **Esc** (not yet checked on Windows) or switch to English and press
 **f**. The digit keys work either way.
 
-> **In full screen the menu bar is hidden.** Press **f** to come back out.
+> **In full screen the menu bar is hidden.** Press **f** to come back out — or
+> **Esc**, or **한/영** then **f** if the Korean input method is in Hangul mode.
 
 **Translate → Clear Captions** empties the caption box.
 
@@ -242,7 +243,7 @@ This is **Preferences → Behaviour → Warm session handover**, on by default.
 | *API key is not valid* | Copy the key again. No spaces before or after it. |
 | Green dot, but no captions | Microphone access is off for desktop apps — step 3 — then restart LiveCap. Also run the level test (step 6). |
 | My USB interface is not in the list | Plug it in, then **Settings → Refresh Device List**. |
-| Stuck in full screen, no menu | Press **f**. |
+| Stuck in full screen, no menu | Press **f**. In Hangul mode press **Esc**, or **한/영** to switch to English, then **f**. |
 | A voice I installed is not in the Voice list | Only SAPI voices are visible. Narrator's natural voices are not. |
 | The translation is echoed and repeated | The speakers are feeding the microphone. Use headphones, or turn off **Speak the translation aloud**. |
 | Anything else | **Preferences → Behaviour** shows where the log file is (under `%APPDATA%\LiveCap`). Include it when reporting a problem. It never contains your key. |

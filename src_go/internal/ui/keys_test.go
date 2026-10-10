@@ -305,3 +305,51 @@ func TestTheMuteMenuItem(t *testing.T) {
 		t.Errorf("unmuted: muted %v, ticked %v", w.muted, item.Checked)
 	}
 }
+
+type fakeDeskDriver struct {
+	fyne.Driver
+	mods fyne.KeyModifier
+}
+
+func (d fakeDeskDriver) CreateSplashWindow() fyne.Window       { return nil }
+func (d fakeDeskDriver) CurrentKeyModifiers() fyne.KeyModifier { return d.mods }
+func (d fakeDeskDriver) HasSecondaryDisplay() bool             { return false }
+
+type fakeDeskApp struct {
+	fyne.App
+	d fyne.Driver
+}
+
+func (a fakeDeskApp) Driver() fyne.Driver { return a.d }
+
+var _ desktop.Driver = fakeDeskDriver{}
+
+// The real heldModifiers, not a stand-in: it reads the desktop driver, says
+// nothing where there is no such driver or no app, and with Cmd held at the
+// key-down a later plain repeat does not toggle.
+func TestHeldModifiersReadsTheDriver(t *testing.T) {
+	base := test.NewTempApp(t)
+	if got := heldModifiers(); got != 0 {
+		t.Errorf("test driver: %v", got)
+	}
+	fyne.SetCurrentApp(fakeDeskApp{App: base, d: fakeDeskDriver{Driver: base.Driver(), mods: fyne.KeyModifierSuper}})
+	if got := heldModifiers(); got != fyne.KeyModifierSuper {
+		t.Errorf("desktop driver: %v", got)
+	}
+	// End to end: Cmd held at key-down, typed key after release.
+	w := newTestWindow(t)
+	fyne.SetCurrentApp(fakeDeskApp{App: base, d: fakeDeskDriver{Driver: base.Driver(), mods: fyne.KeyModifierSuper}})
+	c := keyed(t, w)
+	c.OnKeyDown()(&fyne.KeyEvent{Name: fyne.KeyM})
+	fyne.SetCurrentApp(fakeDeskApp{App: base, d: fakeDeskDriver{Driver: base.Driver(), mods: 0}})
+	c.OnTypedKey()(&fyne.KeyEvent{Name: fyne.KeyM})
+	if w.muted {
+		t.Error("Cmd+M then repeat toggled with the real heldModifiers")
+	}
+	var nilApp fyne.App
+	fyne.SetCurrentApp(nilApp)
+	if got := heldModifiers(); got != 0 {
+		t.Errorf("nil app: %v", got)
+	}
+	fyne.SetCurrentApp(base)
+}
