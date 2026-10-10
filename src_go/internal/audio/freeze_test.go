@@ -545,7 +545,7 @@ func TestASecondSessionsOpeningIsRemovedWhole(t *testing.T) {
 func TestAFreezeIsFollowedBackToItsStart(t *testing.T) {
 	for off := 0; off < 40; off += 3 {
 		lead := concat(silence(float64(off)/1000), natural(0.6))
-		f := frozenLate(0.06)
+		f := frozenLate(0.07) // needs the full 40 ms of following back
 		out, g := gate(concat(lead, f))
 		if len(g.runStarts) != 1 {
 			t.Fatalf("offset %d ms: %d freezes, want 1", off, len(g.runStarts))
@@ -654,7 +654,10 @@ func TestANewSessionMidOpeningLosesNothing(t *testing.T) {
 	var out []float32
 	out = append(out, g.Process(first)...)
 	g.MarkSessionStart()
-	out = append(out, g.Process(second)...)
+	// Several calls, not one: what was carried must come out exactly once.
+	for i := 0; i < len(second); i += fr / 4 {
+		out = append(out, g.Process(second[i:min(i+fr/4, len(second))])...)
+	}
 	in := concat(first, second)
 	if len(out) != len(in) {
 		t.Fatalf("%d of %d samples came out", len(out), len(in))
@@ -781,18 +784,37 @@ func TestAFreezeRunningPastTheWindowIsCutToItsEnd(t *testing.T) {
 }
 
 // When speech follows a freeze straight away, the freeze has not faded out
-// by its end, so the cut has to reach its last frozen sample.
-func TestTheCutReachesTheEndOfTheFreeze(t *testing.T) {
-	lead := natural(0.6)
-	f := frozenFor(0.2, 7) // ends at about -41 dBFS, still audible
-	in := concat(lead, f, natural(0.4))
-	out, _ := gate(in)
-	// The last fully frozen window can end up to a hop before the freeze
-	// does; the fade back in covers the rest.
-	end := len(lead) + len(f) - fr*freezeHopMS/1000
-	if i := audibleIn(out, len(lead), end); i >= 0 {
-		t.Errorf("the freeze is still audible %d ms in, %d ms before its end",
-			(i-len(lead))*1000/fr, (len(lead)+len(f)-i)*1000/fr)
+// by its end, so the cut has to reach its last frozen sample — and stop
+// there. Swept across the 10 ms grid: at one alignment the old 40 ms steps
+// happened to land on the end, and at 32 of 40 they stopped up to 34 ms
+// short. Measured against where the freeze really ends, not against the
+// gate's own idea of it, so a cut that runs on into the speech shows too.
+func TestTheCutEndsWhereTheFreezeEnds(t *testing.T) {
+	for i := 0; i < 80; i++ {
+		off := i % 40
+		// 200 ms, and 170 ms — barely long enough to be confirmed, so the
+		// cut's end is the one set at confirmation, never extended.
+		length := []float64{0.2, 0.17}[i/40]
+		lead := concat(silence(float64(off)/1000), natural(0.6))
+		f := frozenFor(length, 7) // ends loud, at -41 dBFS or above
+		speech := natural(0.4)
+		in := concat(lead, f, speech)
+		out, _ := gate(in)
+		end := len(lead) + len(f)
+		// The last fully frozen window can end up to a hop before the freeze
+		// does; the fade back in covers the rest.
+		if i := audibleIn(out, len(lead), end-fr*freezeHopMS/1000); i >= 0 {
+			t.Errorf("%.0f ms freeze, offset %d ms: still audible %d ms before its end",
+				length*1000, off, (end-i)*1000/fr)
+		}
+		// From the end of the fade back in, the speech after is untouched.
+		for i := end + fr*freezeFadeInMS/1000; i < len(in); i++ {
+			if out[i] != in[i] {
+				t.Errorf("%.0f ms freeze, offset %d ms: the cut ran %d ms into the speech after it",
+					length*1000, off, (i-end)*1000/fr)
+				break
+			}
+		}
 	}
 }
 
@@ -820,5 +842,55 @@ func TestTheFadeBackInDoesNotClick(t *testing.T) {
 		if got := clickAdded(concat(in, silence(2)), out, at-win/2, at+win/2); got > 10e-6 {
 			t.Errorf("offset %d ms: the fade back in adds %.0f ppm above 1 kHz", off, got*1e6)
 		}
+	}
+}
+
+// The window ends 1.2 s after the session's first audio, measured from that
+// first audio: a freeze at 1.25 s is past it.
+func TestTheWindowEndsWhereItShould(t *testing.T) {
+	in := concat(natural(1.25), frozen(), natural(0.3))
+	_, g := gate(in)
+	if len(g.runStarts) != 0 {
+		t.Error("a freeze 1.25 s into the session was cut; the window is 1.2 s")
+	}
+}
+
+// Low and high voices freeze too: the recorded openings froze between 120
+// and 370 Hz. A pitch search that started higher would miss the low ones.
+func TestLowAndHighVoicesAreFound(t *testing.T) {
+	for _, hz := range []float64{100, 120, 370} {
+		f := voiced(0.28, func(float64) float64 { return hz },
+			func(t float64) float64 { return -6 - 7*t/0.04 })
+		_, g := gate(concat(natural(0.5), f, natural(0.3)))
+		if len(g.runStarts) != 1 {
+			t.Errorf("a freeze at %.0f Hz: %d cuts, want 1", hz, len(g.runStarts))
+		}
+	}
+}
+
+// A DC offset must not hide a freeze: pitch and timbre are measured on the
+// signal with its mean taken out.
+func TestAnOffsetDoesNotHideAFreeze(t *testing.T) {
+	f := frozen()
+	for i := range f {
+		f[i] += 0.05
+	}
+	_, g := gate(concat(natural(0.5), f, natural(0.3)))
+	if len(g.runStarts) != 1 {
+		t.Errorf("a freeze riding on a DC offset: %d cuts, want 1", len(g.runStarts))
+	}
+}
+
+// Reset is for discarding: a carry waiting to go out goes too.
+func TestResetDropsAPendingCarry(t *testing.T) {
+	g := newFreezeGate(fr)
+	g.MarkSessionStart()
+	g.Process(natural(0.75))
+	g.MarkSessionStart() // carries what the first session left held
+	g.Reset()
+	next := natural(0.3)
+	if out := g.Process(next); len(out) != len(next) {
+		t.Errorf("after Reset, %d samples came out for %d put in — the carry survived",
+			len(out), len(next))
 	}
 }

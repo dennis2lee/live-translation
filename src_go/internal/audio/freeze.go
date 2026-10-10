@@ -24,15 +24,18 @@ import "math"
 // "play"; trimmed to its first 50 ms, still "quest-". The transcriber caught
 // those reliably.
 //
-// What removing an opening costs is not established by measurement. Measured
-// by spectral envelope, the frozen frame's sound had not been heard before
-// the freeze in 6 of 8 openings — the same as at a session's end — so the cut
-// removes whatever sound that frame stood for. The transcriber cannot say
-// whether that matters: it read every gated opening the same as the raw one,
-// but it also missed a control cut of the syllable just before each freeze in
-// 7 of 8. The case for cutting openings is the user's ear: the opening they
-// reported (tl s03, 0.80 s) is heard as the buzz, not as a word, and removing
-// the first 500 ms of fresh sessions sounded clean to them.
+// What removing an opening costs is not established by measurement. The
+// transcriber cannot say: it read gated openings the same as raw ones, but it
+// also missed a control cut of the syllable just before each freeze in 7 of
+// 8. Two spectral measures of whether the frozen sound had been heard before
+// the freeze disagree — an uncalibrated band-envelope measure said not in 6
+// of 8, a calibrated MFCC measure found it present in all 8 (10–175 ms) —
+// and the first returns "not heard" at half of random points in ordinary
+// speech, so it does not discriminate. What the traces do show is a one-frame
+// hold at fixed pitch, fading 3–5 dB per 20 ms, with speech back within
+// 10–30 ms of the cut. The case for cutting is the user's ear: the opening
+// they reported (tl s03, 0.80 s) is heard as the buzz, not as a word, and
+// removing the first 500 ms of fresh sessions sounded clean to them.
 //
 // The freezes left alone are not small. Over two recordings, 5 of 10
 // handovers end the replaced session on one, as loud as the openings (peaks
@@ -46,8 +49,15 @@ import "math"
 // handover already carries, and the play queue's silence trimming takes the
 // extra back out: over six minutes of recorded arrivals the delay to the
 // listener went from 0.636 s to 0.660 s. Outside the eight cuts not one
-// sample of the 18 million was changed, and the eight openings transcribed
-// the same with and without them.
+// sample of the 18 million was changed.
+//
+// The mark is ordered with the new session's audio because both come from
+// that session's receive goroutine. The replaced session's goroutine is not
+// ordered with them: one of its blobs can land between the mark and the new
+// session's first audio, counting as part of the opening and shortening the
+// window by up to a blob, 250 ms — 950 ms against a latest measured opening
+// freeze at 0.84 s. By then the replaced session is sending silence, and the
+// recorded timeline never interleaves.
 //
 // # How
 //
