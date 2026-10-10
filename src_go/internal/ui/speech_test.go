@@ -25,6 +25,7 @@ type fakeSpeaker struct {
 	speechWrites int
 	resets       int
 	sessionMarks int
+	flushes      int
 }
 
 func (f *fakeSpeaker) Start() (audio.OutputDevice, error) {
@@ -73,6 +74,12 @@ func (f *fakeSpeaker) MarkSessionStart() {
 func (f *fakeSpeaker) ResetSpeech() {
 	f.mu.Lock()
 	f.resets++
+	f.mu.Unlock()
+}
+
+func (f *fakeSpeaker) Flush() {
+	f.mu.Lock()
+	f.flushes++
 	f.mu.Unlock()
 }
 

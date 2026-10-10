@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"fyne.io/fyne/v2"
+	"fyne.io/fyne/v2/driver/desktop"
 
 	"github.com/dennis2lee/live-translation/src_go/internal/audio"
 	"github.com/dennis2lee/live-translation/src_go/internal/captions"
@@ -119,6 +120,9 @@ type Window struct {
 	// what it hears. Deliberately *not* persisted: a mute that outlived a
 	// restart is indistinguishable from the feature being broken.
 	muted bool
+	// keyDownSeen records a key-down for m and f, so the key-up fallback
+	// (see bindKeys) does not act a second time. UI goroutine only.
+	keyDownSeen map[fyne.KeyName]bool
 
 	// musicGate filters the send path for the running session; nil when the
 	// feature is off or the model could not be had. yamnet is the loaded
@@ -128,7 +132,7 @@ type Window struct {
 	// voiceActive is read from the translator's receive goroutine, which is
 	// why it is atomic and the pointer is not: everything that touches the
 	// pointer runs on the UI goroutine.
-	voice       *tts.Speaker
+	voice       localVoice
 	voiceActive atomic.Bool
 
 	musicGate *classify.Gate
@@ -158,10 +162,11 @@ type Window struct {
 // NewWindow builds the caption window.
 func NewWindow(app fyne.App, settings config.Settings) *Window {
 	w := &Window{
-		app:      app,
-		settings: settings,
-		state:    translator.StateIdle,
-		stopTick: make(chan struct{}),
+		app:         app,
+		settings:    settings,
+		state:       translator.StateIdle,
+		stopTick:    make(chan struct{}),
+		keyDownSeen: map[fyne.KeyName]bool{},
 		newSpeaker: func(deviceName string, sourceRate int) speaker {
 			return audio.NewPlayer(deviceName, sourceRate)
 		},
@@ -247,27 +252,62 @@ func (w *Window) bindKeys() {
 			w.SetDirection(config.EnglishToKorean)
 		case '9':
 			w.ToggleCompletePhrases()
-		// ㅡ and ㄹ are what the m and f keys type under the Korean input
-		// source, where the rune is the jamo and never 'm' or 'f'.
-		case 'm', 'M', 'ㅡ':
-			w.ToggleMute()
-		case 'f', 'F', 'ㄹ':
-			// Full screen hides the menu on the platforms that draw it in the
-			// window, so this is the way back out — and the only reliable one,
-			// since Escape was measured not to arrive in full screen. Never
-			// hide the menu without leaving a key that shows it again.
-			w.setFullScreen(!w.win.FullScreen())
 		}
 	})
+	// m and f are bound by physical key, not by the character typed. Under a
+	// Korean input source the character is a jamo the input method holds as
+	// unfinished composition (ㅡ can still become ㅢ), and it only arrives
+	// when the next key completes it — so a rune binding missed the first
+	// press and acted one press late. GLFW reports the key itself before the
+	// input method sees it on macOS (cocoa_window.m, keyDown).
 	w.win.Canvas().SetOnTypedKey(func(ev *fyne.KeyEvent) {
-		// Spike F2 measured Escape not reaching this handler while full screen
-		// on macOS. It works in a window, which is where it is most often
-		// wanted, so it stays — but `f` above is the binding that is relied on.
-		if ev.Name == fyne.KeyEscape && w.win.FullScreen() {
-			w.setFullScreen(false)
+		switch ev.Name {
+		case fyne.KeyM:
+			w.keyDownSeen[fyne.KeyM] = true
+			w.ToggleMute()
+		case fyne.KeyF:
+			w.keyDownSeen[fyne.KeyF] = true
+			w.toggleFullScreen()
+		case fyne.KeyEscape:
+			// Spike F2 measured Escape not reaching this handler while full
+			// screen on macOS. It works in a window, which is where it is most
+			// often wanted, so it stays — but f is the binding relied on.
+			if w.win.FullScreen() {
+				w.setFullScreen(false)
+			}
 		}
 	})
+	// On Windows an input method that claims a key-down turns it into
+	// VK_PROCESSKEY, which GLFW drops (win32_window.c), so the key-down never
+	// comes; the key-up still carries the real key. Acting on the key-up
+	// only when no key-down was seen covers that without acting twice
+	// anywhere the key-down does arrive. Not run on Windows.
+	if dc, ok := w.win.Canvas().(desktop.Canvas); ok {
+		dc.SetOnKeyUp(w.keyUp)
+	}
 }
+
+// keyUp is the key-up half of the m and f bindings; see bindKeys.
+func (w *Window) keyUp(ev *fyne.KeyEvent) {
+	if ev.Name != fyne.KeyM && ev.Name != fyne.KeyF {
+		return
+	}
+	if w.keyDownSeen[ev.Name] {
+		w.keyDownSeen[ev.Name] = false
+		return
+	}
+	if ev.Name == fyne.KeyM {
+		w.ToggleMute()
+	} else {
+		w.toggleFullScreen()
+	}
+}
+
+// toggleFullScreen is the f key: full screen hides the menu on the platforms
+// that draw it in the window, so this is the way back out — and the only
+// reliable one, since Escape was measured not to arrive in full screen. Never
+// hide the menu without leaving a key that shows it again.
+func (w *Window) toggleFullScreen() { w.setFullScreen(!w.win.FullScreen()) }
 
 // --- settings -------------------------------------------------------------
 
@@ -733,7 +773,9 @@ func (w *Window) stopVoice() {
 // speakLines sends newly committed caption lines to the local voice. Called
 // with every drain, so the queue's own bound is what keeps it from growing.
 func (w *Window) speakLines(lines []string) {
-	if w.voice == nil {
+	// Muted means nothing reaches the room. The lines still go to the
+	// transcript; they are only not spoken.
+	if w.voice == nil || w.muted {
 		return
 	}
 	for _, line := range lines {
@@ -742,6 +784,16 @@ func (w *Window) speakLines(lines []string) {
 }
 
 // speaker is the output player as the window uses it.
+// localVoice is what the window needs of tts.Speaker, so a test can watch
+// what would be spoken without a synthesizer.
+type localVoice interface {
+	Say(text string)
+	SetVoice(voice string)
+	Voice() string
+	Clear()
+	Stop()
+}
+
 type speaker interface {
 	Start() (audio.OutputDevice, error)
 	Stop()
@@ -754,6 +806,8 @@ type speaker interface {
 	ResetSpeech()
 	// MarkSessionStart says the next WriteSpeech opens a new session.
 	MarkSessionStart()
+	// Flush drops what is queued and not yet heard.
+	Flush()
 	SetVolume(v float64)
 }
 
@@ -814,12 +868,29 @@ func (w *Window) speechGain() float64 {
 // one takes long enough to clip the first word, and mute is pressed when
 // someone walks in — it has to be instant in both directions.
 func (w *Window) ToggleMute() {
-	w.muted = !w.muted
+	next := !w.muted
+	// Cleared while muted, in both directions: clearing settles a
+	// half-sentence into a finished line, and a finished line goes to the
+	// local voice — so with the mute lifted first, unmuting spoke what was
+	// said while muted (the red team's fourth round).
+	w.muted = true
+	w.ClearCaptions()
+	if w.voice != nil {
+		// Including the line being spoken: finishing it would be seconds of
+		// speech after a mute, or stale speech after an unmute.
+		w.voice.Clear()
+	}
+	w.muted = next
 	if player := w.player.Load(); player != nil {
 		player.SetVolume(w.speechGain())
+		// The gain is applied as audio is written, so what is already queued
+		// would play on at the old volume — up to two seconds of it. Flushed
+		// both ways: nothing more is heard after a mute, and nothing queued
+		// silently during one delays what comes after.
+		player.Flush()
 	}
 	w.view.SetMuted(w.muted)
-	w.ClearCaptions()
+	w.syncActions()
 	slog.Info("translation mute toggled", "muted", w.muted)
 	if w.muted {
 		w.showNotice("Translation muted — press m to unmute")

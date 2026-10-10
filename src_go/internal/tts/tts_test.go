@@ -390,14 +390,49 @@ func TestClearDropsWhatHasNotBeenSpoken(t *testing.T) {
 		t.Fatalf("%d lines still queued after Clear", queued)
 	}
 
-	// The one already in flight finishes; nothing behind it is spoken.
+	// The one already in flight is abandoned too — Clear is how the
+	// translation is muted, and finishing that line would be seconds of
+	// speech after the mute — and nothing behind it is spoken.
 	letGo()
-	waitFor(t, func() bool { spoken, _, _ := s.Stats(); return spoken == 1 }, "the in-flight line to finish")
-
+	time.Sleep(50 * time.Millisecond)
+	if spoken, _, _ := s.Stats(); spoken != 0 {
+		t.Errorf("%d lines spoken after Clear, want none", spoken)
+	}
 	mu.Lock()
 	defer mu.Unlock()
 	if len(said) != 1 || said[0] != "first" {
 		t.Errorf("synthesized %v, want only the line already in flight", said)
+	}
+}
+
+// A line part-way out when Clear comes stops at once: not one more block.
+func TestClearStopsTheLineBeingSpoken(t *testing.T) {
+	var mu sync.Mutex
+	var said []string
+	blocks := 0
+	cleared := false
+	after := 0
+	var s *Speaker
+	s = newSpeakerWith("V", func([]byte) {
+		mu.Lock()
+		defer mu.Unlock()
+		blocks++
+		if cleared {
+			after++
+		}
+	}, fakeSynth(3000, &said, &mu, nil)) // 3 s: paced, so it is still going
+	defer s.Stop()
+	s.Say("a long sentence")
+	waitFor(t, func() bool { mu.Lock(); defer mu.Unlock(); return blocks >= 3 }, "speech to start")
+	mu.Lock()
+	cleared = true
+	mu.Unlock()
+	s.Clear()
+	time.Sleep(1500 * time.Millisecond) // well past where pacing would resume
+	mu.Lock()
+	defer mu.Unlock()
+	if after > 1 { // one block may already be past the check
+		t.Errorf("%d blocks sent after Clear", after)
 	}
 }
 

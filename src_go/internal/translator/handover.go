@@ -51,6 +51,16 @@ var (
 	// measured freeze ended 0.84 s in, with margin.
 	HandoverWarm = 1500 * time.Millisecond
 
+	// HandoverGateQuiet is how long both sessions must have been silent for a
+	// switch under the music gate — and the old one at a sentence end. Far longer
+	// than HandoverQuiet on purpose: blobs arrive every ~250 ms (Gemini) or
+	// ~210 ms (OpenAI), so 200 ms of silence passes between almost any two
+	// blobs of continuous speech, and the gate path, which asks for no matching
+	// sentence, switched mid-sentence at the real arrival rate (the red team's
+	// fourth round, 3 of 3). The longest measured gap between Gemini blobs in
+	// speech is 0.39 s; a second clears it, and a song lasts minutes.
+	HandoverGateQuiet = time.Second
+
 	// HandoverMaxWait caps the wait however much grace there is. Gemini
 	// warns 50 s ahead, but OpenAI's session warns itself ten minutes ahead,
 	// and waiting most of that for a pause would be ten minutes of two
@@ -144,8 +154,7 @@ func (t *Translator) handOver(ctx context.Context, old *sessionHolder) *sessionH
 			// gate also waits for both to fall quiet, which with no input
 			// going out they do within seconds; the replacement need not be
 			// warm, since nothing is being said for it to warm up on.
-			if t.adaptivePrep && t.quietMoment != nil && t.quietMoment() &&
-				old.quietFor() >= HandoverQuiet && next.quietFor() >= HandoverQuiet {
+			if t.adaptivePrep && t.quietMoment != nil && t.quietMoment() && gateQuiet(old, next) {
 				slog.Info("switching sessions under the music gate",
 					"waited", time.Since(started).Round(time.Millisecond))
 				t.notePreppedSwap(time.Since(started))
@@ -404,4 +413,14 @@ func bigrams(s string) map[[2]rune]int {
 		out[[2]rune{rs[i], rs[i+1]}]++
 	}
 	return out
+}
+
+// gateQuiet reports whether a switch under the music gate is safe: the old
+// session has finished a sentence and both have been silent for
+// HandoverGateQuiet. The replacement need not be warm — nothing is being said
+// for it to warm up on — nor at a sentence end, since if it has said
+// anything, it has been silent long enough to have finished it.
+func gateQuiet(old, next *sessionHolder) bool {
+	return old.sentenceEnded.Load() &&
+		old.quietFor() >= HandoverGateQuiet && next.quietFor() >= HandoverGateQuiet
 }

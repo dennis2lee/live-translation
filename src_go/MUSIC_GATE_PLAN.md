@@ -122,7 +122,7 @@ The user asked for download-and-run-local, and download it is:
   model into the app (Apache 2.0 permits it; costs ~4–16 MB of bundle) — noted
   here so the decision is made by evidence, not by surprise at implementation
   time.
-- The private repo cannot host it: measured this session, its release assets
+- The repo, private at the time, could not host it: measured this session, its release assets
   and even its releases page answer 404 unauthenticated.
 
 ## 5. The gate itself

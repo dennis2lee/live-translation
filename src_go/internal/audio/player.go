@@ -353,6 +353,34 @@ func (p *Player) ResetSpeech() {
 	}
 }
 
+// Flush drops everything queued and not yet heard: the playback ring and the
+// audio the freeze gate is holding. The volume is applied as audio is
+// written, so up to PlayRingMS of speech already queued would otherwise go on
+// playing at the old volume after a mute — measured by the red team, 1.5 s of
+// 1.5 s. Muting flushes so the room hears nothing more; unmuting flushes so
+// what was queued silently while muted does not delay what comes next.
+func (p *Player) Flush() {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if p.freeze != nil {
+		p.freeze.Reset()
+	}
+	// The converter keeps a few tens of milliseconds in its filter, which
+	// the next write would push out ahead of whatever comes next. A fresh one
+	// holds nothing.
+	if p.resampler != nil {
+		if fresh, err := resample.NewStream(float64(p.sourceRate), float64(p.devRate)); err == nil {
+			p.resampler.Close()
+			p.resampler = fresh
+		} else {
+			slog.Warn("could not reset the output converter", "err", err)
+		}
+	}
+	if state := p.active.Load(); state != nil {
+		state.ring.Clear()
+	}
+}
+
 // MarkSessionStart tells the freeze gate that the next WriteSpeech is a new
 // session's first audio. See freezeGate.MarkSessionStart.
 func (p *Player) MarkSessionStart() {

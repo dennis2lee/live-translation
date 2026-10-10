@@ -27,6 +27,7 @@ type menuBar struct {
 	stop           *fyne.MenuItem
 	status         *fyne.MenuItem
 	saveTranscript *fyne.MenuItem
+	mute           *fyne.MenuItem
 	directionHint  *fyne.MenuItem
 	completeOnly   *fyne.MenuItem
 	fixedBox       *fyne.MenuItem
@@ -58,6 +59,9 @@ func newMenuBar(w *Window) *menuBar {
 	m.stop = fyne.NewMenuItem("Stop Translating", w.StopTranslation)
 	clear := fyne.NewMenuItem("Clear Captions", w.ClearCaptions)
 	toggle := fyne.NewMenuItem("Toggle Translation (0)", w.ToggleTranslation)
+	// The m key's menu twin, and its fallback wherever a key cannot get
+	// through — an input method holding the key, a focused widget.
+	m.mute = fyne.NewMenuItem("Mute Translation (m)", w.ToggleMute)
 
 	m.saveTranscript = fyne.NewMenuItem("Save Transcript", func() {
 		w.update(func(s *config.Settings) { s.SaveTranscript = !s.SaveTranscript })
@@ -70,7 +74,7 @@ func newMenuBar(w *Window) *menuBar {
 	translate := fyne.NewMenu("Translate",
 		m.start, m.stop,
 		fyne.NewMenuItemSeparator(),
-		clear, toggle,
+		clear, toggle, m.mute,
 		fyne.NewMenuItemSeparator(),
 		m.saveTranscript, openDir,
 		fyne.NewMenuItemSeparator(),
@@ -227,6 +231,7 @@ func (m *menuBar) sync() {
 	m.status.Label = "Status: " + label
 
 	m.saveTranscript.Checked = s.SaveTranscript
+	m.mute.Checked = w.muted
 	m.directionHint.Checked = s.ShowDirectionHint
 	m.completeOnly.Checked = s.CompletePhrasesOnly
 	m.fixedBox.Checked = s.FixedBox

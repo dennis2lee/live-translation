@@ -238,29 +238,6 @@ func TestThePulseDimsBothHalves(t *testing.T) {
 	}
 }
 
-// The key itself, not the method: every other test here calls
-// ToggleMute directly, so a binding that stopped reaching it would pass
-// them all. m, M and ㅡ (what the m key types under the Korean input source)
-// must each mute the sound and split the dot, and press again to undo.
-func TestTheMKeyMutesAndSplitsTheDot(t *testing.T) {
-	for _, key := range []rune{'m', 'M', 'ㅡ'} {
-		w, _ := speakingWindow(t)
-		w.startPlayer()
-		typed := w.win.Canvas().OnTypedRune()
-		if typed == nil {
-			t.Fatal("no key handler is bound")
-		}
-		typed(key)
-		if !w.muted || !w.view.Muted() {
-			t.Errorf("%q: muted %v, dot split %v", key, w.muted, w.view.Muted())
-		}
-		typed(key)
-		if w.muted || w.view.Muted() {
-			t.Errorf("%q pressed again: muted %v, dot split %v", key, w.muted, w.view.Muted())
-		}
-	}
-}
-
 // m mutes the translation whether or not speech is on: the room sees nothing
 // and the dot says so.
 func TestMuteWorksWithSpeechOff(t *testing.T) {
@@ -346,4 +323,72 @@ func TestTurningSpeechOffKeepsTheMute(t *testing.T) {
 	if got := lastVolume(t, factory.last()); got != 0 {
 		t.Errorf("speech turned back on while muted plays at %v", got)
 	}
+}
+
+// Muting flushes what the player has queued, both ways: nothing more is heard
+// after a mute, and nothing queued silently delays what comes after.
+func TestMuteFlushesThePlayer(t *testing.T) {
+	w, factory := speakingWindow(t)
+	w.startPlayer()
+	w.ToggleMute()
+	w.ToggleMute()
+	p := factory.last()
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if p.flushes != 2 {
+		t.Errorf("%d flushes for a mute and an unmute, want 2", p.flushes)
+	}
+}
+
+// The notices say what happened, in the words the room will read.
+func TestMuteNotices(t *testing.T) {
+	w := newTestWindow(t)
+	w.ToggleMute()
+	if w.notice != "Translation muted — press m to unmute" {
+		t.Errorf("mute notice %q", w.notice)
+	}
+	w.ToggleMute()
+	if w.notice != "Translation unmuted" {
+		t.Errorf("unmute notice %q", w.notice)
+	}
+}
+
+// fakeVoice records what the window asks a local voice to do.
+type fakeVoice struct {
+	said   []string
+	clears int
+}
+
+func (f *fakeVoice) Say(text string) { f.said = append(f.said, text) }
+func (f *fakeVoice) SetVoice(string) {}
+func (f *fakeVoice) Voice() string   { return "" }
+func (f *fakeVoice) Clear()          { f.clears++ }
+func (f *fakeVoice) Stop()           {}
+
+// Nothing said while muted is spoken — not during the mute, and not on the
+// unmute, when clearing the screen settles the half-sentence said while muted
+// into a line (the red team's fourth round: 5.8 s of muted speech played).
+// The voice is also cleared both ways, which abandons the line in flight.
+func TestALocalVoiceSpeaksNothingFromTheMute(t *testing.T) {
+	w := newTestWindow(t)
+	v := &fakeVoice{}
+	w.voice = v
+	w.ToggleMute()
+	w.onTargetText(" This was said. While muted, and")
+	w.onTargetText(" half of this one")
+	w.ToggleMute()
+	if len(v.said) != 0 {
+		t.Errorf("spoke %q from the muted stretch", v.said)
+	}
+	if v.clears != 2 {
+		t.Errorf("%d voice clears for a mute and an unmute, want 2", v.clears)
+	}
+	w.onTargetText(" After the mute.")
+	w.recordNewLines()
+	w.buffer.Flush()
+	w.recordNewLines()
+	if len(v.said) == 0 {
+		t.Error("nothing was spoken after unmuting")
+	}
+	w.voice = nil
 }

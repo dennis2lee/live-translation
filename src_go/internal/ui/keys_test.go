@@ -23,8 +23,15 @@ func press(t *testing.T, w *Window, r rune) {
 	typed(r)
 }
 
-// Every single-key binding, each in its English and Korean-layout form where
-// they differ, checked by its effect.
+// pressKey delivers a physical key the way the driver does: the key-down
+// handler, then the key-up.
+func pressKey(t *testing.T, w *Window, k fyne.KeyName) {
+	t.Helper()
+	w.win.Canvas().OnTypedKey()(&fyne.KeyEvent{Name: k})
+	w.keyUp(&fyne.KeyEvent{Name: k})
+}
+
+// Every single-key binding, checked by its effect.
 func TestEveryKeyDoesItsJob(t *testing.T) {
 	t.Run("0 starts translating (and says why it cannot, with no key)", func(t *testing.T) {
 		w := newTestWindow(t)
@@ -67,32 +74,28 @@ func TestEveryKeyDoesItsJob(t *testing.T) {
 			t.Error("9 twice did not toggle back")
 		}
 	})
-	for _, key := range []rune{'f', 'F', 'ㄹ'} {
-		t.Run(string(key)+" toggles full screen", func(t *testing.T) {
-			w := newTestWindow(t)
-			press(t, w, key)
-			if !w.win.FullScreen() || !w.settings.Fullscreen {
-				t.Errorf("window %v, setting %v", w.win.FullScreen(), w.settings.Fullscreen)
-			}
-			press(t, w, key)
-			if w.win.FullScreen() || w.settings.Fullscreen {
-				t.Errorf("pressed again: window %v, setting %v", w.win.FullScreen(), w.settings.Fullscreen)
-			}
-		})
-	}
-	for _, key := range []rune{'m', 'M', 'ㅡ'} {
-		t.Run(string(key)+" mutes and splits the dot", func(t *testing.T) {
-			w, _ := speakingWindow(t)
-			w.startPlayer()
-			press(t, w, key)
-			if !w.muted || !w.view.Muted() {
-				t.Errorf("muted %v, dot %v", w.muted, w.view.Muted())
-			}
-		})
-	}
+	t.Run("f toggles full screen", func(t *testing.T) {
+		w := newTestWindow(t)
+		pressKey(t, w, fyne.KeyF)
+		if !w.win.FullScreen() || !w.settings.Fullscreen {
+			t.Errorf("window %v, setting %v", w.win.FullScreen(), w.settings.Fullscreen)
+		}
+		pressKey(t, w, fyne.KeyF)
+		if w.win.FullScreen() || w.settings.Fullscreen {
+			t.Errorf("pressed again: window %v, setting %v", w.win.FullScreen(), w.settings.Fullscreen)
+		}
+	})
+	t.Run("m mutes and splits the dot", func(t *testing.T) {
+		w, _ := speakingWindow(t)
+		w.startPlayer()
+		pressKey(t, w, fyne.KeyM)
+		if !w.muted || !w.view.Muted() {
+			t.Errorf("muted %v, dot %v", w.muted, w.view.Muted())
+		}
+	})
 	t.Run("Escape leaves full screen", func(t *testing.T) {
 		w := newTestWindow(t)
-		press(t, w, 'f')
+		pressKey(t, w, fyne.KeyF)
 		w.win.Canvas().OnTypedKey()(&fyne.KeyEvent{Name: fyne.KeyEscape})
 		if w.win.FullScreen() {
 			t.Error("Escape did not leave full screen")
@@ -105,7 +108,9 @@ func TestEveryKeyDoesItsJob(t *testing.T) {
 func TestUnboundKeysDoNothing(t *testing.T) {
 	w := newTestWindow(t)
 	before := w.settings
-	for _, r := range []rune{'3', '8', 'a', 'z', 'q', 'ㅂ', ' ', 'ㅁ'} {
+	// m, f and their jamo arrive as runes too, and must not act a second time:
+	// those two keys are bound by physical key.
+	for _, r := range []rune{'3', '8', 'a', 'z', 'q', 'ㅂ', ' ', 'ㅁ', 'm', 'M', 'ㅡ', 'f', 'F', 'ㄹ'} {
 		press(t, w, r)
 	}
 	if !w.settings.Equal(before) || w.state != translator.StateIdle || w.win.FullScreen() {
@@ -152,8 +157,52 @@ func TestKeysStillWorkAfterPreferences(t *testing.T) {
 	if f := w.win.Canvas().Focused(); f != nil {
 		t.Fatalf("%T still has focus after Preferences closed — every key goes to it", f)
 	}
-	press(t, w, 'm')
+	pressKey(t, w, fyne.KeyM)
 	if !w.view.Muted() {
 		t.Error("m did nothing after Preferences")
+	}
+}
+
+// Under a Korean input source the m key's character is a jamo the input
+// method holds until the next key, so the binding is by physical key: one
+// press acts at once, whatever the input source.
+func TestMAndFAreBoundByPhysicalKey(t *testing.T) {
+	w := newTestWindow(t)
+	w.win.Canvas().OnTypedKey()(&fyne.KeyEvent{Name: fyne.KeyM})
+	if !w.muted {
+		t.Error("the m key-down did not mute")
+	}
+}
+
+// On Windows an input method can swallow the key-down entirely; the key-up
+// alone must then do the job — and only then, never as a second toggle.
+func TestAKeyUpActsOnlyWhenTheKeyDownWasSwallowed(t *testing.T) {
+	w := newTestWindow(t)
+	up := w.keyUp
+	up(&fyne.KeyEvent{Name: fyne.KeyM}) // no key-down: an IME took it
+	if !w.muted {
+		t.Fatal("a lone key-up did not mute")
+	}
+	pressKey(t, w, fyne.KeyM) // down and up: one toggle, not two
+	if w.muted {
+		t.Error("a full press toggled twice, or not at all")
+	}
+	up(&fyne.KeyEvent{Name: fyne.KeyF})
+	if !w.win.FullScreen() {
+		t.Error("a lone f key-up did not toggle full screen")
+	}
+}
+
+// The menu item is the key's twin, ticked while muted.
+func TestTheMuteMenuItem(t *testing.T) {
+	w := newTestWindow(t)
+	item := find(t, w, "Mute Translation (m)")
+	item.Action()
+	if !w.muted || !item.Checked {
+		t.Errorf("muted %v, ticked %v", w.muted, item.Checked)
+	}
+	item.Action()
+	if w.muted || item.Checked {
+		t.Errorf("unmuted: muted %v, ticked %v", w.muted, item.Checked)
 	}
 }

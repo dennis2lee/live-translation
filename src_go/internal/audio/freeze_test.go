@@ -1077,3 +1077,24 @@ func TestPitchStaysInsideTheSearch(t *testing.T) {
 		}
 	}
 }
+
+// Flush empties what would otherwise still play: the queued ring and the
+// freeze gate's held opening. The gain is applied as audio is written, so
+// without this a mute let up to 2 s of queued speech play on.
+func TestFlushDropsWhatIsQueued(t *testing.T) {
+	p, st := runningPlayer(t)
+	p.MarkSessionStart()
+	p.WriteSpeech(toPCM(natural(0.6))) // part of it held by the gate
+	p.Write(toPCM(natural(0.5)))
+	if st.ring.Available() == 0 || len(p.freeze.buf) == 0 {
+		t.Fatal("setup: nothing queued or held")
+	}
+	p.Flush()
+	if n := st.ring.Available(); n != 0 {
+		t.Errorf("%d bytes still queued after Flush", n)
+	}
+	p.WriteSpeech(toPCM(silence(2)))
+	if rms := ringRMS(st); rms > 1e-4 {
+		t.Errorf("held audio came out after Flush (RMS %.4f)", rms)
+	}
+}

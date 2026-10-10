@@ -40,6 +40,10 @@ type Speaker struct {
 	spoken  atomic.Int64
 	dropped atomic.Int64
 	failed  atomic.Int64
+
+	// gen counts Clears. A line remembers the generation it was taken in,
+	// and stops being sent the moment Clear moves it on.
+	gen atomic.Int64
 }
 
 const (
@@ -115,11 +119,15 @@ func (s *Speaker) Voice() string {
 	return s.voice
 }
 
-// Clear drops everything queued but not yet spoken. Used when the session
-// stops, so a stale sentence does not arrive after the captions have gone.
+// Clear drops everything queued, and abandons the line being spoken: no
+// block of it is sent after Clear returns. Used when the session stops, so a
+// stale sentence does not arrive after the captions have gone, and when the
+// translation is muted — where finishing the line in flight would be up to
+// several seconds of speech the room was meant not to hear.
 func (s *Speaker) Clear() {
 	s.mu.Lock()
 	s.queue = nil
+	s.gen.Add(1)
 	s.mu.Unlock()
 }
 
@@ -148,7 +156,7 @@ func (s *Speaker) Stats() (spoken, dropped, failed int64) {
 func (s *Speaker) run(ctx context.Context) {
 	defer close(s.done)
 	for {
-		text, voice, ok := s.next()
+		text, voice, gen, ok := s.next()
 		if !ok {
 			select {
 			case <-ctx.Done():
@@ -168,24 +176,26 @@ func (s *Speaker) run(ctx context.Context) {
 			slog.Warn("could not speak the translation", "voice", voice, "err", err)
 			continue
 		}
-		if s.emit(ctx, pcm) {
+		if s.emit(ctx, pcm, gen) {
 			s.spoken.Add(1)
 		}
 	}
 }
 
-func (s *Speaker) next() (text, voice string, ok bool) {
+func (s *Speaker) next() (text, voice string, gen int64, ok bool) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if len(s.queue) == 0 {
-		return "", "", false
+		return "", "", 0, false
 	}
 	text, s.queue = s.queue[0], s.queue[1:]
-	return text, s.voice, true
+	return text, s.voice, s.gen.Load(), true
 }
 
 // emit paces one utterance into the player and reports whether it finished.
-func (s *Speaker) emit(ctx context.Context, pcm []byte) bool {
+//
+// gen is the generation the line was taken in; a Clear since then ends it.
+func (s *Speaker) emit(ctx context.Context, pcm []byte, gen int64) bool {
 	blockBytes := blockMS * Rate / 1000 * 2
 	if blockBytes <= 0 || len(pcm) == 0 {
 		return false
@@ -193,6 +203,9 @@ func (s *Speaker) emit(ctx context.Context, pcm []byte) bool {
 	start := time.Now()
 	sent := 0
 	for off := 0; off < len(pcm); off += blockBytes {
+		if s.gen.Load() != gen {
+			return false
+		}
 		end := min(off+blockBytes, len(pcm))
 		s.out(pcm[off:end])
 		sent += end - off

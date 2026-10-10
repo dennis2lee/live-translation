@@ -55,10 +55,12 @@ func startWarm(t *testing.T, prep bool, extra ...*fakeSession) *warmRun {
 func startWarmWith(t *testing.T, configure func(*Options), extra ...*fakeSession) *warmRun {
 	t.Helper()
 	fastTiming(t)
-	q, w, r, p := HandoverQuiet, HandoverWarm, HandoverReserve, handoverPoll
-	HandoverQuiet, HandoverWarm, HandoverReserve, handoverPoll =
-		30*time.Millisecond, 40*time.Millisecond, 20*time.Millisecond, time.Millisecond
-	t.Cleanup(func() { HandoverQuiet, HandoverWarm, HandoverReserve, handoverPoll = q, w, r, p })
+	q, w, r, p, g := HandoverQuiet, HandoverWarm, HandoverReserve, handoverPoll, HandoverGateQuiet
+	HandoverQuiet, HandoverWarm, HandoverReserve, handoverPoll, HandoverGateQuiet =
+		30*time.Millisecond, 40*time.Millisecond, 20*time.Millisecond, time.Millisecond, 60*time.Millisecond
+	t.Cleanup(func() {
+		HandoverQuiet, HandoverWarm, HandoverReserve, handoverPoll, HandoverGateQuiet = q, w, r, p, g
+	})
 
 	run := &warmRun{collect: &collector{}, first: newFakeSession(nil), second: newFakeSession(nil), extra: extra}
 	run.opener = &recordingOpener{build: func(attempt int) (liveSession, error) {
@@ -835,5 +837,100 @@ func TestASlowOpenComesOutOfTheBudget(t *testing.T) {
 	waitFor(t, "the forced switch", func() bool { return r.reconnects() == 1 })
 	if d := time.Since(warned); d > 520*time.Millisecond {
 		t.Errorf("switched %v after the warning; the grace allowed %v", d, 350*time.Millisecond)
+	}
+}
+
+// voicedFor is a blob of continuous voice ms long, at 24 kHz.
+func voicedFor(ms int) []byte {
+	n := 24 * ms
+	b := make([]byte, 0, 2*n)
+	for i := range n {
+		v := int16(8000)
+		if i%2 == 1 {
+			v = -8000
+		}
+		b = binary.LittleEndian.AppendUint16(b, uint16(v))
+	}
+	return b
+}
+
+// The music-gate switch at the rate audio really arrives: 200 ms of voice
+// every 210 ms, the old session mid-sentence. With the real HandoverGateQuiet
+// it must hold until the sentence is finished and a second has passed — the
+// red team's reproduction switched 0.43 s after the gate closed, 3 of 3.
+func TestTheGateHoldsAtTheRealArrivalRate(t *testing.T) {
+	r := startWarm(t, true)
+	HandoverGateQuiet = time.Second // the shipped value, not startWarm's
+	r.warn(10 * time.Second)
+	waitFor(t, "the replacement to open", func() bool { return r.opener.attempts() == 2 })
+	r.quiet.Store(true)
+	stop := make(chan struct{})
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		tick := time.NewTicker(210 * time.Millisecond)
+		defer tick.Stop()
+		for {
+			select {
+			case <-stop:
+				return
+			case <-tick.C:
+				// Not push: a wrong switch closes this session, and a send
+				// to it would hang the test instead of failing it.
+				select {
+				case r.first.next <- Message{Audio: voicedFor(200), TargetText: " and"}:
+				case <-r.first.done:
+					return
+				}
+			}
+		}
+	}()
+	time.Sleep(1500 * time.Millisecond)
+	close(stop)
+	<-done
+	if r.reconnects() != 0 {
+		t.Fatal("switched under the gate while the old session was mid-sentence")
+	}
+	r.first.push(Message{Audio: voicedFor(200), TargetText: " that is all."})
+	finished := time.Now()
+	deadline := time.Now().Add(3 * time.Second)
+	for r.reconnects() == 0 && time.Now().Before(deadline) {
+		time.Sleep(10 * time.Millisecond)
+	}
+	if r.reconnects() != 1 {
+		t.Fatal("never switched once the sentence was over and a second had passed")
+	}
+	if d := time.Since(finished); d < 900*time.Millisecond {
+		t.Errorf("switched %v after the sentence ended, before HandoverGateQuiet", d)
+	}
+}
+
+// Under the gate the replacement must be quiet too: if it has been saying
+// something, it is the tail of the speech before the song, and the room
+// would hear it twice.
+func TestTheGateWaitsForTheReplacementToo(t *testing.T) {
+	q := HandoverGateQuiet
+	HandoverGateQuiet = time.Second
+	t.Cleanup(func() { HandoverGateQuiet = q })
+	session := func(quiet time.Duration, captions string) *sessionHolder {
+		h := newSessionHolder()
+		h.noteText(captions)
+		h.sentenceEnded.Store(endsSentence(captions))
+		h.lastVoice.Store(time.Now().Add(-quiet).UnixNano())
+		return h
+	}
+	for _, c := range []struct {
+		name      string
+		old, next *sessionHolder
+		want      bool
+	}{
+		{"both long quiet, old at a sentence end", session(1200*time.Millisecond, " done."), session(1200*time.Millisecond, ""), true},
+		{"old mid-sentence", session(1200*time.Millisecond, " and"), session(1200*time.Millisecond, ""), false},
+		{"old quiet only a blob gap", session(300*time.Millisecond, " done."), session(1200*time.Millisecond, ""), false},
+		{"replacement still talking", session(1200*time.Millisecond, " done."), session(300*time.Millisecond, " the tail"), false},
+	} {
+		if got := gateQuiet(c.old, c.next); got != c.want {
+			t.Errorf("%s: %v, want %v", c.name, got, c.want)
+		}
 	}
 }
