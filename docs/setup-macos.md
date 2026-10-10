@@ -141,7 +141,8 @@ You can also change the input later from **Settings → Audio Input**.
 
 **Translate → Clear Captions** empties the caption box.
 
-The keys work with the Korean input source too.
+The keys work with the Korean input source too. If **m** ever does not
+respond, **Translate → Mute Translation** does the same.
 
 **The status dot**
 

@@ -152,7 +152,9 @@ You can also change the input later from **Settings → Audio Input**.
 | **m** | Mute the translation — captions and speech — and again to unmute |
 | **Ctrl+,** | Preferences |
 
-The keys work with the Korean input method too.
+The keys should work with the Korean input method too, but this has not been
+checked on Windows yet. If **m** does not respond, use **Translate → Mute
+Translation**, or switch the input method to English with the 한/영 key.
 
 > **In full screen the menu bar is hidden.** Press **f** to come back out.
 
