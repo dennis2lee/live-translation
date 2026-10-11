@@ -148,6 +148,10 @@ type Player struct {
 	// the shape it removes.
 	freeze *freezeGate
 
+	// arrivalSilence is how long the silence arriving right now has run, in
+	// bytes at the device format, across writes. See shedArrivingSilence.
+	arrivalSilence int
+
 	// Scratch, owned by Write once running.
 	mono        []float32
 	interleaved []byte
@@ -453,7 +457,66 @@ func (p *Player) write(pcm []byte, gated bool) {
 			p.interleaved = binary.LittleEndian.AppendUint16(p.interleaved, s)
 		}
 	}
-	state.ring.Write(p.interleaved)
+	p.queue(state, p.interleaved)
+}
+
+// queue puts device-format audio into the ring. data may be compacted in
+// place.
+func (p *Player) queue(state *playState, data []byte) {
+	if state.trimAbove > 0 {
+		data = p.shedArrivingSilence(state, data)
+	}
+	state.ring.Write(data)
+}
+
+// shedArrivingSilence drops silence on its way into a queue that is already
+// long, keeping the first PlayPauseKeepMS of every pause.
+//
+// skipSilentHead keeps the queue short from the other end, but it sheds at
+// most one chunk per callback, so it can only drain twice as fast as real
+// time, and only while silence sits at the head. OpenAI's translations
+// endpoint outruns that: 33 s of input brought back 63 s of audio inside
+// 33 s, most of the excess exact digital zero, sent in bursts. The burst
+// overflowed the ring before the head trimming could reach it, and overflow
+// drops whatever is about to play — 0.45 s of 9.6 s of speech, replayed from
+// a real recording. Dropping the silence as it arrives keeps the room for
+// speech. The rule is the head trimming's: the same threshold, the same
+// level, and the start of every pause kept.
+func (p *Player) shedArrivingSilence(state *playState, data []byte) []byte {
+	chunk := state.blockBytes * p.devRate * PlayCallbackMS / 1000
+	if chunk <= 0 || chunk%2 != 0 {
+		return data
+	}
+	peak := int32(state.silencePeak * math.Float64frombits(p.gain.Load()))
+	queued := state.ring.Available()
+	kept, shed := 0, 0
+	for start := 0; start < len(data); start += chunk {
+		block := data[start:min(start+chunk, len(data))]
+		if !silentPCM(block, peak) {
+			p.arrivalSilence = 0
+		} else {
+			p.arrivalSilence += len(block)
+			if p.arrivalSilence > state.pauseKeep && queued+kept >= state.trimAbove {
+				shed += len(block)
+				continue
+			}
+		}
+		kept += copy(data[kept:], block)
+	}
+	if shed > 0 {
+		state.ring.addTrimmed(shed)
+	}
+	return data[:kept]
+}
+
+// silentPCM reports whether every 16-bit sample is within ±peak.
+func silentPCM(b []byte, peak int32) bool {
+	for i := 0; i+1 < len(b); i += 2 {
+		if v := int32(int16(binary.LittleEndian.Uint16(b[i:]))); v > peak || v < -peak {
+			return false
+		}
+	}
+	return true
 }
 
 // Buffered is how much audio is waiting, in bytes. For tests and the log.

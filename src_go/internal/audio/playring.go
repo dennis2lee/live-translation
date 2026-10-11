@@ -151,11 +151,20 @@ func (r *playRing) Stats() (starved, starvedBytes, dropped int64) {
 	return r.starved, r.starvedBytes, r.dropped
 }
 
-// Trimmed is how much silence skipSilentHead has discarded, in bytes.
+// Trimmed is how much silence has been discarded to keep the queue short —
+// by skipSilentHead, and on arrival by Player.shedArrivingSilence — in bytes.
 func (r *playRing) Trimmed() int64 {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	return r.trimmed
+}
+
+// addTrimmed counts silence shed before it reached the ring, so Trimmed
+// reports all of it.
+func (r *playRing) addTrimmed(n int) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.trimmed += int64(n)
 }
 
 // skipSilentHead discards the oldest queued chunk if it is silence and the

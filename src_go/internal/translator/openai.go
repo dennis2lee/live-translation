@@ -38,12 +38,16 @@ const (
 	// PCM16. The capture path produces 16 kHz for Gemini, so each session
 	// converts.
 	openAISendRate = 24000
-	// openAIReceiveRate is what it sends back, which the documentation does
-	// not state. Measured 2026-10-10: every delta was 19 200 bytes, the
-	// "200 ms chunks" the guide mentions, and 146 of them arrived over 31 s
-	// of a 28 s input — 48 kHz mono. The session converts to the 24 kHz the
-	// player and the freeze gate are built for.
-	openAIReceiveRate = 48000
+	// What it sends back is 24 kHz mono PCM16, audio.TranslatedRate, so the
+	// deltas go to the player as they arrive. This was once read as 48 kHz
+	// from arrival pacing — 19 200-byte deltas arriving at about the rate a
+	// 48 kHz stream would — and converted down, which played the speech twice
+	// as fast and an octave high. Pacing cannot tell a rate: the server sends
+	// faster than real time (33 s of input brought back 63 s of 24 kHz audio,
+	// much of it near-silent, inside 33 s). Settled 2026-10-11 by ear, and by
+	// pitch: read as 24 kHz the voice sits at 171–202 Hz and speaks at a human
+	// pace; read as 48 kHz it sits at 348 Hz and runs at about 536 words a
+	// minute.
 )
 
 // These are variables so the tests can point them at a local server and
@@ -73,10 +77,6 @@ type openAISession struct {
 	resampler resample.Stream
 	mono      []float32
 	pcm       []byte
-
-	// down converts what arrives to audio.TranslatedRate. Only the read
-	// goroutine touches it, until Close.
-	down resample.Stream
 
 	msgs    chan openAIResult
 	goAway  chan struct{}
@@ -124,16 +124,9 @@ func openOpenAI(ctx context.Context, apiKey string, cfg SessionConfig) (*openAIS
 		conn.Close()
 		return nil, err
 	}
-	down, err := resample.NewStream(openAIReceiveRate, audio.TranslatedRate)
-	if err != nil {
-		rs.Close()
-		conn.Close()
-		return nil, err
-	}
 	s := &openAISession{
 		conn:       conn,
 		resampler:  rs,
-		down:       down,
 		msgs:       make(chan openAIResult, 64),
 		goAway:     make(chan struct{}),
 		done:       make(chan struct{}),
@@ -254,7 +247,6 @@ func (s *openAISession) Receive() (Message, error) {
 func (s *openAISession) readLoop() {
 	defer close(s.readerDone)
 	defer close(s.msgs)
-	defer s.down.Close()
 	var lastErr error
 	for {
 		_, data, err := s.conn.ReadMessage()
@@ -281,35 +273,8 @@ func (s *openAISession) readLoop() {
 		if !ok {
 			continue
 		}
-		if len(msg.Audio) > 0 {
-			if msg.Audio, err = s.downsample(msg.Audio); err != nil {
-				slog.Warn("could not convert the translated audio", "err", err)
-				continue
-			}
-			if len(msg.Audio) == 0 {
-				continue
-			}
-		}
 		s.msgs <- openAIResult{msg: msg}
 	}
-}
-
-// downsample converts one 48 kHz delta to 24 kHz PCM16.
-func (s *openAISession) downsample(pcm []byte) ([]byte, error) {
-	in := make([]float32, len(pcm)/2)
-	for i := range in {
-		in[i] = float32(int16(binary.LittleEndian.Uint16(pcm[2*i:]))) / 32768
-	}
-	out, err := s.down.Process(in)
-	if err != nil {
-		return nil, err
-	}
-	b := make([]byte, 0, 2*len(out))
-	for _, v := range out {
-		x := math.Round(float64(v) * 32767)
-		b = binary.LittleEndian.AppendUint16(b, uint16(int16(max(-32768, min(32767, x)))))
-	}
-	return b, nil
 }
 
 // Close ends the session. Safe to call more than once.

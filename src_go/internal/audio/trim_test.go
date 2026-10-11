@@ -221,6 +221,55 @@ func TestADriftingStreamWithBurstsLosesNoSpeech(t *testing.T) {
 	}
 }
 
+// OpenAI's shape: speech at real time, and between sentences seconds of exact
+// zero sent at once. A burst bigger than the ring overflowed it before the
+// head trimming, one chunk per callback, could reach it — and overflow drops
+// the speech about to play. Silence shed on arrival leaves that room free.
+func TestASilenceBurstOverflowsNothing(t *testing.T) {
+	const bps = TranslatedRate * BytesPerSample
+	sentence := samples(fill(TranslatedRate*3/2, 6000)...) // 1.5 s of speech
+	burst := samples(fill(TranslatedRate*3, 0)...)         // 3 s of zero
+	var pcm []byte
+	var arrivals []arrival
+	at := 0.0
+	for range 10 {
+		for i := 0; i < len(sentence); i += bps / 4 { // 250 ms blobs, real time
+			arrivals = append(arrivals, arrival{at, 1, bps / 4})
+			at += 0.25
+		}
+		pcm = append(pcm, sentence...)
+		arrivals = append(arrivals, arrival{at, 1, len(burst)}) // all at once
+		pcm = append(pcm, burst...)
+	}
+	audio := map[int][]byte{1: pcm}
+
+	if r := replay(arrivals, audio, 0); r.cuts == 0 {
+		t.Fatal("setup: with trimming off the bursts never overflowed — it tests nothing")
+	}
+	r := replay(arrivals, audio, PlayTrimAboveMS)
+	if r.cuts != 0 || r.lost != 0 {
+		t.Errorf("%d cuts, %.2f s lost to overflow", r.cuts, r.lost)
+	}
+	if r.trimmed == 0 {
+		t.Error("nothing was shed, so the bursts were never long enough to matter")
+	}
+}
+
+// Shedding on arrival keeps the start of every pause, so words either side
+// of a short gap are not run together even when the queue is long.
+func TestArrivingSilenceKeepsTheStartOfAPause(t *testing.T) {
+	p, st := trimmingPlayer(2) // the queue counts as long from the start
+	st.pauseKeep = TranslatedRate * BytesPerSample * PlayPauseKeepMS / 1000
+	st.ring = newPlayRing(4 * TranslatedRate * BytesPerSample)
+	word := samples(fill(TranslatedRate/5, 6000)...)
+	gap := samples(fill(TranslatedRate, 0)...) // 1 s pause
+	p.queue(st, append(append(append([]byte(nil), word...), gap...), word...))
+	kept := st.ring.Available() - 2*len(word)
+	if kept < st.pauseKeep || kept > st.pauseKeep+TranslatedRate*BytesPerSample*PlayCallbackMS/1000 {
+		t.Errorf("kept %d bytes of a 1 s pause, want the first %d", kept, st.pauseKeep)
+	}
+}
+
 // --- the end of every pause is kept ----------------------------------------
 
 // The chunk can go only if enough silence follows it to stay behind. A gap

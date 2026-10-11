@@ -94,7 +94,9 @@ func replay(arrivals []arrival, audio map[int][]byte, trimMS int) replayResult {
 			a := arrivals[i]
 			src := audio[a.session]
 			end := min(offset[a.session]+a.bytes, len(src))
-			st.ring.Write(src[offset[a.session]:end])
+			// Through the player's own entry to the ring, on a copy: it
+			// compacts in place, and src is the recording.
+			p.queue(st, append([]byte(nil), src[offset[a.session]:end]...))
 			offset[a.session] = end
 			if _, _, d := st.ring.Stats(); d > lastDropped {
 				res.cuts++

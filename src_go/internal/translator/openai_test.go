@@ -217,30 +217,28 @@ func zeroCrossingHz(pcm []byte, rate int) float64 {
 	return float64(crossings) / 2 / (float64(n-start) / float64(rate))
 }
 
-// The model sends 48 kHz (measured; the documentation does not say). The
-// player is built for 24 kHz, so audio arriving at the wrong rate would play
-// an octave low and twice as long.
+// The model sends 24 kHz, the rate the player is built for, so a delta must
+// reach it untouched. It was once converted down from an assumed 48 kHz,
+// which played the speech twice as fast and an octave high — so this pins
+// both the length and the pitch.
 func TestOpenAIAudioComesBackAt24kHz(t *testing.T) {
 	f := newFakeOpenAI(t)
 	s := openFake(t, SessionConfig{})
-	// 48 kHz, literally: measured 2026-10-10 (19 200-byte deltas, 146 over
-	// 31 s). OpenAI's documentation says 24 kHz, so the constant is the one
-	// most likely to be "corrected" — which would play an octave low.
-	in := tone(48000, 48000, 300) // one second
+	in := tone(24000, 24000, 300) // one second
 	for i := 0; i < len(in); i += 19200 {
 		f.send(map[string]any{"type": "session.output_audio.delta",
 			"delta": base64.StdEncoding.EncodeToString(in[i:min(i+19200, len(in))])})
 	}
 	var got []byte
-	for len(got) < 2*24000*9/10 {
+	for len(got) < len(in) {
 		msg, err := s.Receive()
 		if err != nil {
 			t.Fatal(err)
 		}
 		got = append(got, msg.Audio...)
 	}
-	if n := len(got) / 2; n > 24000 {
-		t.Errorf("%d samples for one second, want at most 24000", n)
+	if n := len(got) / 2; n != 24000 {
+		t.Errorf("%d samples for one second, want 24000", n)
 	}
 	if hz := zeroCrossingHz(got, 24000); math.Abs(hz-300) > 5 {
 		t.Errorf("the tone came back at %.1f Hz, want 300", hz)
