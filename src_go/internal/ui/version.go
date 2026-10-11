@@ -8,7 +8,7 @@ package ui
 // cutover (PLAN §13) the Go build *is* LiveCap, so the name goes back.
 const (
 	AppName     = "LiveCap"
-	Version     = "1.9.2"
+	Version     = "1.10.0"
 	Author      = "Pyeongwoo Lee"
 	AuthorEmail = "dennis2.lee@gmail.com"
 )
