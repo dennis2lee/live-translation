@@ -349,9 +349,13 @@ type Translator struct {
 	adaptivePrep bool
 	quietMoment  func() bool
 	warmHandover bool
-	forceSwap    time.Duration
-	cb           Callbacks
-	open         sessionOpener
+	// proactive starts a warm handover ProactiveHandoverAfter into each
+	// session instead of waiting for go_away. Gemini only; see
+	// ProactiveHandoverAfter.
+	proactive bool
+	forceSwap time.Duration
+	cb        Callbacks
+	open      sessionOpener
 
 	mu     sync.Mutex
 	state  State
@@ -459,6 +463,23 @@ func (h *sessionHolder) graceLeft() time.Duration {
 	return left - time.Since(at)
 }
 
+// graceStated reports whether a warning has arrived that said how long was
+// left. A missing time_left reaches us as zero.
+func (h *sessionHolder) graceStated() bool {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	return !h.goAwayAt.IsZero() && h.goAwayLeft > 0
+}
+
+// age is how long this session has been open; zero before it opened.
+func (h *sessionHolder) age() time.Duration {
+	at := h.openedAt.Load()
+	if at == 0 {
+		return 0
+	}
+	return time.Duration(time.Now().UnixNano() - at)
+}
+
 func (h *sessionHolder) setErr(err error) {
 	h.mu.Lock()
 	h.err = err
@@ -555,10 +576,13 @@ func New(opts Options) (*Translator, error) {
 		adaptivePrep: opts.AdaptiveSessionPrep,
 		quietMoment:  opts.QuietMoment,
 		warmHandover: opts.WarmHandover,
-		forceSwap:    opts.ForceSwapAfter,
-		cb:           opts.Callbacks,
-		open:         open,
-		state:        StateIdle,
+		// Not with ForceSwapAfter: that knob measures handovers on demand,
+		// and an early wait would hold its forced warning back.
+		proactive: opts.WarmHandover && opts.Provider != ProviderOpenAI && opts.ForceSwapAfter == 0,
+		forceSwap: opts.ForceSwapAfter,
+		cb:        opts.Callbacks,
+		open:      open,
+		state:     StateIdle,
 	}, nil
 }
 
@@ -803,24 +827,56 @@ func (t *Translator) supervise(ctx context.Context) {
 
 		t.setState(StateRunning, "")
 
-		// Keep translating on this session until it warns or drops. The old
-		// session stays alive past go_away, until the replacement is ready.
+		// Keep translating on this session until it warns or drops, or, on
+		// Gemini, until an early handover has a warm replacement ready. The
+		// old session stays alive past go_away, until the replacement is
+		// ready.
 		var forced <-chan time.Time
 		var forceTimer *time.Timer
 		if t.forceSwap > 0 {
 			forceTimer = time.NewTimer(t.forceSwap)
 			forced = forceTimer.C
 		}
-		select {
-		case <-holder.goAway:
-		case <-forced:
-			slog.Info("forcing a swap, as asked", "after", t.forceSwap)
-			holder.markGoAway(50 * time.Second)
-		case <-holder.closed:
-		case <-ctx.Done():
+		// Or, on Gemini, start the handover early. Timed from when the
+		// session really opened: a warm replacement opened well before it
+		// was switched to, and the server's clock started then.
+		var early <-chan time.Time
+		var earlyTimer *time.Timer
+		if t.proactive {
+			earlyTimer = time.NewTimer(ProactiveHandoverAfter - holder.age())
+			early = earlyTimer.C
+		}
+	waiting:
+		for {
+			select {
+			case <-holder.goAway:
+			case <-forced:
+				slog.Info("forcing a swap, as asked", "after", t.forceSwap)
+				holder.markGoAway(50 * time.Second)
+			case <-early:
+				early = nil
+				if holder.isClosed() || holder.sawGoAway() {
+					break waiting
+				}
+				slog.Info("starting the handover before any warning", "session_age", holder.age().Round(time.Second))
+				if warmNext = t.handOver(ctx, holder); warmNext != nil || ctx.Err() != nil {
+					break waiting
+				}
+				// The replacement would not open or died warming. This
+				// session is still healthy, so keep it, and try again when
+				// the server warns.
+				slog.Info("the early handover did not happen — waiting for the server's warning")
+				continue
+			case <-holder.closed:
+			case <-ctx.Done():
+			}
+			break
 		}
 		if forceTimer != nil {
 			forceTimer.Stop()
+		}
+		if earlyTimer != nil {
+			earlyTimer.Stop()
 		}
 		if ctx.Err() != nil {
 			return
@@ -830,7 +886,7 @@ func (t *Translator) supervise(ctx context.Context) {
 		// cannot be heard. A warm handover opens the replacement now and
 		// waits for a pause; otherwise adaptive prep may wait for a song.
 		// Either returns at once unless everything lines up.
-		if t.warmHandover && holder.sawGoAway() && !holder.isClosed() {
+		if warmNext == nil && t.warmHandover && holder.sawGoAway() && !holder.isClosed() {
 			warmNext = t.handOver(ctx, holder)
 		}
 		if warmNext == nil {

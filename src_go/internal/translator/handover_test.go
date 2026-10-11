@@ -948,3 +948,194 @@ func TestABlankFragmentKeepsTheSentenceEnd(t *testing.T) {
 		t.Error("a blank fragment undid the sentence end")
 	}
 }
+
+// --- the early handover ----------------------------------------------------
+
+// earlyAfter shortens ProactiveHandoverAfter and ProactiveMaxWait for one
+// test.
+func earlyAfter(t *testing.T, after, maxWait time.Duration) {
+	t.Helper()
+	a, m := ProactiveHandoverAfter, ProactiveMaxWait
+	ProactiveHandoverAfter, ProactiveMaxWait = after, maxWait
+	t.Cleanup(func() { ProactiveHandoverAfter, ProactiveMaxWait = a, m })
+}
+
+// On Gemini the replacement opens ProactiveHandoverAfter into the session
+// with no warning at all, and the switch still waits for a shared pause.
+func TestTheHandoverStartsEarlyWithoutAWarning(t *testing.T) {
+	earlyAfter(t, 50*time.Millisecond, 10*time.Second)
+	r := startWarm(t, false)
+	waitFor(t, "the early replacement", func() bool { return r.opener.attempts() == 2 })
+	if r.active().sawGoAway() {
+		t.Fatal("setup: the old session was warned")
+	}
+	if r.reconnects() != 0 {
+		t.Fatal("switched before any pause")
+	}
+	r.switchNow(t)
+	if r.active().live() != liveSession(r.second) {
+		t.Error("did not switch to the early replacement")
+	}
+	if st := r.tr.Stats(); st.QuietHandovers != 1 || st.ForcedHandovers != 0 {
+		t.Errorf("handovers quiet %d forced %d, want 1 and 0", st.QuietHandovers, st.ForcedHandovers)
+	}
+}
+
+// OpenAI warns itself ten minutes ahead and has its own rules; the early
+// start is Gemini's alone.
+func TestOpenAIDoesNotStartEarly(t *testing.T) {
+	earlyAfter(t, 20*time.Millisecond, 10*time.Second)
+	r := startWarmWith(t, func(o *Options) { o.Provider = ProviderOpenAI })
+	time.Sleep(150 * time.Millisecond)
+	if n := r.opener.attempts(); n != 1 {
+		t.Errorf("%d sessions opened on OpenAI with no warning, want 1", n)
+	}
+}
+
+// With warm handover off there is nothing to start early.
+func TestNoEarlyStartWithoutWarmHandover(t *testing.T) {
+	earlyAfter(t, 20*time.Millisecond, 10*time.Second)
+	r := startWarmWith(t, func(o *Options) { o.WarmHandover = false })
+	time.Sleep(150 * time.Millisecond)
+	if n := r.opener.attempts(); n != 1 {
+		t.Errorf("%d sessions opened with warm handover off, want 1", n)
+	}
+}
+
+// An early replacement that dies warming must not cost the healthy session
+// it was meant to replace: no cold swap, and the handover is tried again when
+// the server warns.
+func TestAFailedEarlyHandoverKeepsTheSession(t *testing.T) {
+	earlyAfter(t, 50*time.Millisecond, 10*time.Second)
+	third := newFakeSession(nil)
+	r := startWarm(t, false, third)
+	waitFor(t, "the early replacement", func() bool { return r.opener.attempts() == 2 })
+	_ = r.second.Close()
+	time.Sleep(100 * time.Millisecond)
+	if r.reconnects() != 0 || r.active().live() != liveSession(r.first) {
+		t.Fatal("a failed early handover replaced the healthy session")
+	}
+	if n := r.opener.attempts(); n != 2 {
+		t.Fatalf("%d sessions opened before any warning, want 2", n)
+	}
+	r.warn(10 * time.Second)
+	waitFor(t, "a warm replacement at the warning", func() bool { return r.opener.attempts() == 3 })
+	third.push(Message{Audio: voiced(), TargetText: " The meeting starts now."})
+	r.first.push(Message{TargetText: " The meeting starts now."})
+	waitFor(t, "the switch", func() bool { return r.reconnects() == 1 })
+	if r.active().live() != liveSession(third) {
+		t.Error("did not switch to the replacement opened at the warning")
+	}
+}
+
+// A warning that arrives while an early handover is waiting sets the
+// deadline: the switch is made inside the server's grace, not at the end of
+// the early cap.
+func TestAWarningDuringAnEarlyWaitSetsTheDeadline(t *testing.T) {
+	earlyAfter(t, 50*time.Millisecond, time.Hour)
+	r := startWarm(t, false)
+	stopFirst := keepTalking(r.first)
+	defer stopFirst()
+	waitFor(t, "the early replacement", func() bool { return r.opener.attempts() == 2 })
+	stopSecond := keepTalking(r.second)
+	defer stopSecond()
+	time.Sleep(50 * time.Millisecond)
+	if r.reconnects() != 0 {
+		t.Fatal("switched while both were speaking")
+	}
+	r.warn(150 * time.Millisecond)
+	waitFor(t, "the switch inside the grace", func() bool { return r.reconnects() == 1 })
+	if st := r.tr.Stats(); st.ForcedHandovers != 1 {
+		t.Errorf("forced handovers = %d, want 1", st.ForcedHandovers)
+	}
+	// The warning must not have started a handover of its own: the one
+	// already warming is the one switched to.
+	if r.active().live() != liveSession(r.second) {
+		t.Error("did not switch to the replacement that was already warming")
+	}
+}
+
+// If no warning ever comes, the early wait still ends.
+func TestAnEarlyWaitIsCapped(t *testing.T) {
+	earlyAfter(t, 50*time.Millisecond, 150*time.Millisecond)
+	r := startWarm(t, false)
+	stopFirst := keepTalking(r.first)
+	defer stopFirst()
+	waitFor(t, "the early replacement", func() bool { return r.opener.attempts() == 2 })
+	stopSecond := keepTalking(r.second)
+	defer stopSecond()
+	waitFor(t, "the capped switch", func() bool { return r.reconnects() == 1 })
+	if st := r.tr.Stats(); st.ForcedHandovers != 1 {
+		t.Errorf("forced handovers = %d, want 1", st.ForcedHandovers)
+	}
+}
+
+// The next early handover is timed from when the replacement really opened,
+// which for a warm one is well before it was switched to: the server's clock
+// started then.
+func TestTheNextEarlyHandoverCountsFromTheRealOpen(t *testing.T) {
+	earlyAfter(t, 300*time.Millisecond, 10*time.Second)
+	third := newFakeSession(nil)
+	r := startWarm(t, false, third)
+	waitFor(t, "the early replacement", func() bool { return r.opener.attempts() == 2 })
+	opened := time.Now()
+	time.Sleep(200 * time.Millisecond)
+	r.switchNow(t)
+	waitFor(t, "the next early replacement", func() bool { return r.opener.attempts() == 3 })
+	if since := time.Since(opened); since > 450*time.Millisecond {
+		t.Errorf("the next early handover came %v after the replacement opened, want about 300 ms", since)
+	}
+}
+
+// A warning that states no grace, arriving while the early replacement is
+// still opening, leaves the early wait as it was: no instant switch to a
+// replacement that has heard nothing (the red team's first finding).
+func TestAGracelessWarningDuringTheEarlyOpenKeepsTheWait(t *testing.T) {
+	earlyAfter(t, 50*time.Millisecond, 10*time.Second)
+	r := startWarm(t, false)
+	r.openDelay.Store(int64(200 * time.Millisecond))
+	stop := keepTalking(r.first)
+	defer stop()
+	waitFor(t, "the early open to begin", func() bool { return r.opener.attempts() == 2 })
+	r.warn(0)
+	time.Sleep(400 * time.Millisecond)
+	if r.reconnects() != 0 {
+		t.Error("switched at once to a replacement that had heard nothing")
+	}
+	if isClosed(r.first) {
+		t.Error("the old session was closed")
+	}
+}
+
+// One whose grace ran out during the open swaps cold instead, so the old
+// session is held back to cover the replacement's start, not cut off.
+func TestNoGraceLeftAfterTheEarlyOpenSwapsCold(t *testing.T) {
+	earlyAfter(t, 50*time.Millisecond, 10*time.Second)
+	third := newFakeSession(nil)
+	r := startWarm(t, false, third)
+	r.openDelay.Store(int64(200 * time.Millisecond))
+	waitFor(t, "the early open to begin", func() bool { return r.opener.attempts() == 2 })
+	r.warn(10 * time.Millisecond) // under HandoverReserve once the open returns
+	waitFor(t, "a cold replacement", func() bool { return r.opener.attempts() == 3 })
+	waitFor(t, "the cold swap", func() bool { return r.reconnects() == 1 })
+	if r.active().live() != liveSession(third) {
+		t.Error("switched to the replacement that had heard nothing")
+	}
+	if !isClosed(r.second) {
+		t.Error("the unwarmed replacement was left open")
+	}
+	if st := r.tr.Stats(); st.QuietHandovers+st.ForcedHandovers != 0 {
+		t.Errorf("counted as a warm handover: quiet %d forced %d", st.QuietHandovers, st.ForcedHandovers)
+	}
+}
+
+// ForceSwapAfter measures handovers on demand; an early wait would hold its
+// warning back, so the two do not mix.
+func TestForceSwapTurnsTheEarlyStartOff(t *testing.T) {
+	earlyAfter(t, 20*time.Millisecond, 10*time.Second)
+	r := startWarmWith(t, func(o *Options) { o.ForceSwapAfter = time.Hour })
+	time.Sleep(150 * time.Millisecond)
+	if n := r.opener.attempts(); n != 1 {
+		t.Errorf("%d sessions opened with ForceSwapAfter set, want 1", n)
+	}
+}

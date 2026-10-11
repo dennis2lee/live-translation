@@ -72,6 +72,21 @@ var (
 	// is instant; this only keeps it clear of the far end hanging up.
 	HandoverReserve = 5 * time.Second
 
+	// ProactiveHandoverAfter is when, on Gemini, a session's warm handover
+	// starts without waiting for go_away. The server warns about nine minutes
+	// in with 50 s of grace, and the handover then had at most 45 s to find a
+	// shared pause — measured waits ran to 23.8 s, and a wait that ran out
+	// switched mid-sentence. Starting at eight minutes gives the same search
+	// a minute more before the warning, and the warning's own budget after
+	// it.
+	ProactiveHandoverAfter = 8 * time.Minute
+
+	// ProactiveMaxWait caps an early handover's wait for a pause if no
+	// warning ever comes. It only matters if the server stops ending sessions
+	// on its usual schedule; the warning, when it comes, sets the real
+	// deadline.
+	ProactiveMaxWait = 3 * time.Minute
+
 	// handoverPoll is how often the supervisor looks for the moment. A pause
 	// lasts a second or two, so this has to be fine-grained, unlike prepPoll.
 	handoverPoll = 20 * time.Millisecond
@@ -83,14 +98,22 @@ var (
 const voiceRMS = 0.003
 
 // handOver opens a warm replacement for old and waits for the moment to
-// switch to it. It returns the replacement, ready to be made active, or nil
-// to fall back to a cold swap: no stated grace, a replacement that would not
-// open or died warming, or the run stopping.
+// switch to it. It returns the replacement, ready to be made active, or nil:
+// no stated grace, a replacement that would not open or died warming, or the
+// run stopping. After go_away, nil means a cold swap. Early, it means the
+// supervisor keeps the old session and waits for the warning.
+//
+// It runs either after go_away or, on Gemini, early — ProactiveHandoverAfter
+// into the session, with no warning yet. An early wait has no deadline of its
+// own beyond ProactiveMaxWait; when a warning that states its grace arrives
+// during it, the warning's budget becomes the deadline if it is sooner. A
+// warning that states none leaves the early cap in place.
 //
 // It chooses only *when*: whatever happens, the switch is made before the
 // server's deadline.
 func (t *Translator) handOver(ctx context.Context, old *sessionHolder) *sessionHolder {
-	if handoverBudget(old.graceLeft()) <= 0 {
+	early := !old.sawGoAway()
+	if !early && handoverBudget(old.graceLeft()) <= 0 {
 		return nil
 	}
 	next := t.openSession(ctx, true)
@@ -102,8 +125,26 @@ func (t *Translator) handOver(ctx context.Context, old *sessionHolder) *sessionH
 	t.mu.Unlock()
 	// Taken now, not before the open: connecting can take up to
 	// OpenTimeout, and that time comes out of the server's grace too.
-	budget := max(handoverBudget(old.graceLeft()), 0)
-	slog.Info("warming a replacement session", "budget", budget.Round(time.Second))
+	budget := ProactiveMaxWait
+	switch {
+	case !early:
+		budget = max(handoverBudget(old.graceLeft()), 0)
+	case old.graceStated():
+		// Warned while the early replacement was opening. With grace to
+		// spend the warning's budget applies, as below. With none left the
+		// replacement has heard nothing, and switching to it now would cut
+		// the old session off for 3–5 s of a cold start's silence — worse
+		// than a cold swap, which holds the old session back to cover it
+		// (the red team's first finding on this path).
+		if b := handoverBudget(old.graceLeft()); b > 0 {
+			budget = b
+		} else {
+			slog.Info("warned with no grace left while the early replacement opened — swapping cold")
+			t.dropWarming(next)
+			return nil
+		}
+	}
+	slog.Info("warming a replacement session", "budget", budget.Round(time.Second), "early", early)
 
 	// switchTo hands the replacement over, unless it died in the meantime:
 	// a select with several ready cases picks one at random, so the pause
@@ -114,6 +155,12 @@ func (t *Translator) handOver(ctx context.Context, old *sessionHolder) *sessionH
 
 	deadline := time.NewTimer(budget)
 	defer deadline.Stop()
+	deadlineAt := time.Now().Add(budget)
+	// warned fires when go_away arrives during an early wait; nil otherwise.
+	var warned <-chan struct{}
+	if early {
+		warned = old.goAway
+	}
 	ticker := time.NewTicker(handoverPoll)
 	defer ticker.Stop()
 	polls := 0
@@ -130,6 +177,19 @@ func (t *Translator) handOver(ctx context.Context, old *sessionHolder) *sessionH
 			slog.Info("the session ended while its replacement warmed — switching now",
 				"warm", next.warmFor() > 0)
 			return switchTo(false)
+		case <-warned:
+			warned = nil
+			// The server has now said how long is left. Its budget wins if
+			// it ends sooner; a warning with no stated grace leaves the
+			// early cap in place.
+			if old.graceStated() {
+				if b := max(handoverBudget(old.graceLeft()), 0); time.Until(deadlineAt) > b {
+					deadline.Reset(b)
+					deadlineAt = time.Now().Add(b)
+				}
+			}
+			slog.Info("the server warned during an early handover",
+				"time_left", time.Until(deadlineAt).Round(time.Second))
 		case <-deadline.C:
 			slog.Info("no pause came — switching anyway",
 				"waited", time.Since(started).Round(time.Millisecond))
