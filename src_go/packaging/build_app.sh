@@ -45,10 +45,16 @@ sed -e "s/@APP_NAME@/$APP_NAME/g" \
     -e "s/@VERSION@/$VERSION/g" \
     packaging/Info.plist.tmpl > "$APP/Contents/Info.plist"
 
+# The .icns is generated, not tracked (.gitignore), so a fresh clone has
+# none: draw it here rather than ship a bundle with the default icon. The
+# generator needs only Python's standard library and macOS's iconutil.
+if [[ ! -f packaging/AppIcon.icns ]]; then
+  python3 packaging/make_icon.py >/dev/null || true
+fi
 if [[ -f packaging/AppIcon.icns ]]; then
   cp packaging/AppIcon.icns "$RESOURCES/AppIcon.icns"
 else
-  echo "  note: packaging/AppIcon.icns is missing — the bundle will use the default icon"
+  echo "  note: packaging/AppIcon.icns could not be made — the bundle will use the default icon"
 fi
 
 # --- bundle libsoxr --------------------------------------------------------
