@@ -190,6 +190,8 @@ the measurement is written down next to it.
 <summary><b>🛠️ Building from source</b></summary>
 
 Requires Go 1.26 on macOS. The Windows installer cross-builds from the Mac.
+The full walkthrough for a new machine, from the developer tools to the first
+caption, is **[docs/build-from-source.md](docs/build-from-source.md)**.
 Building it yourself for your own noncommercial use is allowed; distributing
 the result, or a changed version, is not — see the license below.
 
