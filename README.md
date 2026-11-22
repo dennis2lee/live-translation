@@ -113,7 +113,7 @@ an unsigned app, microphone permission, and what to do if something is off:
 | 🔁 **Seamless reconnects** | Gemini ends a session about every nine minutes (LiveCap renews an OpenAI session itself, every 50). The replacement is opened early, fed the same audio unheard, and switched in a pause after the same sentence in both. Measured on Gemini: the silence at a reconnect fell from 2.4–3.6 s to 0.5–1.2 s — an ordinary pause between sentences. |
 | 🎚️ **Cleaner speech** | Removes a buzzing artifact the cloud model produces at the start of a session — found and measured with signal processing on recorded model audio. |
 | 🎵 **Music filter** | A pure-Go port of Google's YAMNet audio classifier, running on the device. No audio leaves the machine for it. |
-| 🔤 **Readable captions** | Fixed box, bottom-aligned text, paced line release, an optional "complete phrases only" mode that can also wait for each sentence to finish rather than draw it twice, clear-on-silence, and every colour, size and font adjustable — any installed font, collections included. |
+| 🔤 **Readable captions** | Fixed box, bottom-aligned text, and words drawn as they arrive, where they will stay — nothing is written twice, the rows already on screen keep their line breaks however long the talk runs, and the caption is on screen just before the translated voice says it (measured: about 0.7 s ahead on Gemini, 0.9 s on OpenAI). An optional "complete phrases only" mode shows each sentence at once instead, when it has ended. Clear-on-silence, and every colour, size and font adjustable — any installed font, collections included. |
 | 🔒 **Your key stays yours** | Kept in an encrypted file (which deters casual reading, but anyone with the app can decrypt it) or in the system keychain — never in a settings file, never in a log, never in a URL. |
 | 🪶 **Native and small** | Go and Fyne. One app, no Electron, no Python, no runtime to install. |
 
@@ -138,7 +138,7 @@ own. Set a budget alert with whichever you use.
 | `0` | Start / stop translating |
 | `1` | Korean → English |
 | `2` | English → Korean |
-| `9` | Complete phrases only |
+| `9` | Complete phrases only — each caption waits for its sentence to end, so it trails the voice |
 | `f` | Full screen |
 | `m` | Mute the translation — captions and speech |
 | `⌘R` / `Ctrl+R` | Start translating |

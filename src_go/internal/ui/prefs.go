@@ -18,6 +18,7 @@ import (
 	"fyne.io/fyne/v2/widget"
 
 	"github.com/dennis2lee/live-translation/src_go/internal/audio"
+	"github.com/dennis2lee/live-translation/src_go/internal/captions"
 	"github.com/dennis2lee/live-translation/src_go/internal/classify"
 	"github.com/dennis2lee/live-translation/src_go/internal/config"
 	"github.com/dennis2lee/live-translation/src_go/internal/fonts"
@@ -90,20 +91,24 @@ type prefsDialog struct {
 	boxColour  *colourPick
 	textColour *colourPick
 
-	fontSize      *widget.Slider
-	captionFont   *widget.Select
-	fontNames     []string // parallel to captionFont.Options; "" is the built-in font
-	maxLines      *widget.Select
-	boxOpacity    *widget.Slider
-	cornerRadius  *widget.Slider
-	boxWidth      *widget.Slider
-	bottomMargin  *widget.Slider
-	boxPosition   *widget.Select
-	clearAfter    *widget.Slider
-	lineHold      *widget.Slider
-	fixedBox      *widget.Check
-	completeOnly  *widget.Check
-	showDraft     *widget.Check
+	fontSize     *widget.Slider
+	captionFont  *widget.Select
+	fontNames    []string // parallel to captionFont.Options; "" is the built-in font
+	maxLines     *widget.Select
+	boxOpacity   *widget.Slider
+	cornerRadius *widget.Slider
+	boxWidth     *widget.Slider
+	bottomMargin *widget.Slider
+	boxPosition  *widget.Select
+	clearAfter   *widget.Slider
+	lineHold     *widget.Slider
+	fixedBox     *widget.Check
+	completeOnly *widget.Check
+	showDraft    *widget.Check
+	dimDraft     *widget.Check
+	// syncHold greys the line hold where it does nothing; set by the
+	// Behaviour tab, and run again when a setting changes outside the dialog.
+	syncHold      func()
 	directionHint *widget.Check
 	sourceText    *widget.Check
 	silenceGate   *widget.Check
@@ -962,6 +967,12 @@ func (p *prefsDialog) appearanceWidgets() {
 	p.sourceText.SetChecked(p.working.ShowSourceText)
 	p.directionHint = widget.NewCheck("Show the direction briefly on start", nil)
 	p.directionHint.SetChecked(p.working.ShowDirectionHint)
+	// How text in progress is drawn. Here, with the rest of what the captions
+	// look like, rather than beside "Complete phrases only": it applies in
+	// both modes — to every sentence without that mode, and to the one drawn
+	// in an empty box with it.
+	p.dimDraft = widget.NewCheck("Dim text in progress", nil)
+	p.dimDraft.SetChecked(p.working.DimDraft)
 
 	p.captionsForm = widget.NewForm(
 		widget.NewFormItem("Font", p.captionFont),
@@ -985,7 +996,10 @@ func (p *prefsDialog) captionsTab() fyne.CanvasObject {
 	if p.captionsForm == nil {
 		p.appearanceWidgets()
 	}
-	return container.NewVBox(p.captionsForm, p.fixedBox, p.sourceText, p.directionHint)
+	// The two drawing checks share a row: one more row made the tab taller
+	// than the dialog.
+	return container.NewVBox(p.captionsForm, container.NewHBox(p.fixedBox, p.dimDraft),
+		p.sourceText, p.directionHint)
 }
 
 // coloursTab is what it looks like. It shares appearanceWidgets with
@@ -1031,8 +1045,28 @@ func (p *prefsDialog) behaviourTab() fyne.CanvasObject {
 			p.showDraft.Disable()
 		}
 	}
-	p.completeOnly.OnChanged = syncDraft
+	// The hold paces lines that reach the screen whole. Words drawn in place
+	// as they arrive are never held, so with neither whole sentences nor the
+	// dimmed draft the slider would move nothing: greyed, like the check
+	// above, rather than left looking as if it did something.
+	p.syncHold = func() {
+		paced := p.completeOnly.Checked || (p.dimDraft != nil && p.dimDraft.Checked) ||
+			p.working.Policy() != captions.PolicyIncremental
+		if paced {
+			p.lineHold.Enable()
+		} else {
+			p.lineHold.Disable()
+		}
+	}
+	p.completeOnly.OnChanged = func(on bool) {
+		syncDraft(on)
+		p.syncHold()
+	}
+	if p.dimDraft != nil {
+		p.dimDraft.OnChanged = func(bool) { p.syncHold() }
+	}
 	syncDraft(p.completeOnly.Checked)
+	p.syncHold()
 
 	p.saveScript = widget.NewCheck("Save a transcript for each session", nil)
 	p.saveScript.SetChecked(p.working.SaveTranscript)
@@ -1129,8 +1163,12 @@ func (p *prefsDialog) collect() config.Settings {
 	s.FixedBox = p.fixedBox.Checked
 	s.ShowSourceText = p.sourceText.Checked
 	s.ShowDirectionHint = p.directionHint.Checked
+	s.DimDraft = p.dimDraft.Checked
 	s.ClearAfterSeconds = p.clearAfter.Value
-	s.LineHoldSeconds = p.lineHold.Value
+	// To the tenth the slider steps in. The toolkit's own rounding lands on
+	// 1.5000000000000002 or 1.5 by turns, one repaint to the next, and now
+	// that the slider is greyed and ungreyed it is repainted more often.
+	s.LineHoldSeconds = math.Round(p.lineHold.Value*10) / 10
 	s.CompletePhrasesOnly = p.completeOnly.Checked
 	s.ShowDraftWhenEmpty = p.showDraft.Checked
 	s.SaveTranscript = p.saveScript.Checked
@@ -1341,6 +1379,7 @@ func (p *prefsDialog) showFields(s config.Settings, f map[string]bool) {
 	check("FixedBox", p.fixedBox, s.FixedBox)
 	check("ShowSourceText", p.sourceText, s.ShowSourceText)
 	check("ShowDirectionHint", p.directionHint, s.ShowDirectionHint)
+	check("DimDraft", p.dimDraft, s.DimDraft)
 	slider("ClearAfterSeconds", p.clearAfter, s.ClearAfterSeconds)
 	slider("LineHoldSeconds", p.lineHold, s.LineHoldSeconds)
 	// The draft check is greyed by completeOnly's OnChanged, which SetChecked
@@ -1350,6 +1389,10 @@ func (p *prefsDialog) showFields(s config.Settings, f map[string]bool) {
 	check("SaveTranscript", p.saveScript, s.SaveTranscript)
 	entry("TranscriptDir", p.transcriptDir, s.TranscriptDir)
 	check("DebugLogging", p.debugLogging, s.DebugLogging)
+	// The caption policy has no widget, and decides this with the two checks.
+	if p.syncHold != nil {
+		p.syncHold()
+	}
 }
 
 func (p *prefsDialog) refreshKeyStatus() {

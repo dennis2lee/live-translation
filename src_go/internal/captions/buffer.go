@@ -92,14 +92,27 @@ const (
 	// row while the rows above it sat blank. Reported from live use with three
 	// lines configured: the bottom row carried the only text.
 	//
-	// Eight per row comes from the measured worst case, not a guess: the
-	// 67-minute transcript has 56 settled lines of six runes or fewer
-	// ("Love", "My", "arise"), and the default layout fits roughly 50 runes
-	// on a row — about eight such sentences once each carries its joining
-	// space. The renderer trims to max_lines *rows* after wrapping, so
-	// keeping too much history costs nothing on screen; only too little
-	// shows, as blank rows.
-	DisplayHistoryFactor = 8
+	// It was eight per row, from the 67-minute transcript: 56 settled lines
+	// of six runes or fewer ("Love", "My", "arise") against a row of about 50
+	// runes. That is the default window. In a wide one a row takes twice as
+	// many, the history no longer filled the box, and — the box being drawn
+	// as one paragraph — each sentence dropped from a history that is all on
+	// screen pulled the top row to the left under the reader (the red team:
+	// 157 of 200 short sentences at 1920 px and four rows). Thirty-two a row
+	// covers that with room over; it is not a proof — the smallest font on a
+	// 3840 px window still outruns it with nothing but two-word sentences.
+	// The renderer trims to max_lines *rows* after wrapping, so history
+	// costs nothing on screen (a cold wrap of 128 sentences is 2–5 ms, a
+	// repaint after it tens of microseconds); only too little shows.
+	DisplayHistoryFactor = 32
+
+	// WordHoldSeconds is how long the last word of text in progress is kept
+	// off the screen when fragments are pieces of words (WordPieces), waiting
+	// for the piece that finishes it. Measured on a recorded OpenAI session:
+	// a piece that continued a word arrived a median 0.37 s after the one
+	// before it, 0.76 s at most. A word is normally released sooner than
+	// this, by the next word's first piece arriving.
+	WordHoldSeconds = 1.0
 
 	// DraftFallbackSeconds is how long HideDraftWhenEmpty keeps an empty box
 	// waiting for a sentence to finish before showing it in progress anyway.
@@ -172,13 +185,14 @@ type Options struct {
 	// next may replace it.
 	LineHoldSeconds float64
 
-	// CompletePhrasesOnly shows only settled text, never a phrase still being
-	// revised. The model streams its translation a fragment at a time and
-	// rewrites as it goes, so drawing every fragment makes the captions
-	// visibly churn. With this on, unsettled text is withheld until it settles
-	// — at a sentence end, at the server's turn_complete, or after
-	// IdleCommitSeconds of quiet. Costs a little latency, and in exchange the
-	// captions stop moving under the reader.
+	// CompletePhrasesOnly shows only settled text, never a sentence still
+	// arriving. The translation comes a fragment at a time — a word or three
+	// a second — and with this on a sentence is withheld until it settles: at
+	// a sentence end, at the server's turn_complete, or after
+	// IdleCommitSeconds of quiet. In exchange for captions that arrive at
+	// once, each one lands when its sentence ends: a median 2.3 s after the
+	// translated voice began it, three to four for a five-second sentence,
+	// longer for a longer one (s3_sync).
 	CompletePhrasesOnly bool
 
 	// HideDraftWhenEmpty, in complete-phrases mode, withholds unsettled text
@@ -188,6 +202,29 @@ type Options struct {
 	// until the sentence settles. No effect outside complete-phrases mode,
 	// where text in progress is always shown.
 	HideDraftWhenEmpty bool
+
+	// DraftInPlace says the display draws text in progress where it will
+	// stay — in the paragraph, in the settled colour — rather than dimmed on
+	// a row of its own. A sentence that settles is then one the reader has
+	// been reading all along, so it is never held back to wait its turn:
+	// that would take it off the screen and put it back.
+	//
+	// This is what keeps the captions in step with the translated voice. The
+	// fragments arrive about a second ahead of the speech they belong to
+	// (spikes/RESULTS.md, s3_sync), so text shown as it arrives is on screen
+	// just before it is spoken; text withheld until its sentence ends lands
+	// seconds after the voice began it, about as many as the sentence is long.
+	DraftInPlace bool
+
+	// WordPieces says the fragments are pieces of words rather than words:
+	// OpenAI sends "gre", "ets", " me", "." where Gemini sends " greets me.".
+	// A piece carries its own spacing — one with no space in front continues
+	// the word before it — so pieces are joined as they come, and the last
+	// word of text in progress is not shown until it is finished (the next
+	// piece begins with a space, the sentence settles, or WordHoldSeconds
+	// pass). Without that a word on screen grows after it was drawn, and the
+	// row it ends can lose it to the next one.
+	WordPieces bool
 }
 
 // Buffer holds arriving fragments as committed lines plus pending text.
@@ -212,6 +249,16 @@ type Buffer struct {
 	lineHoldSeconds     float64
 	completePhrasesOnly bool
 	hideDraftWhenEmpty  bool
+	draftInPlace        bool
+	wordPieces          bool
+
+	// tailOpen is set while the last word of pending may still be a piece of
+	// a word (WordPieces), and keeps that word off the screen. tailShown is
+	// set once the hold on it has run out and it has been drawn: a piece
+	// that continues it then makes it grow where it is — hiding it again
+	// would take a word off the screen and put a longer one back.
+	tailOpen  bool
+	tailShown bool
 
 	// pendingSince is when the current pending text began. draftOverdue is
 	// set once it has waited DraftFallbackSeconds, and pendingResumed when it
@@ -262,6 +309,8 @@ func New(opts Options) *Buffer {
 		lineHoldSeconds:     opts.LineHoldSeconds,
 		completePhrasesOnly: opts.CompletePhrasesOnly,
 		hideDraftWhenEmpty:  opts.HideDraftWhenEmpty,
+		draftInPlace:        opts.DraftInPlace,
+		wordPieces:          opts.WordPieces,
 	}
 	if b.policy == "" {
 		b.policy = PolicyAuto
@@ -305,11 +354,48 @@ func (b *Buffer) HideDraftWhenEmpty() bool { return b.hideDraftWhenEmpty }
 // SetHideDraftWhenEmpty turns that on or off.
 func (b *Buffer) SetHideDraftWhenEmpty(on bool) { b.hideDraftWhenEmpty = on }
 
+// DraftInPlace reports whether text in progress is drawn where it will stay.
+func (b *Buffer) DraftInPlace() bool { return b.draftInPlace }
+
+// SetDraftInPlace turns that on or off.
+func (b *Buffer) SetDraftInPlace(on bool) { b.draftInPlace = on }
+
+// WordPieces reports whether fragments are joined as pieces of words.
+func (b *Buffer) WordPieces() bool { return b.wordPieces }
+
+// SetWordPieces turns that on or off — the translation service changed.
+func (b *Buffer) SetWordPieces(on bool) {
+	b.wordPieces = on
+	if !on {
+		b.tailOpen, b.tailShown = false, false
+	}
+}
+
+// followsSpeech is true when every word is drawn the moment it arrives and
+// stays where it was drawn: text in progress is on screen, in place, and the
+// fragments come at the pace of speech. Nothing is paced then — see
+// releaseDue.
+func (b *Buffer) followsSpeech() bool {
+	return b.draftInPlace && !b.completePhrasesOnly && b.EffectivePolicy() == PolicyIncremental
+}
+
 // CommittedLines returns the settled lines, newest last.
 func (b *Buffer) CommittedLines() []string { return append([]string(nil), b.committed...) }
 
 // PendingText is the text not yet settled. Drawn dimmed.
 func (b *Buffer) PendingText() string { return b.pending }
+
+// shownPending is the text in progress as it may be drawn: all of it, or —
+// while its last word may still be a piece of one — all but that word.
+func (b *Buffer) shownPending() string {
+	if !b.tailOpen {
+		return b.pending
+	}
+	if i := strings.LastIndexFunc(b.pending, unicode.IsSpace); i >= 0 {
+		return b.pending[:i]
+	}
+	return ""
+}
 
 // QueuedLines are settled lines still waiting for their turn on screen,
 // oldest first.
@@ -376,7 +462,9 @@ func (b *Buffer) DisplayLines() []Line {
 	if b.pending != "" && len(b.queue) == 0 &&
 		(!b.completePhrasesOnly || (len(b.committed) == 0 &&
 			(!b.hideDraftWhenEmpty || b.draftOverdue || b.pendingResumed))) {
-		lines = append(lines, Line{Text: b.pending, Settled: false})
+		if text := b.shownPending(); strings.TrimSpace(text) != "" {
+			lines = append(lines, Line{Text: text, Settled: false})
+		}
 	}
 	return lines
 }
@@ -418,7 +506,11 @@ func (b *Buffer) Feed(text string, now float64) bool {
 	// Ordering is not guaranteed, so ignore a fragment the API redelivered.
 	// Only within a short window: a second later the same text is the speaker
 	// repeating a word, and dropping it loses what they said.
-	if text == b.lastText && now-b.lastFeedAt < DuplicateWindowSeconds {
+	//
+	// Not for pieces of words: they come over an ordered stream, once each,
+	// a quarter of a second apart — and the same piece twice running is what
+	// "very very" and "ha ha" look like.
+	if !b.wordPieces && text == b.lastText && now-b.lastFeedAt < DuplicateWindowSeconds {
 		return false
 	}
 	b.lastText = text
@@ -438,6 +530,7 @@ func (b *Buffer) Feed(text string, now float64) bool {
 	// The first fragment after a reconnect may continue the previous sentence,
 	// so pull the last settled line back into pending rather than starting new.
 	// It may still be queued rather than on screen, so check the queue first.
+	afterReconnect := b.continueNext
 	if b.continueNext {
 		b.continueNext = false
 		if b.pending == "" && !b.lastCommitFinished {
@@ -468,7 +561,21 @@ func (b *Buffer) Feed(text string, now float64) bool {
 	if b.pending == "" {
 		b.pendingSince = now
 	}
-	b.pending = join(b.pending, text)
+	if b.wordPieces && !afterReconnect && b.pending != "" {
+		// A piece says for itself whether it starts a word. Only the first
+		// one of a session cannot — it never has a space in front — and that
+		// one is joined by the rule below.
+		b.pending += text
+	} else {
+		b.pending = join(b.pending, text)
+	}
+	if b.wordPieces {
+		if first, _ := utf8.DecodeRuneInString(text); unicode.IsSpace(first) {
+			b.tailShown = false // a new word; the one before it is finished
+		}
+		last, _ := utf8.DecodeLastRuneInString(b.pending)
+		b.tailOpen = !unicode.IsSpace(last) && !b.tailShown
+	}
 	b.noteDraftAge(now)
 
 	if b.EffectivePolicy() == PolicyUtterance || b.endsASentence() {
@@ -565,6 +672,13 @@ func (b *Buffer) Tick(now float64, speech Speech) bool {
 			b.quietSince = now
 			b.quietSinceSet = true
 		}
+	}
+
+	// A last word held back for the piece that would finish it has waited
+	// long enough: it was the whole word.
+	if b.tailOpen && idle >= WordHoldSeconds {
+		b.tailOpen, b.tailShown = false, true
+		changed = true
 	}
 
 	// A draft withheld long enough is shown after all; say so, or the screen
@@ -710,6 +824,14 @@ func (b *Buffer) releaseDue(now float64) bool {
 	if len(b.committed) < b.maxLines {
 		return true // room to spare — nothing readable is pushed off
 	}
+	// The line was already on screen, word by word, as it arrived. Holding it
+	// now would wipe a sentence the reader is in the middle of and draw it
+	// again up to a hold later — and withhold the next sentence's first words
+	// behind it, which is the lag this mode exists to remove. There is no
+	// burst to pace either: the words came at the pace of speech.
+	if b.followsSpeech() {
+		return true
+	}
 	// Falling behind shortens the hold before it abolishes it.
 	//
 	// This used to release the whole backlog the moment it passed max_lines,
@@ -765,6 +887,7 @@ func (b *Buffer) clearDue(now float64) bool {
 func (b *Buffer) commit(finished bool) {
 	line := strings.TrimSpace(b.pending)
 	b.pending = ""
+	b.tailOpen, b.tailShown = false, false
 	b.draftOverdue = false
 	b.pendingResumed = false
 	prefix := b.resumedPrefix

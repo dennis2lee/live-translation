@@ -145,9 +145,11 @@ type Settings struct {
 	// inside a single repaint.
 	LineHoldSeconds float64 `json:"line_hold_seconds"` // 0 ~ 3
 
-	// CompletePhrasesOnly shows only settled text, never a phrase the model is
-	// still revising. Trades a little latency for captions that stop moving
-	// under the reader.
+	// CompletePhrasesOnly shows only settled text, never a sentence still
+	// arriving. Each caption then appears at once — and late: when its
+	// sentence ends, a median 2.3 s after the translated voice began it and
+	// three to four for a five-second sentence (spikes/RESULTS.md, s3_sync).
+	// Off, the captions keep step with the voice.
 	CompletePhrasesOnly bool `json:"complete_phrases_only"`
 
 	// ShowDraftWhenEmpty, in complete-phrases mode, shows the sentence in
@@ -158,6 +160,15 @@ type Settings struct {
 	// behaved; Load unmarshals over the defaults, so an older settings file
 	// keeps it on.
 	ShowDraftWhenEmpty bool `json:"show_draft_when_empty"`
+
+	// DimDraft draws text in progress the way it was drawn before 1.13.0:
+	// dimmed, on rows of its own, and redrawn in the paragraph when its
+	// sentence ends. Off, it is drawn where it will stay, in the text colour,
+	// so the captions only ever grow — which is what lets them be shown word
+	// by word, in step with the translated voice, without anything being
+	// written twice. Off by default; an older settings file has no key and
+	// gets the new drawing.
+	DimDraft bool `json:"dim_draft"`
 
 	// Transcript recording. The filename is the session start timestamp.
 	SaveTranscript bool   `json:"save_transcript"`

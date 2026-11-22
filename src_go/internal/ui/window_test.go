@@ -25,6 +25,13 @@ import (
 // overwrite the preferences and the key actually in use.
 func newTestWindow(t *testing.T) *Window {
 	t.Helper()
+	return newTestWindowWith(t, nil)
+}
+
+// newTestWindowWith is newTestWindow started from settings other than the
+// defaults — what a settings file from an earlier run would have loaded.
+func newTestWindowWith(t *testing.T, change func(*config.Settings)) *Window {
+	t.Helper()
 	dir := t.TempDir()
 	t.Cleanup(config.SetSettingsDirForTests(dir))
 	t.Cleanup(credentials.SetStoreDirForTests(dir))
@@ -42,6 +49,9 @@ func newTestWindow(t *testing.T) *Window {
 
 	settings := config.Default()
 	settings.TranscriptDir = dir
+	if change != nil {
+		change(&settings)
+	}
 	w := NewWindow(test.NewApp(), settings)
 	t.Cleanup(w.Shutdown)
 	return w

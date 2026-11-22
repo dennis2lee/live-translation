@@ -233,6 +233,8 @@ func newBuffer(s config.Settings) *captions.Buffer {
 		LineHoldSeconds:     s.LineHoldSeconds,
 		CompletePhrasesOnly: s.CompletePhrasesOnly,
 		HideDraftWhenEmpty:  !s.ShowDraftWhenEmpty,
+		DraftInPlace:        !s.DimDraft,
+		WordPieces:          s.Provider == config.ProviderOpenAI,
 	})
 }
 
@@ -400,6 +402,8 @@ func (w *Window) applyBufferSettings() {
 	w.buffer.SetMaxLines(w.settings.MaxLines)
 	w.buffer.SetCompletePhrasesOnly(w.settings.CompletePhrasesOnly)
 	w.buffer.SetHideDraftWhenEmpty(!w.settings.ShowDraftWhenEmpty)
+	w.buffer.SetDraftInPlace(!w.settings.DimDraft)
+	w.buffer.SetWordPieces(w.settings.Provider == config.ProviderOpenAI)
 	w.buffer.SetClearAfterSeconds(w.settings.ClearAfterSeconds)
 	w.buffer.SetLineHoldSeconds(w.settings.LineHoldSeconds)
 	w.buffer.SetPolicy(w.settings.Policy())

@@ -1,6 +1,7 @@
 package ui
 
 import (
+	"fmt"
 	"image/color"
 	"log/slog"
 	"math"
@@ -115,6 +116,8 @@ type CaptionView struct {
 	// theme's own, which is also what an unavailable font falls back to.
 	fontName string
 	font     fyne.Resource
+	// anchor keeps the paragraph's row breaks steady between repaints.
+	anchor wrapAnchor
 
 	boxAlpha  float32
 	hintText  string
@@ -459,7 +462,12 @@ func (r *captionRenderer) rebuild(size fyne.Size) {
 	if maxLines < 1 {
 		maxLines = 1
 	}
-	wrapped := face.reflowRows(v.lines, fontSize, maxTextW, maxLines)
+	lines := v.lines
+	if !s.DimDraft {
+		lines = inPlace(lines)
+	}
+	wrapKey := fmt.Sprintf("%s\x00%g\x00%g", v.fontName, fontSize, maxTextW)
+	wrapped := face.reflowAnchored(&v.anchor, wrapKey, lines, fontSize, maxTextW, maxLines)
 
 	visible := v.boxAlpha > 0.001 && (len(wrapped) > 0 || s.FixedBox)
 
@@ -616,6 +624,35 @@ type row struct {
 	settled bool
 }
 
+// inPlace returns the lines with text in progress marked settled, so reflowRows
+// draws it where it will stay: at the end of the paragraph, in the text colour.
+//
+// A fragment is only ever appended to — the buffer never revises one — so the
+// paragraph with a sentence in progress is a prefix of the paragraph with that
+// sentence finished, and greedy wrapping keeps every earlier row where it
+// was. Settling then changes nothing on screen. Drawn the other way, dimmed
+// on rows of its own, the same sentence jumps into the paragraph and
+// brightens when it ends, which readers following along reported as the
+// caption being written twice.
+//
+// The text is trimmed for the same reason: the buffer trims a line when it
+// settles, and a space that was drawn before and not after would shift the
+// row by a space's width at exactly that moment.
+func inPlace(lines []captions.Line) []captions.Line {
+	out := make([]captions.Line, 0, len(lines))
+	for _, line := range lines {
+		if !line.Settled {
+			line.Text = strings.TrimSpace(line.Text)
+			if line.Text == "" {
+				continue
+			}
+			line.Settled = true
+		}
+		out = append(out, line)
+	}
+	return out
+}
+
 // reflowRows turns the buffer's lines into the rows the box paints: settled
 // sentences joined into one paragraph, wrapped to the width, newest maxLines
 // rows kept.
@@ -631,12 +668,20 @@ type row struct {
 // Unsettled text keeps its own block, so the dimmed/settled distinction
 // survives — it is a whole-row property, which is all the renderer can
 // express. It comes last, so trimming to maxLines keeps the newest text.
+// That is the DimDraft drawing; without it the renderer passes the lines
+// through inPlace first and nothing arrives here unsettled.
 func reflowRows(lines []captions.Line, fontSize, maxTextW float32, maxLines int) []row {
 	return Face{}.reflowRows(lines, fontSize, maxTextW, maxLines)
 }
 
 // reflowRows reflows in this face. See the package function.
 func (f Face) reflowRows(lines []captions.Line, fontSize, maxTextW float32, maxLines int) []row {
+	return f.reflowAnchored(nil, "", lines, fontSize, maxTextW, maxLines)
+}
+
+// reflowAnchored is reflowRows that keeps the settled paragraph's breaks from
+// one call to the next — see wrapAnchor. A nil anchor wraps afresh.
+func (f Face) reflowAnchored(a *wrapAnchor, key string, lines []captions.Line, fontSize, maxTextW float32, maxLines int) []row {
 	Wrap := f.Wrap
 	var wrapped []row
 	var settledText []string
@@ -651,10 +696,12 @@ func (f Face) reflowRows(lines []captions.Line, fontSize, maxTextW float32, maxL
 	}
 	if joined := strings.TrimSpace(strings.Join(settledText, " ")); joined != "" {
 		var settledRows []row
-		for _, piece := range Wrap(joined, fontSize, maxTextW) {
+		for _, piece := range f.wrapAnchored(a, key, joined, fontSize, maxTextW, max(1, maxLines)) {
 			settledRows = append(settledRows, row{piece, true})
 		}
 		wrapped = append(settledRows, wrapped...)
+	} else if a != nil {
+		a.text = "" // an emptied box starts its next paragraph afresh
 	}
 	if maxLines < 1 {
 		maxLines = 1

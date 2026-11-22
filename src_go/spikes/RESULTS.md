@@ -1828,3 +1828,156 @@ a live room, and "quiet frames" are selected by energy, so some of what is
 measured there is speech tail rather than background. What the numbers support
 is "the model's own audio differs session to session and is not always clean";
 they do not identify a specific tone to point at.
+
+## The captions against the voice (s3_sync, 2026-11-22)
+
+Reported from live use: the captions always come after the translated voice.
+Spike `s3_sync` drives the shipping translator with the Korean fixture and
+records every callback with its arrival time — caption fragments and audio —
+so the two streams can be laid side by side. `analyze.py` finds the spoken
+segments of the translated audio by its pauses.
+
+### The text is not late. It is early.
+
+```
+Gemini, 95 s:  82 fragments, 104.2 s of audio in 417 blobs of 0.25 s
+               audio never late against the clock, at most 0.32 s early
+               fragment gaps: median 1.00 s (the one-second clock again)
+
+  first    last     voice arrives     drawn as it     drawn when the
+  fragment fragment                   arrives         sentence ends
+   11.95   15.96    12.69 - 17.96      -0.74 s          +3.27 s    Total revenue is higher than ... by 14%.
+   17.94   21.95    18.69 - 23.44      -0.75 s          +3.26 s    However, the domestic market alone ...
+   23.95   26.93    24.67 - 28.43      -0.72 s          +2.25 s    Overseas sales accounted for more ...
+   55.96   60.95    56.67 - 62.17      -0.71 s          +4.28 s    The initial response is good, so ...
+```
+
+Across the 24 sentences of the run, **a sentence's first fragment arrives a
+median 0.74 s before the voice starts it** (0.21–1.24 s; one row reads 1.74 s
+and is an artefact, below). The listener hears the audio a further 200 ms
+later, the player's prebuffer. Within a sentence the text runs ahead — the
+last fragment lands 1.0–2.0 s before the audio of the sentence ends.
+
+So text drawn as it arrives is on screen just before it is spoken. **What was
+late was complete-phrases mode**, which the reporting setup had on: a caption
+that waits for its last fragment appears a median 2.25 s after the voice began
+the sentence, 3.3 s for a five-second sentence and 4.3 s for the longest here.
+It scales with the sentence — the short ones here trail by a quarter of a
+second — so a speaker with long sentences sees worse than this fixture, whose
+longest is 5.7 s and ten of whose 24 are under three.
+
+OpenAI, 60 s, the same fixture: fragments come in small deltas (median gap
+0.23 s), a sentence's first one **0.85 s** before the voice starts it
+(0.27–0.89 s, one at 2.48 s), and a caption held for its sentence trails by a
+median 1.38 s, up to 3.47 s. The audio there arrives up to 1.08 s ahead of the
+clock, so the player holds more of it and the captions lead by that much more.
+
+### What it changes
+
+Drawing text as it arrives was always available — complete-phrases off — but
+it was drawn dimmed on rows of its own and redrawn in the paragraph when the
+sentence ended, which is what sent readers to complete-phrases mode in the
+first place. Since 1.13.0 text in progress is drawn where it will stay
+(`DimDraft` off, the default): the caption only grows, a sentence settling
+changes nothing on screen, and a settled line is never held back behind the
+line hold, since the reader has been reading it
+(`TestASentenceBeingReadStaysOnScreen`, `TestTheCaptionOnlyGrows`).
+`TestCaptionsKeepUpWithTheVoice` replays the first forty seconds of this
+recording with one row and the longest hold, and checks every sentence reaches
+the screen before the voice starts it.
+
+### A second way the caption was written twice
+
+Checking that claim — "the caption only grows" — against a long talk found it
+false for a reason that had nothing to do with the draft. The box draws the
+buffer's settled history as one paragraph, and the history is capped
+(`DisplayHistoryFactor`, eight sentences per row). The input being live keeps
+the box from clearing, so in speech that runs for a couple of minutes the cap
+is always reached, and from then on every sentence that settles pushes the
+oldest one out. The paragraph, wrapped afresh from its new first word, breaks
+in different places all the way down:
+
+```
+before   meeting here. Thank you. Hello. Today's quarterly | earnings meeting will now begin. First, let's review | ...
+after    Thank you. Hello. Today's quarterly earnings | meeting will now begin. First, let's review the | ...
+```
+
+Every row on screen changes at once, at the end of a sentence, with nothing
+the reader could see added or removed. The recorded Gemini session replayed
+eight times over at the default width and 44 px: **24 such redraws in 656
+fragments with four rows, 35 with three, 74 with two.** This fits the original
+report — "after a sentence ends the caption is rewritten" — better than the
+dimmed draft did, and it happened in complete-phrases mode too.
+
+Fixed in the renderer (`wrapAnchor`): it remembers where each row began, and
+when the paragraph loses its head it wraps again from the first row boundary
+that survived instead of from the top. Greedy wrapping from a row's first word
+reproduces that row and all after it, so the rows on screen do not move; only
+the row the cut went through is left short, and it is above the box unless the
+whole paragraph fits in it. Drawn word by word, the same replay now gives 0
+redraws at every width and row count tried
+(`TestTheRowsOnScreenSurviveAFullHistory`, with `TestAFreshWrapRedrawsTheBox`
+pinning that the recording still shows the fault without the anchor). In
+complete-phrases mode a sentence longer than the box still turns the whole box
+over when it lands; that is the mode, not a redraw.
+
+### What the red team added (the same day)
+
+A review of the change before release reproduced the claim on both Gemini
+recordings — no row changed, no text lost, at two to four rows — and broke it
+at four edges, all fixed in the same release:
+
+- **OpenAI sends pieces of words** ("gre", "ets", "-quarter", "14", "%"): 24
+  of the 124 fragments in its recording had no space in front. A word on
+  screen grew when its next piece came, and three times in eight replays the
+  row it ended lost it to the next one. Worse, and since OpenAI was added: the
+  rule for joining whole words put a space inside them — "He gre ets me.",
+  "third -quarter sales." — on screen and in the transcript. Pieces are now
+  joined as they come and a word is drawn when it is finished
+  (`Options.WordPieces`).
+- **A one-row box lost a tenth of the words.** Words that finished a row left
+  the box in the same repaint as they were drawn: 10.2% of the session's
+  characters never on screen, against 5.7% with the dimmed draft. New text now
+  starts a row of its own when the row before it is about to leave.
+- **A history that was all on screen** — one- and two-word sentences in a wide
+  window — still lost its first sentence at every sentence end, pulling the
+  top row left: 157 of 200 at 1920 px and four rows. The history is now 32
+  sentences a row, not eight.
+- **The line hold slider did nothing** with words drawn in place and said so
+  nowhere. It is greyed there.
+
+Its fuzz of the anchored wrap — 488,000 calls over Latin, Hangul, CJK, emoji,
+120-rune tokens and edits at the front, middle and end — found no lost,
+doubled or reordered text, no over-wide row and no panic; an unchanged
+repaint costs 3 µs against 104 µs for a plain wrap.
+
+A second round, on those fixes, first established that **Gemini is
+untouched**: the new buffer against the released one on both recordings and
+4,000 random sequences gave identical screens, queues and transcripts, apart
+from the longer history. It then found three more, fixed before release:
+
+- a word shown because its hold ran out was taken off the screen again when a
+  piece arrived that continued it (it now grows where it is);
+- the fresh-row rule fired for text too long to fit the box, which showed less
+  of it than running on (it now fires only when the addition fits);
+- Reset left the line hold offered under a hand-edited caption policy.
+
+With the rule, a one-row box drawing words in place loses 0 of 976 characters
+of the Gemini recording at the default width (94 without), 8 at 760 px (122).
+
+**Left as they are, OpenAI only:** at a session change that is not warm the
+old session's last pieces and the new one's first can be joined wrongly
+("costsFirst"); a piece that is just "." ends the sentence, so "U" "." "S" "."
+would be cut if that is how such words are sent (not seen in the recording);
+no Korean output from OpenAI has been recorded at all.
+
+**Caveats.** One recording per service, of a TTS fixture with a 0.6 s pause
+after every sentence; a live speaker pauses less regularly. There are no word
+timings, so text and voice are lined up only at sentence starts — the first
+fragment against the next time the voice starts up after a pause. A short
+sentence spoken without a pause in front of it has no onset of its own ("Yes."
+in the Gemini run, paired with the sentence after it: the 1.74 s row). The
+times are arrival times at the application, not the moment sound leaves the
+speaker. And with a local voice chosen under Output the speech is synthesised
+from each sentence once it has settled, so there the voice follows the
+captions whatever the drawing.
