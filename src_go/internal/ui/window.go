@@ -353,9 +353,20 @@ func (w *Window) toggleFullScreen() { w.setFullScreen(!w.win.FullScreen()) }
 
 // update applies and persists a settings change without dropping the session.
 func (w *Window) update(change func(*config.Settings)) {
+	old := w.settings
 	next := w.settings
 	change(&next)
 	w.applySettings(next.Clamped())
+	w.syncPrefs(old)
+}
+
+// syncPrefs shows a settings change made outside Preferences in the open
+// dialog, if there is one — see prefsDialog.adoptExternal. The dialog's own
+// Apply and Cancel call applySettings directly and never come through here.
+func (w *Window) syncPrefs(old config.Settings) {
+	if w.prefs != nil {
+		w.prefs.adoptExternal(old, w.settings)
+	}
 }
 
 // applySettings takes a full settings replacement, restarting whatever part of

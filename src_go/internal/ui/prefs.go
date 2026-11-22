@@ -6,6 +6,7 @@ import (
 	"image/color"
 	"log/slog"
 	"math"
+	"reflect"
 	"strconv"
 	"strings"
 	"time"
@@ -136,11 +137,23 @@ type prefsDialog struct {
 	musicHold      *widget.Slider
 	musicRelease   *widget.Slider
 
-	voiceSelect  *widget.Select
+	voiceSelect *widget.Select
+	// voiceTarget is the language the picker lists voices for, and the one a
+	// choice in it is stored under.
+	voiceTarget  string
 	voiceNames   []string // parallel to voiceSelect.Options; "" is the model
 	voiceSamples []string
 	voiceButton  *widget.Button
 	voiceNote    *widget.Label
+	// voices is the installed voice list, read once per dialog: see
+	// loadVoices. previewing is set while Preview is speaking.
+	voices    []tts.Voice
+	voicesErr error
+	// outputBox is the Output tab, relaid when the voice note appears or
+	// goes.
+	outputBox    *fyne.Container
+	voicesListed bool
+	previewing   bool
 	modelStatus  *widget.Label
 	modelButton  *widget.Button
 	clsButton    *widget.Button
@@ -461,14 +474,14 @@ func (p *prefsDialog) outputTab() fyne.CanvasObject {
 			container.NewBorder(nil, nil, nil, volumeLabel, p.speechVolume)),
 	)
 
-	rows := []fyne.CanvasObject{p.speakAloud, warning, form}
 	// The note is only worth a row when it has something unusual to say; in
-	// the ordinary case the dropdown's own first entry says it.
-	if p.voiceNote.Text != "" {
-		rows = append(rows, p.voiceNote)
-	}
-	rows = append(rows, muteHint, container.NewHBox(p.toneButton), p.toneStatus)
-	return container.NewVBox(rows...)
+	// the ordinary case the dropdown's own first entry says it. Always in the
+	// layout and hidden when empty, because a direction key can change it
+	// while the dialog is open — added only when it had text at build time, a
+	// later note never appeared and an emptied one left a blank row.
+	p.outputBox = container.NewVBox(p.speakAloud, warning, form, p.voiceNote,
+		muteHint, container.NewHBox(p.toneButton), p.toneStatus)
+	return p.outputBox
 }
 
 // voiceRow builds the voice picker and its Preview button.
@@ -477,8 +490,20 @@ func (p *prefsDialog) outputTab() fyne.CanvasObject {
 // target while the app runs, the setting is stored per language, and an
 // English voice reading Korean is not a choice anyone makes on purpose.
 func (p *prefsDialog) voiceRow() {
-	target := p.working.TargetLanguageCode
+	p.voiceNote = widget.NewLabel("")
+	p.voiceNote.Wrapping = fyne.TextWrapWord
+	p.voiceSelect = widget.NewSelect(nil, nil)
+	p.voiceSelect.OnChanged = func(string) { p.syncPreviewButton() }
+	p.voiceButton = widget.NewButton("Preview", p.previewVoice)
+	p.loadVoices(p.working.TargetLanguageCode)
+}
 
+// loadVoices fills the voice picker for one target language, selecting the
+// voice stored for it. Called when the dialog is built, and again when the
+// target changes while it is open — the 1 and 2 keys — or the list would offer
+// the old language's voices and store the choice under the new one.
+func (p *prefsDialog) loadVoices(target string) {
+	p.voiceTarget = target
 	labels := []string{modelVoiceLabel}
 	p.voiceNames = []string{""}
 	p.voiceSamples = []string{""}
@@ -488,13 +513,20 @@ func (p *prefsDialog) voiceRow() {
 		note = "This machine has no local speech synthesis, so only the model's " +
 			"voice is available."
 	} else {
-		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-		voices, err := tts.Voices(ctx)
-		cancel()
-		if err != nil {
-			note = "Could not list the installed voices: " + err.Error()
+		// Listed once per dialog. A direction key reloads this list while the
+		// dialog is open, and listing runs `say -v ?` — about 330 ms on the
+		// UI goroutine each time — or PowerShell on Windows, up to the 5 s
+		// timeout (the red team).
+		if !p.voicesListed {
+			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			p.voices, p.voicesErr = tts.Voices(ctx)
+			cancel()
+			p.voicesListed = true
 		}
-		for _, v := range voices {
+		if p.voicesErr != nil {
+			note = "Could not list the installed voices: " + p.voicesErr.Error()
+		}
+		for _, v := range p.voices {
 			if !v.Matches(target) {
 				continue
 			}
@@ -507,11 +539,20 @@ func (p *prefsDialog) voiceRow() {
 				". " + platform.VoiceInstallHint()
 		}
 	}
+	p.voiceNote.SetText(note)
+	if note == "" {
+		p.voiceNote.Hide()
+	} else {
+		p.voiceNote.Show()
+	}
+	// Showing a label refreshes the label, not the box it sits in: the VBox
+	// skips hidden children when it lays out, so a note shown after the tab
+	// was built stayed 0x0 until something else relaid it (the red team).
+	if p.outputBox != nil {
+		p.outputBox.Refresh()
+	}
 
-	p.voiceNote = widget.NewLabel(note)
-	p.voiceNote.Wrapping = fyne.TextWrapWord
-
-	p.voiceSelect = widget.NewSelect(labels, nil)
+	p.voiceSelect.Options = labels
 	p.voiceSelect.SetSelectedIndex(0)
 	chosen := p.working.VoiceFor(target)
 	for i, name := range p.voiceNames {
@@ -519,15 +560,22 @@ func (p *prefsDialog) voiceRow() {
 			p.voiceSelect.SetSelectedIndex(i)
 		}
 	}
-	p.voiceSelect.OnChanged = func(string) {
-		if p.voiceButton != nil {
-			p.voiceButton.Enable()
-		}
-	}
+	p.voiceSelect.Refresh()
+	p.syncPreviewButton()
+}
 
-	p.voiceButton = widget.NewButton("Preview", p.previewVoice)
-	if len(p.voiceNames) == 1 {
+// syncPreviewButton enables Preview when there is a voice to preview and no
+// preview already playing. A list reload or a selection used to enable it
+// unconditionally, mid-preview, and a second press started an overlapping
+// player (the red team).
+func (p *prefsDialog) syncPreviewButton() {
+	if p.voiceButton == nil {
+		return
+	}
+	if p.previewing || len(p.voiceNames) <= 1 {
 		p.voiceButton.Disable()
+	} else {
+		p.voiceButton.Enable()
 	}
 }
 
@@ -570,6 +618,7 @@ func (p *prefsDialog) previewVoice() {
 		return
 	}
 
+	p.previewing = true
 	p.voiceButton.Disable()
 	p.toneStatus.SetText("Previewing " + name + " through " + dev.Name + "…")
 
@@ -583,9 +632,8 @@ func (p *prefsDialog) previewVoice() {
 				if p.toneStatus != nil {
 					p.toneStatus.SetText(text)
 				}
-				if p.voiceButton != nil {
-					p.voiceButton.Enable()
-				}
+				p.previewing = false
+				p.syncPreviewButton()
 			})
 		}
 		if err != nil {
@@ -1017,7 +1065,7 @@ func (p *prefsDialog) collect() config.Settings {
 	}
 	if p.voiceSelect != nil {
 		name, _ := p.selectedVoice()
-		s = s.WithVoiceFor(s.TargetLanguageCode, name)
+		s = s.WithVoiceFor(p.voiceTarget, name)
 	}
 	s.VocabularySource = p.vocabSource.Text
 	s.VocabularyCaptions = p.vocabCaption.Text
@@ -1119,6 +1167,146 @@ func (p *prefsDialog) cancel() {
 }
 
 // --- workers --------------------------------------------------------------
+
+// adoptExternal takes in a settings change made outside the dialog while it is
+// open: the 9 key, the 1 and 2 keys, full screen, a menu item, Reset.
+//
+// Without it the dialog kept the value from when it opened. Its widget showed
+// the old state, and the next Apply or OK wrote that old state back, silently
+// undoing what the key or menu had just done — and Cancel undid it too, since
+// it restores the settings from when the dialog opened.
+//
+// Only the fields the outside change touched are taken: they are copied into
+// working and original and shown in their widgets. Everything else the user
+// has edited in the dialog and not yet applied is left alone.
+func (p *prefsDialog) adoptExternal(old, now config.Settings) {
+	changed := changedFields(old, now)
+	if len(changed) == 0 {
+		return
+	}
+	p.working = carryFields(p.working, now, changed)
+	p.original = carryFields(p.original, now, changed)
+	p.showFields(now, changed)
+}
+
+// changedFields names the Settings fields that differ between a and b.
+func changedFields(a, b config.Settings) map[string]bool {
+	va, vb := reflect.ValueOf(a), reflect.ValueOf(b)
+	out := map[string]bool{}
+	for i := range va.NumField() {
+		if !reflect.DeepEqual(va.Field(i).Interface(), vb.Field(i).Interface()) {
+			out[va.Type().Field(i).Name] = true
+		}
+	}
+	return out
+}
+
+// carryFields returns dst with the named fields taken from src.
+func carryFields(dst, src config.Settings, fields map[string]bool) config.Settings {
+	vd := reflect.ValueOf(&dst).Elem()
+	vs := reflect.ValueOf(src)
+	for name := range fields {
+		vd.FieldByName(name).Set(vs.FieldByName(name))
+	}
+	return dst
+}
+
+// showFields puts the named fields of s into the widgets that collect reads
+// them back from. A field collect does not read from a widget — the target
+// language, full screen — needs nothing here: it is carried in working.
+func (p *prefsDialog) showFields(s config.Settings, f map[string]bool) {
+	check := func(name string, c *widget.Check, v bool) {
+		if f[name] && c != nil {
+			c.SetChecked(v)
+		}
+	}
+	slider := func(name string, sl *widget.Slider, v float64) {
+		if f[name] && sl != nil {
+			sl.SetValue(v)
+		}
+	}
+	colour := func(name string, c *colourPick, v string) {
+		if f[name] && c != nil {
+			c.setHex(v)
+		}
+	}
+	entry := func(name string, e *widget.Entry, v string) {
+		if f[name] && e != nil {
+			e.SetText(v)
+		}
+	}
+	// A device chosen from the menu may have been plugged in after the dialog
+	// listed them. It is added rather than skipped: left out, the dropdown
+	// stays on the old device and Apply puts that one back.
+	pick := func(name string, sel *widget.Select, names *[]string, v string) {
+		if !f[name] || sel == nil {
+			return
+		}
+		for i, n := range *names {
+			if n == v {
+				sel.SetSelectedIndex(i)
+				return
+			}
+		}
+		*names = append(*names, v)
+		sel.Options = append(sel.Options, v)
+		sel.SetSelectedIndex(len(*names) - 1)
+	}
+
+	if f["Provider"] && p.provider != nil {
+		p.provider.SetSelected(config.ProviderMenuText[s.Provider])
+	}
+	pick("AudioDeviceName", p.deviceSelect, &p.deviceNames, s.AudioDeviceName)
+	pick("OutputDeviceName", p.outputSelect, &p.outputNames, s.OutputDeviceName)
+	check("SpeakTranslation", p.speakAloud, s.SpeakTranslation)
+	slider("SpeechVolume", p.speechVolume, s.SpeechVolume)
+	if (f["TargetLanguageCode"] || f["SpeechVoices"]) && p.voiceSelect != nil {
+		// A voice picked but not applied belongs to the language it was
+		// picked for. Kept in working under that language before the list
+		// changes, or a direction key dropped it (the red team). An outside
+		// change to the voices themselves — Reset — wins instead.
+		if !f["SpeechVoices"] {
+			name, _ := p.selectedVoice()
+			p.working = p.working.WithVoiceFor(p.voiceTarget, name)
+		}
+		p.loadVoices(s.TargetLanguageCode)
+	}
+	check("SilenceGate", p.silenceGate, s.SilenceGate)
+	check("MusicGate", p.musicGate, s.MusicGate)
+	slider("MusicGateThreshold", p.musicThreshold, s.MusicGateThreshold)
+	slider("MusicGateHold", p.musicHold, s.MusicGateHold)
+	slider("MusicGateRelease", p.musicRelease, s.MusicGateRelease)
+	check("AdaptiveSessionPrep", p.adaptivePrep, s.AdaptiveSessionPrep)
+	check("WarmHandover", p.warmHandover, s.WarmHandover)
+	entry("VocabularySource", p.vocabSource, s.VocabularySource)
+	entry("VocabularyCaptions", p.vocabCaption, s.VocabularyCaptions)
+	slider("FontSize", p.fontSize, float64(s.FontSize))
+	if f["MaxLines"] && p.maxLines != nil {
+		p.maxLines.SetSelected(strconv.Itoa(s.MaxLines))
+	}
+	colour("BgColor", p.bgColour, s.BgColor)
+	colour("BoxColor", p.boxColour, s.BoxColor)
+	colour("TextColor", p.textColour, s.TextColor)
+	slider("BoxOpacity", p.boxOpacity, s.BoxOpacity)
+	slider("CornerRadius", p.cornerRadius, float64(s.CornerRadius))
+	slider("BoxMaxWidthPct", p.boxWidth, float64(s.BoxMaxWidthPct))
+	slider("BottomMarginPct", p.bottomMargin, float64(s.BottomMarginPct))
+	if f["BoxPosition"] && p.boxPosition != nil {
+		p.boxPosition.SetSelected(config.BoxPositionMenuText[s.Position()])
+	}
+	check("FixedBox", p.fixedBox, s.FixedBox)
+	check("ShowSourceText", p.sourceText, s.ShowSourceText)
+	check("ShowDirectionHint", p.directionHint, s.ShowDirectionHint)
+	slider("ClearAfterSeconds", p.clearAfter, s.ClearAfterSeconds)
+	slider("LineHoldSeconds", p.lineHold, s.LineHoldSeconds)
+	// The draft check is greyed by completeOnly's OnChanged, which SetChecked
+	// runs, so the two stay in step.
+	check("CompletePhrasesOnly", p.completeOnly, s.CompletePhrasesOnly)
+	check("ShowDraftWhenEmpty", p.showDraft, s.ShowDraftWhenEmpty)
+	check("SaveTranscript", p.saveScript, s.SaveTranscript)
+	entry("TranscriptDir", p.transcriptDir, s.TranscriptDir)
+	check("DebugLogging", p.debugLogging, s.DebugLogging)
+}
 
 func (p *prefsDialog) refreshKeyStatus() {
 	source := config.KeySource(p.selectedProvider())
@@ -1458,7 +1646,9 @@ func (w *Window) ResetSettings() {
 	// is thrown away.
 	w.buffer.Flush()
 	w.recordNewLines()
+	old := w.settings
 	w.applySettings(config.Reset())
+	w.syncPrefs(old)
 	w.buffer.Clear()
 	w.view.Clear()
 	w.syncActions()
