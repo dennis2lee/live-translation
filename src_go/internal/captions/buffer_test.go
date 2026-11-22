@@ -518,6 +518,134 @@ func TestPendingShowsRatherThanABlankBox(t *testing.T) {
 	}
 }
 
+// HideDraftWhenEmpty closes that exception: the empty box waits for the
+// finished sentence, so the reader sees each sentence drawn once instead of a
+// dimmed draft followed by its settled rewrite.
+func TestHideDraftWhenEmptyWaitsForTheFinishedSentence(t *testing.T) {
+	b := New(Options{MaxLines: 3, Policy: PolicyIncremental, CompletePhrasesOnly: true, HideDraftWhenEmpty: true})
+
+	b.Feed(" A long sentence that is still being", 1.0)
+	if lines := b.DisplayLines(); len(lines) != 0 {
+		t.Fatalf("display = %+v, want nothing until the sentence settles", lines)
+	}
+
+	b.Feed(" translated right now.", 2.0)
+	lines := b.DisplayLines()
+	if len(lines) != 1 || !lines[0].Settled || lines[0].Text != "A long sentence that is still being translated right now." {
+		t.Fatalf("display = %+v, want the one settled sentence", lines)
+	}
+
+	// The transcript is unaffected: it gets the sentence once, whole.
+	if got := b.DrainNewCommits(); len(got) != 1 {
+		t.Errorf("transcript got %q, want the sentence once", got)
+	}
+}
+
+// After a clear the box is empty again, which is exactly when the draft used
+// to appear. It must stay withheld there too.
+func TestHideDraftWhenEmptyHoldsAfterAClear(t *testing.T) {
+	b := New(Options{MaxLines: 3, Policy: PolicyIncremental, CompletePhrasesOnly: true, HideDraftWhenEmpty: true})
+	b.Feed(" First sentence.", 1.0)
+	b.Clear()
+	b.Feed(" Second sentence still", 2.0)
+	for _, l := range b.DisplayLines() {
+		if !l.Settled {
+			t.Errorf("draft %q shown in a box emptied by a clear", l.Text)
+		}
+	}
+}
+
+// Outside complete-phrases mode text in progress is the whole point, so the
+// option changes nothing there.
+func TestHideDraftWhenEmptyNeedsCompletePhrasesMode(t *testing.T) {
+	b := New(Options{MaxLines: 3, Policy: PolicyIncremental, HideDraftWhenEmpty: true})
+	b.Feed(" Still being said", 1.0)
+	lines := b.DisplayLines()
+	if len(lines) != 1 || lines[0].Settled {
+		t.Errorf("display = %+v, want the text in progress", lines)
+	}
+}
+
+// The setting is changed in place from Preferences; turning it on hides a
+// draft already showing, and turning it off brings it back.
+func TestSetHideDraftWhenEmptyAppliesAtOnce(t *testing.T) {
+	b := New(Options{MaxLines: 3, Policy: PolicyIncremental, CompletePhrasesOnly: true})
+	b.Feed(" Still being said", 1.0)
+	if len(b.DisplayLines()) != 1 {
+		t.Fatal("setup: no draft in the empty box")
+	}
+	b.SetHideDraftWhenEmpty(true)
+	if !b.HideDraftWhenEmpty() || len(b.DisplayLines()) != 0 {
+		t.Errorf("draft still shown after turning the option on: %+v", b.DisplayLines())
+	}
+	b.SetHideDraftWhenEmpty(false)
+	if len(b.DisplayLines()) != 1 {
+		t.Error("draft not shown again after turning the option off")
+	}
+}
+
+// Speech that never settles — fragments under IdleCommitSeconds apart, none
+// ending a sentence — must not leave the box blank for as long as it lasts.
+// After DraftFallbackSeconds the draft is shown after all (the red team
+// measured 600 of 600 ticks blank over a minute without this).
+func TestHideDraftWhenEmptyGivesUpWaitingEventually(t *testing.T) {
+	b := New(Options{MaxLines: 3, Policy: PolicyIncremental, CompletePhrasesOnly: true,
+		HideDraftWhenEmpty: true, ClearAfterSeconds: 2})
+	shownAt := -1.0
+	for i := range 300 { // 30 s in 0.1 s ticks, a fragment every second
+		now := float64(i) / 10
+		if i%10 == 0 {
+			b.Feed(" これは文です。", now) // a CJK full stop does not end a sentence
+		}
+		b.Tick(now, SpeechActive)
+		if shownAt < 0 && len(b.DisplayLines()) > 0 {
+			shownAt = now
+		}
+	}
+	if shownAt < 0 {
+		t.Fatal("the box stayed blank for 30 s of speech that never settled")
+	}
+	if shownAt < DraftFallbackSeconds-0.2 || shownAt > DraftFallbackSeconds+0.2 {
+		t.Errorf("the draft appeared at %.1f s, want about %.0f s", shownAt, DraftFallbackSeconds)
+	}
+}
+
+// The tick that makes the draft overdue reports a change, so the screen is
+// repainted then rather than at the next fragment.
+func TestAnOverdueDraftRepaintsOnTheTick(t *testing.T) {
+	b := New(Options{MaxLines: 3, Policy: PolicyIncremental, CompletePhrasesOnly: true,
+		HideDraftWhenEmpty: true, IdleCommitSeconds: 100})
+	b.Feed(" words without a stop", 0)
+	if b.Tick(DraftFallbackSeconds-0.1, SpeechActive) {
+		t.Error("a tick before the fallback reported a change")
+	}
+	if !b.Tick(DraftFallbackSeconds, SpeechActive) {
+		t.Error("the tick that made the draft overdue reported no change")
+	}
+	if len(b.DisplayLines()) != 1 {
+		t.Error("the overdue draft is not shown")
+	}
+}
+
+// A reconnect pulls the last line back to continue it. When that line is the
+// only one on screen, it must stay visible: the reader was reading it (the
+// red team's second finding).
+func TestHideDraftWhenEmptyKeepsAResumedLineOnScreen(t *testing.T) {
+	b := New(Options{MaxLines: 3, Policy: PolicyIncremental, CompletePhrasesOnly: true,
+		HideDraftWhenEmpty: true})
+	b.Feed(" The speaker paused in the middle of", 0)
+	b.Tick(IdleCommitSeconds+0.1, SpeechUnknown) // settled by the idle timer, unfinished
+	if lines := b.DisplayLines(); len(lines) != 1 || !lines[0].Settled {
+		t.Fatalf("setup: display = %+v", lines)
+	}
+	b.NoteReconnect()
+	b.Feed(" a thought and", IdleCommitSeconds+1)
+	lines := b.DisplayLines()
+	if len(lines) != 1 || !strings.HasPrefix(lines[0].Text, "The speaker paused in the middle of") {
+		t.Errorf("display = %+v, want the resumed line still on screen", lines)
+	}
+}
+
 // A reconnect resumes a line only if it was cut off mid-sentence.
 //
 // The server ends a session every nine minutes, so this runs seven times in an

@@ -99,6 +99,7 @@ type prefsDialog struct {
 	lineHold      *widget.Slider
 	fixedBox      *widget.Check
 	completeOnly  *widget.Check
+	showDraft     *widget.Check
 	directionHint *widget.Check
 	sourceText    *widget.Check
 	silenceGate   *widget.Check
@@ -932,6 +933,20 @@ func (p *prefsDialog) behaviourTab() fyne.CanvasObject {
 
 	p.completeOnly = widget.NewCheck("Complete phrases only (9)", nil)
 	p.completeOnly.SetChecked(p.working.CompletePhrasesOnly)
+	// Only means something in complete-phrases mode: without it, text in
+	// progress is always on screen. Greyed rather than hidden, so the tab
+	// does not change height under the pointer.
+	p.showDraft = widget.NewCheck("Show text in progress in an empty box", nil)
+	p.showDraft.SetChecked(p.working.ShowDraftWhenEmpty)
+	syncDraft := func(on bool) {
+		if on {
+			p.showDraft.Enable()
+		} else {
+			p.showDraft.Disable()
+		}
+	}
+	p.completeOnly.OnChanged = syncDraft
+	syncDraft(p.completeOnly.Checked)
 
 	p.saveScript = widget.NewCheck("Save a transcript for each session", nil)
 	p.saveScript.SetChecked(p.working.SaveTranscript)
@@ -967,7 +982,9 @@ func (p *prefsDialog) behaviourTab() fyne.CanvasObject {
 		widget.NewFormItem("Line hold", p.lineHold),
 		widget.NewFormItem("Transcript folder", p.transcriptDir),
 	)
-	return container.NewVBox(form, p.completeOnly, p.saveScript,
+	// The two caption checks share a row: a row of its own made the tab
+	// taller than the dialog.
+	return container.NewVBox(form, container.NewHBox(p.completeOnly, p.showDraft), p.saveScript,
 		// Side by side: one more row made this the one tab taller than the
 		// dialog.
 		container.NewHBox(p.warmHandover, p.adaptivePrep), prepHint, p.debugLogging, logHint)
@@ -1026,6 +1043,7 @@ func (p *prefsDialog) collect() config.Settings {
 	s.ClearAfterSeconds = p.clearAfter.Value
 	s.LineHoldSeconds = p.lineHold.Value
 	s.CompletePhrasesOnly = p.completeOnly.Checked
+	s.ShowDraftWhenEmpty = p.showDraft.Checked
 	s.SaveTranscript = p.saveScript.Checked
 	s.TranscriptDir = p.transcriptDir.Text
 	s.DebugLogging = p.debugLogging.Checked

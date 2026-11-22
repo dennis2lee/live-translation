@@ -188,6 +188,7 @@ func TestApplyCollectsEveryTab(t *testing.T) {
 	p.clearAfter.SetValue(5)
 	p.lineHold.SetValue(1.5)
 	p.completeOnly.SetChecked(true)
+	p.showDraft.SetChecked(false)
 	p.saveScript.SetChecked(false)
 	p.transcriptDir.SetText("/tmp/somewhere")
 	p.debugLogging.SetChecked(true)
@@ -220,6 +221,7 @@ func TestApplyCollectsEveryTab(t *testing.T) {
 		{"ClearAfterSeconds", s.ClearAfterSeconds, 5.0},
 		{"LineHoldSeconds", s.LineHoldSeconds, 1.5},
 		{"CompletePhrasesOnly", s.CompletePhrasesOnly, true},
+		{"ShowDraftWhenEmpty", s.ShowDraftWhenEmpty, false},
 		{"SaveTranscript", s.SaveTranscript, false},
 		{"TranscriptDir", s.TranscriptDir, "/tmp/somewhere"},
 		{"DebugLogging", s.DebugLogging, true},
@@ -480,5 +482,39 @@ func TestPresetsAreValidHex(t *testing.T) {
 					pre.name, pre.hex, c.BgColor)
 			}
 		}
+	}
+}
+
+// The draft option only means something in complete-phrases mode, so it is
+// greyed out whenever that is off, and follows the box as it is ticked.
+func TestTheDraftOptionFollowsCompletePhrases(t *testing.T) {
+	w := newTestWindow(t)
+	p := openPrefs(t, w)
+
+	p.completeOnly.SetChecked(false)
+	if !p.showDraft.Disabled() {
+		t.Error("the draft option is enabled with complete phrases off")
+	}
+	p.completeOnly.SetChecked(true)
+	if p.showDraft.Disabled() {
+		t.Error("the draft option is still disabled with complete phrases on")
+	}
+}
+
+// Apply reaches the caption buffer in place, not only the saved settings.
+func TestTheDraftOptionReachesTheBuffer(t *testing.T) {
+	w := newTestWindow(t)
+	p := openPrefs(t, w)
+
+	p.completeOnly.SetChecked(true)
+	p.showDraft.SetChecked(false)
+	p.apply()
+	if !w.buffer.HideDraftWhenEmpty() {
+		t.Error("turning the draft off did not reach the buffer")
+	}
+	p.showDraft.SetChecked(true)
+	p.apply()
+	if w.buffer.HideDraftWhenEmpty() {
+		t.Error("turning the draft back on did not reach the buffer")
 	}
 }

@@ -232,6 +232,7 @@ func newBuffer(s config.Settings) *captions.Buffer {
 		ClearAfterSeconds:   s.ClearAfterSeconds,
 		LineHoldSeconds:     s.LineHoldSeconds,
 		CompletePhrasesOnly: s.CompletePhrasesOnly,
+		HideDraftWhenEmpty:  !s.ShowDraftWhenEmpty,
 	})
 }
 
@@ -387,6 +388,7 @@ func (w *Window) applySettings(next config.Settings) {
 func (w *Window) applyBufferSettings() {
 	w.buffer.SetMaxLines(w.settings.MaxLines)
 	w.buffer.SetCompletePhrasesOnly(w.settings.CompletePhrasesOnly)
+	w.buffer.SetHideDraftWhenEmpty(!w.settings.ShowDraftWhenEmpty)
 	w.buffer.SetClearAfterSeconds(w.settings.ClearAfterSeconds)
 	w.buffer.SetLineHoldSeconds(w.settings.LineHoldSeconds)
 	w.buffer.SetPolicy(w.settings.Policy())

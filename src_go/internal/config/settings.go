@@ -142,6 +142,15 @@ type Settings struct {
 	// under the reader.
 	CompletePhrasesOnly bool `json:"complete_phrases_only"`
 
+	// ShowDraftWhenEmpty, in complete-phrases mode, shows the sentence in
+	// progress while no finished one is on screen, then redraws it when it
+	// finishes. Off, the box waits for the finished sentence and draws each
+	// one once — up to captions.DraftFallbackSeconds, after which a sentence
+	// still unfinished is shown in progress anyway. On by default, which is how complete-phrases mode has always
+	// behaved; Load unmarshals over the defaults, so an older settings file
+	// keeps it on.
+	ShowDraftWhenEmpty bool `json:"show_draft_when_empty"`
+
 	// Transcript recording. The filename is the session start timestamp.
 	SaveTranscript bool   `json:"save_transcript"`
 	TranscriptDir  string `json:"transcript_dir"`
@@ -271,6 +280,7 @@ func Default() Settings {
 		FixedBox:           true,
 		ClearAfterSeconds:  2.0,
 		LineHoldSeconds:    0.7,
+		ShowDraftWhenEmpty: true,
 		SaveTranscript:     true,
 		TranscriptDir:      transcript.DefaultDir,
 		ShowDirectionHint:  true,

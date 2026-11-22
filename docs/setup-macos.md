@@ -223,6 +223,7 @@ This is **Preferences → Behaviour → Warm session handover**, on by default.
 | Green dot, but no captions | macOS is blocking the microphone: **System Settings → Privacy & Security → Microphone**, turn LiveCap on, then restart LiveCap. Also run the level test (step 6). |
 | My USB interface is not in the list | Plug it in, then **Settings → Refresh Device List**. |
 | Captions are too small | **Settings → Font Size**, or Preferences → Captions. |
+| A caption appears dimmed, then is redrawn when the sentence ends | That is the sentence in progress, shown while the box is empty. To see each sentence only once it is finished, untick **Preferences → Behaviour → Show text in progress in an empty box** (with **Complete phrases only** on). A sentence still unfinished after 10 s is shown in progress anyway, so the box never sits blank through long speech. |
 | The translation is echoed and repeated | The speakers are feeding the microphone. Use headphones, or turn off **Speak the translation aloud**. |
 | Anything else | **Preferences → Behaviour** shows where the log file is. Include it when reporting a problem. It never contains your key. |
 

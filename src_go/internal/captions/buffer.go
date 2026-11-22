@@ -101,6 +101,23 @@ const (
 	// shows, as blank rows.
 	DisplayHistoryFactor = 8
 
+	// DraftFallbackSeconds is how long HideDraftWhenEmpty keeps an empty box
+	// waiting for a sentence to finish before showing it in progress anyway.
+	//
+	// A sentence settles at .?!, at the server's turn_complete, or after
+	// IdleCommitSeconds without a fragment. Speech that keeps coming with
+	// none of those — no punctuation, a CJK full stop, an ellipsis, a closing
+	// quote after the stop — never settles while it lasts, and without this
+	// the box stayed blank for as long as the speaker talked (the red team,
+	// 600 of 600 ticks over a minute). A blank box there looks like a dead
+	// app, which is worse than a sentence drawn twice.
+	//
+	// 10 s is past nine in ten sentences: across 11,357 transcript lines the
+	// gap between consecutive settled lines was 10 s or more 10.3% of the
+	// time, and that gap includes pauses, so fewer sentences than that ever
+	// reach it.
+	DraftFallbackSeconds = 10.0
+
 	autoSampleSize     = 8
 	autoUtteranceChars = 25
 )
@@ -163,6 +180,14 @@ type Options struct {
 	// IdleCommitSeconds of quiet. Costs a little latency, and in exchange the
 	// captions stop moving under the reader.
 	CompletePhrasesOnly bool
+
+	// HideDraftWhenEmpty, in complete-phrases mode, withholds unsettled text
+	// even when no settled line is on screen. Left off, an empty box shows
+	// the sentence in progress, dimmed, and redraws it settled when it ends —
+	// which reads as the line being written twice. On, the box stays empty
+	// until the sentence settles. No effect outside complete-phrases mode,
+	// where text in progress is always shown.
+	HideDraftWhenEmpty bool
 }
 
 // Buffer holds arriving fragments as committed lines plus pending text.
@@ -186,6 +211,15 @@ type Buffer struct {
 	clearAfterSeconds   float64
 	lineHoldSeconds     float64
 	completePhrasesOnly bool
+	hideDraftWhenEmpty  bool
+
+	// pendingSince is when the current pending text began. draftOverdue is
+	// set once it has waited DraftFallbackSeconds, and pendingResumed when it
+	// is a line pulled back off the screen by a reconnect. Either lets
+	// HideDraftWhenEmpty show the draft after all.
+	pendingSince   float64
+	draftOverdue   bool
+	pendingResumed bool
 
 	committed     []string
 	queue         []string
@@ -227,6 +261,7 @@ func New(opts Options) *Buffer {
 		clearAfterSeconds:   opts.ClearAfterSeconds,
 		lineHoldSeconds:     opts.LineHoldSeconds,
 		completePhrasesOnly: opts.CompletePhrasesOnly,
+		hideDraftWhenEmpty:  opts.HideDraftWhenEmpty,
 	}
 	if b.policy == "" {
 		b.policy = PolicyAuto
@@ -262,6 +297,13 @@ func (b *Buffer) CompletePhrasesOnly() bool { return b.completePhrasesOnly }
 
 // SetCompletePhrasesOnly turns the mode on or off.
 func (b *Buffer) SetCompletePhrasesOnly(on bool) { b.completePhrasesOnly = on }
+
+// HideDraftWhenEmpty reports whether an empty box also withholds unsettled
+// text in complete-phrases mode.
+func (b *Buffer) HideDraftWhenEmpty() bool { return b.hideDraftWhenEmpty }
+
+// SetHideDraftWhenEmpty turns that on or off.
+func (b *Buffer) SetHideDraftWhenEmpty(on bool) { b.hideDraftWhenEmpty = on }
 
 // CommittedLines returns the settled lines, newest last.
 func (b *Buffer) CommittedLines() []string { return append([]string(nil), b.committed...) }
@@ -305,8 +347,10 @@ func (b *Buffer) IsEmpty() bool {
 //
 // Unsettled text is withheld while the queue drains: appending live text under
 // lines that are still catching up would show them out of order. In
-// complete-phrases mode it is withheld always — that is the whole point of the
-// mode, so the reader never watches a phrase rewrite itself.
+// complete-phrases mode it is withheld whenever a settled line is on screen —
+// that is the whole point of the mode, so the reader never watches a phrase
+// rewrite itself — and, with HideDraftWhenEmpty, in an empty box too, unless
+// it has waited DraftFallbackSeconds or is a line a reconnect pulled back.
 func (b *Buffer) DisplayLines() []Line {
 	lines := make([]Line, 0, len(b.committed)+1)
 	for _, t := range b.committed {
@@ -319,8 +363,19 @@ func (b *Buffer) DisplayLines() []Line {
 	// symptom was staring at a blank box for the whole of it. Show the text in
 	// progress in that case; withhold it again the moment a settled line
 	// exists to protect.
+	//
+	// That draft is then redrawn settled when the sentence ends, and readers
+	// following along reported it as the caption being written a second time.
+	// HideDraftWhenEmpty is the choice between the two: a box that waits, or
+	// a sentence drawn twice. Two exceptions keep the waiting box from being
+	// a broken one. A draft that has waited DraftFallbackSeconds is shown, or
+	// speech that never settles leaves the box blank for as long as it lasts.
+	// And a line a reconnect pulled back off the screen to continue is
+	// shown, or the one line the reader was reading vanishes until the
+	// continuation settles (both the red team's).
 	if b.pending != "" && len(b.queue) == 0 &&
-		(!b.completePhrasesOnly || len(b.committed) == 0) {
+		(!b.completePhrasesOnly || (len(b.committed) == 0 &&
+			(!b.hideDraftWhenEmpty || b.draftOverdue || b.pendingResumed))) {
 		lines = append(lines, Line{Text: b.pending, Settled: false})
 	}
 	return lines
@@ -393,9 +448,12 @@ func (b *Buffer) Feed(text string, now float64) bool {
 			} else if n := len(b.committed); n > 0 {
 				resumed = b.committed[n-1]
 				b.committed = b.committed[:n-1]
+				// It was on screen: the reader has already seen it.
+				b.pendingResumed = true
 			}
 			if resumed != "" {
 				b.pending = resumed
+				b.pendingSince = now
 				if n := len(b.newCommits); n > 0 && b.newCommits[n-1] == resumed {
 					// Not handed to the transcript yet — emit the merged line whole.
 					b.newCommits = b.newCommits[:n-1]
@@ -407,7 +465,11 @@ func (b *Buffer) Feed(text string, now float64) bool {
 		}
 	}
 
+	if b.pending == "" {
+		b.pendingSince = now
+	}
 	b.pending = join(b.pending, text)
+	b.noteDraftAge(now)
 
 	if b.EffectivePolicy() == PolicyUtterance || b.endsASentence() {
 		b.commit(true)
@@ -505,6 +567,12 @@ func (b *Buffer) Tick(now float64, speech Speech) bool {
 		}
 	}
 
+	// A draft withheld long enough is shown after all; say so, or the screen
+	// would not repaint until the next fragment.
+	if b.noteDraftAge(now) {
+		changed = true
+	}
+
 	// Settle a phrase that stopped without sentence-final punctuation.
 	if b.EffectivePolicy() == PolicyIncremental && b.pending != "" && idle >= b.idleCommitSeconds {
 		b.commit(false)
@@ -599,9 +667,25 @@ func (b *Buffer) Clear() {
 	b.lastText = ""
 	b.continueNext = false
 	b.resumedPrefix = ""
+	b.draftOverdue = false
+	b.pendingResumed = false
 }
 
 // --- internals -----------------------------------------------------------
+
+// noteDraftAge marks the pending text overdue once it has waited
+// DraftFallbackSeconds, and reports whether that just happened while it is
+// being withheld from an empty box — the one case where it changes the
+// screen.
+func (b *Buffer) noteDraftAge(now float64) bool {
+	if b.draftOverdue || b.pending == "" || now-b.pendingSince < DraftFallbackSeconds {
+		return false
+	}
+	b.draftOverdue = true
+	// A resumed line is already on screen, so it becoming overdue changes
+	// nothing there.
+	return b.completePhrasesOnly && b.hideDraftWhenEmpty && len(b.committed) == 0 && !b.pendingResumed
+}
 
 // drain releases as many queued lines as their hold times allow.
 func (b *Buffer) drain(now float64) bool {
@@ -681,6 +765,8 @@ func (b *Buffer) clearDue(now float64) bool {
 func (b *Buffer) commit(finished bool) {
 	line := strings.TrimSpace(b.pending)
 	b.pending = ""
+	b.draftOverdue = false
+	b.pendingResumed = false
 	prefix := b.resumedPrefix
 	b.resumedPrefix = ""
 	if line == "" {

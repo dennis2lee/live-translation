@@ -245,6 +245,7 @@ This is **Preferences → Behaviour → Warm session handover**, on by default.
 | My USB interface is not in the list | Plug it in, then **Settings → Refresh Device List**. |
 | Stuck in full screen, no menu | Press **f**. In Hangul mode press **Esc**, or **한/영** to switch to English, then **f**. |
 | A voice I installed is not in the Voice list | Only SAPI voices are visible. Narrator's natural voices are not. |
+| A caption appears dimmed, then is redrawn when the sentence ends | That is the sentence in progress, shown while the box is empty. To see each sentence only once it is finished, untick **Preferences → Behaviour → Show text in progress in an empty box** (with **Complete phrases only** on). A sentence still unfinished after 10 s is shown in progress anyway, so the box never sits blank through long speech. |
 | The translation is echoed and repeated | The speakers are feeding the microphone. Use headphones, or turn off **Speak the translation aloud**. |
 | Anything else | **Preferences → Behaviour** shows where the log file is (under `%APPDATA%\LiveCap`). Include it when reporting a problem. It never contains your key. |
 

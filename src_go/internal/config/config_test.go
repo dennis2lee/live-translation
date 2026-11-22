@@ -233,6 +233,27 @@ func TestPartialSettingsFileKeepsDefaults(t *testing.T) {
 	}
 }
 
+// show_draft_when_empty arrived after files were already written. An absent
+// key must keep the default, on, so an upgrade does not change what the
+// captions show.
+func TestAnOlderSettingsFileKeepsShowingTheDraft(t *testing.T) {
+	dir, _ := isolate(t)
+	if err := os.WriteFile(filepath.Join(dir, Filename), []byte(`{"complete_phrases_only": true}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if !Load().ShowDraftWhenEmpty {
+		t.Error("an older settings file turned ShowDraftWhenEmpty off")
+	}
+	s := Default()
+	s.ShowDraftWhenEmpty = false
+	if err := Save(s); err != nil {
+		t.Fatal(err)
+	}
+	if Load().ShowDraftWhenEmpty {
+		t.Error("ShowDraftWhenEmpty = false did not survive a save")
+	}
+}
+
 // The upgrade trap for a new field whose default is not the zero value.
 //
 // Every settings file written before 1.1.0 has no speech_volume key. Load
