@@ -32,23 +32,45 @@ const (
 	StatusFontRatio = 0.55
 )
 
+// Face is the font the captions are measured and drawn in. A nil Source is
+// the theme's own font.
+//
+// Measuring and drawing have to agree: the box is sized and the lines broken
+// by measuring, and a caption font measured as the default one would wrap a
+// wide font past the box edge and leave a narrow one short.
+type Face struct {
+	Source fyne.Resource
+}
+
+// LineHeight is the height of one caption line at the given font size, in
+// the theme's font.
+func LineHeight(fontSize float32) float32 { return Face{}.LineHeight(fontSize) }
+
 // LineHeight is the height of one caption line at the given font size.
 //
 // Fyne measures a string rather than exposing font metrics, so a reference
 // string with an ascender and a descender stands in for them. Using the caption
 // text itself would make the line height jitter as the text changed.
-func LineHeight(fontSize float32) float32 {
-	return fyne.MeasureText("Ag영", fontSize, fyne.TextStyle{}).Height
+func (f Face) LineHeight(fontSize float32) float32 {
+	return f.size("Ag영", fontSize).Height
 }
 
 // NominalBoxHeight is the height of a full box, for callers that place things
 // before the text has been wrapped.
-func NominalBoxHeight(s config.Settings) float32 {
+func NominalBoxHeight(s config.Settings) float32 { return Face{}.NominalBoxHeight(s) }
+
+// NominalBoxHeight is the height of a full box in this face.
+func (f Face) NominalBoxHeight(s config.Settings) float32 {
 	lines := s.MaxLines
 	if lines < 1 {
 		lines = 1
 	}
-	return LineHeight(float32(s.FontSize))*float32(lines) + 2*PadV
+	return f.LineHeight(float32(s.FontSize))*float32(lines) + 2*PadV
+}
+
+func (f Face) size(text string, fontSize float32) fyne.Size {
+	s, _ := fyne.CurrentApp().Driver().RenderedTextSize(text, fontSize, fyne.TextStyle{}, f.Source)
+	return s
 }
 
 // BoxBottom is the bottom edge of the caption box, wherever it is anchored.
@@ -92,6 +114,12 @@ func DotRadius(s config.Settings) float32 {
 // between runes — without that, one long Korean sentence would be a single
 // unbreakable line wider than the box.
 func Wrap(text string, fontSize, maxWidth float32) []string {
+	return Face{}.Wrap(text, fontSize, maxWidth)
+}
+
+// Wrap breaks text to maxWidth in this face. See the package function.
+func (f Face) Wrap(text string, fontSize, maxWidth float32) []string {
+	measure := f.measure
 	text = strings.TrimSpace(text)
 	if text == "" || maxWidth <= 0 {
 		return nil
@@ -156,16 +184,24 @@ func splitKeepingSpaces(text string) []string {
 	return out
 }
 
-func measure(text string, fontSize float32) float32 {
+func measure(text string, fontSize float32) float32 { return Face{}.measure(text, fontSize) }
+
+func (f Face) measure(text string, fontSize float32) float32 {
 	if text == "" {
 		return 0
 	}
-	return fyne.MeasureText(text, fontSize, fyne.TextStyle{}).Width
+	return f.size(text, fontSize).Width
 }
 
 // Elide shortens text from the left until it fits, prefixing an ellipsis. The
 // source line is elided from the left because its end is the newest speech.
 func Elide(text string, fontSize, maxWidth float32) string {
+	return Face{}.Elide(text, fontSize, maxWidth)
+}
+
+// Elide shortens text in this face. See the package function.
+func (f Face) Elide(text string, fontSize, maxWidth float32) string {
+	measure := f.measure
 	if measure(text, fontSize) <= maxWidth {
 		return text
 	}

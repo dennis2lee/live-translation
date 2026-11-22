@@ -6,6 +6,7 @@ require (
 	fyne.io/fyne/v2 v2.8.0
 	github.com/fernet/fernet-go v0.0.0-20240119011108-303da6aec611
 	github.com/gen2brain/malgo v0.11.25
+	github.com/go-text/typesetting v0.3.4
 	github.com/gorilla/websocket v1.5.3
 	github.com/zalando/go-keyring v0.2.8
 	golang.org/x/crypto v0.54.0
@@ -32,7 +33,6 @@ require (
 	github.com/go-gl/gl v0.0.0-20260331235117-4566fea9a276 // indirect
 	github.com/go-gl/glfw/v3.4/glfw v0.1.0-pre.1.0.20260707082822-2a407d02d01a // indirect
 	github.com/go-text/render v0.2.1 // indirect
-	github.com/go-text/typesetting v0.3.4 // indirect
 	github.com/godbus/dbus/v5 v5.2.2 // indirect
 	github.com/golang/groupcache v0.0.0-20210331224755-41bb18bfe9da // indirect
 	github.com/google/go-cmp v0.6.0 // indirect

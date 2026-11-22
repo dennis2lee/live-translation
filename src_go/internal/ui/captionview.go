@@ -2,8 +2,10 @@ package ui
 
 import (
 	"image/color"
+	"log/slog"
 	"math"
 	"strings"
+	"sync"
 	"time"
 
 	"fyne.io/fyne/v2"
@@ -12,6 +14,7 @@ import (
 
 	"github.com/dennis2lee/live-translation/src_go/internal/captions"
 	"github.com/dennis2lee/live-translation/src_go/internal/config"
+	"github.com/dennis2lee/live-translation/src_go/internal/fonts"
 )
 
 // Indicator is the status dot at the bottom-right of the caption box.
@@ -108,6 +111,11 @@ type CaptionView struct {
 	source   string
 	status   string
 
+	// fontName is the caption font in force, and font its file — nil for the
+	// theme's own, which is also what an unavailable font falls back to.
+	fontName string
+	font     fyne.Resource
+
 	boxAlpha  float32
 	hintText  string
 	hintAlpha float32
@@ -137,8 +145,63 @@ func NewCaptionView(settings config.Settings) *CaptionView {
 	if settings.FixedBox {
 		v.boxAlpha = 1
 	}
+	v.setFont(settings.CaptionFont)
 	v.ExtendBaseWidget(v)
 	return v
+}
+
+// setFont loads the caption font by family name; "" is the theme's.
+func (v *CaptionView) setFont(name string) {
+	v.fontName = name
+	v.font = captionFont(name)
+}
+
+// Font is the caption font file in use, nil for the theme's. For the tests.
+func (v *CaptionView) Font() fyne.Resource { return v.font }
+
+// face is what the captions are measured and drawn in.
+func (v *CaptionView) face() Face { return Face{Source: v.font} }
+
+var (
+	fontMu    sync.Mutex
+	fontCache = map[string]fyne.Resource{}
+)
+
+// captionFont returns the named family as a font resource, or nil for the
+// theme's own.
+//
+// One resource per family for the life of the process, keyed by the family's
+// own name so "helvetica" and "Helvetica" share it: Fyne caches a face per
+// FontSource *value*, so a fresh resource on every Apply would load and keep
+// another copy each time. What is kept is bounded by the families the user
+// has actually applied.
+//
+// A family that cannot be loaded — uninstalled since it was chosen, or a file
+// Fyne cannot read — is logged and drawn in the theme's font rather than
+// failing the window. The setting is kept, so the font returns when it is
+// installed again — at the next launch, since the installed fonts are read
+// once per run.
+func captionFont(name string) fyne.Resource {
+	if name == "" {
+		return nil
+	}
+	if canonical, ok := fonts.Canonical(name); ok {
+		name = canonical
+	}
+	fontMu.Lock()
+	defer fontMu.Unlock()
+	if r, ok := fontCache[name]; ok {
+		return r
+	}
+	data, err := fonts.Load(name)
+	if err != nil {
+		slog.Warn("caption font unavailable — using the default", "font", name, "err", err)
+		fontCache[name] = nil
+		return nil
+	}
+	r := fyne.NewStaticResource(name+".ttf", data)
+	fontCache[name] = r
+	return r
 }
 
 // CreateRenderer is the fyne.Widget contract.
@@ -166,6 +229,9 @@ func (v *CaptionView) CreateRenderer() fyne.WidgetRenderer {
 
 // ApplySettings takes a settings change immediately, without a restart.
 func (v *CaptionView) ApplySettings(s config.Settings) {
+	if s.CaptionFont != v.fontName {
+		v.setFont(s.CaptionFont)
+	}
 	v.settings = s
 	v.refreshVisibility()
 }
@@ -381,7 +447,8 @@ func (r *captionRenderer) rebuild(size fyne.Size) {
 	r.background.Refresh()
 
 	fontSize := float32(s.FontSize)
-	lineH := LineHeight(fontSize)
+	face := v.face()
+	lineH := face.LineHeight(fontSize)
 	maxBoxW := size.Width * float32(s.BoxMaxWidthPct) / 100.0
 	maxTextW := maxBoxW - 2*PadH
 	if maxTextW < 40 {
@@ -392,7 +459,7 @@ func (r *captionRenderer) rebuild(size fyne.Size) {
 	if maxLines < 1 {
 		maxLines = 1
 	}
-	wrapped := reflowRows(v.lines, fontSize, maxTextW, maxLines)
+	wrapped := face.reflowRows(v.lines, fontSize, maxTextW, maxLines)
 
 	visible := v.boxAlpha > 0.001 && (len(wrapped) > 0 || s.FixedBox)
 
@@ -404,7 +471,7 @@ func (r *captionRenderer) rebuild(size fyne.Size) {
 	} else {
 		var textW float32
 		for _, w := range wrapped {
-			if got := measure(w.text, fontSize); got > textW {
+			if got := face.measure(w.text, fontSize); got > textW {
 				textW = got
 			}
 		}
@@ -455,6 +522,7 @@ func (r *captionRenderer) rebuild(size fyne.Size) {
 		t.Color = c
 		t.TextSize = fontSize
 		t.TextStyle = fyne.TextStyle{}
+		t.FontSource = v.font
 		t.Alignment = CaptionAlignment
 		t.Resize(fyne.NewSize(boxW-2*PadH, lineH))
 		t.Move(fyne.NewPos(boxLeft+PadH, y+float32(i)*lineH))
@@ -485,12 +553,13 @@ func (r *captionRenderer) rebuild(size fyne.Size) {
 	// Source text — one small grey line outside the box, on the background.
 	if s.ShowSourceText && v.source != "" && visible {
 		srcSize := max(14, fontSize*SourceFontRatio)
-		r.sourceLine.Text = Elide(v.source, srcSize, maxBoxW)
+		r.sourceLine.Text = face.Elide(v.source, srcSize, maxBoxW)
 		r.sourceLine.TextSize = srcSize
+		r.sourceLine.FontSource = v.font
 		c := colourSource
 		c.A = uint8(clamp01(v.boxAlpha) * 255)
 		r.sourceLine.Color = c
-		h := LineHeight(srcSize)
+		h := face.LineHeight(srcSize)
 		r.sourceLine.Resize(fyne.NewSize(maxBoxW, h))
 		r.sourceLine.Move(fyne.NewPos((size.Width-maxBoxW)/2, boxTop-SourceGap-h))
 		r.sourceLine.Show()
@@ -502,7 +571,7 @@ func (r *captionRenderer) rebuild(size fyne.Size) {
 	// The strip below the box carries the hint and the dot, whether or not
 	// there are captions.
 	radius := DotRadius(s)
-	nominalBottom := BoxBottom(s, size.Height, NominalBoxHeight(s))
+	nominalBottom := BoxBottom(s, size.Height, face.NominalBoxHeight(s))
 	stripTop := min(nominalBottom+HintGap, size.Height-radius*2)
 	anchorRight := AnchorRight(s, size.Width)
 
@@ -563,6 +632,12 @@ type row struct {
 // survives — it is a whole-row property, which is all the renderer can
 // express. It comes last, so trimming to maxLines keeps the newest text.
 func reflowRows(lines []captions.Line, fontSize, maxTextW float32, maxLines int) []row {
+	return Face{}.reflowRows(lines, fontSize, maxTextW, maxLines)
+}
+
+// reflowRows reflows in this face. See the package function.
+func (f Face) reflowRows(lines []captions.Line, fontSize, maxTextW float32, maxLines int) []row {
+	Wrap := f.Wrap
 	var wrapped []row
 	var settledText []string
 	for _, line := range lines {

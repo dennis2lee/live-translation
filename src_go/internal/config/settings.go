@@ -122,7 +122,15 @@ type Settings struct {
 	BoxPosition string `json:"box_position"`
 
 	FontSize int `json:"font_size"` // 24 ~ 96
-	MaxLines int `json:"max_lines"` // 1 ~ 4
+
+	// CaptionFont is the font family the captions are drawn in, by the name
+	// the font gives itself ("Apple SD Gothic Neo"). Empty is the built-in
+	// font. A family that is no longer installed falls back to the built-in
+	// one and is kept, so it returns if the font does. Glyphs the family
+	// lacks — Hangul in an English-only font — come from an installed font
+	// that has them.
+	CaptionFont string `json:"caption_font"`
+	MaxLines    int    `json:"max_lines"` // 1 ~ 4
 
 	// FixedBox keeps the caption box at a fixed size and position, even when
 	// empty. Turning it off makes it hug its content and disappear when empty.

@@ -20,6 +20,7 @@ import (
 	"github.com/dennis2lee/live-translation/src_go/internal/audio"
 	"github.com/dennis2lee/live-translation/src_go/internal/classify"
 	"github.com/dennis2lee/live-translation/src_go/internal/config"
+	"github.com/dennis2lee/live-translation/src_go/internal/fonts"
 	"github.com/dennis2lee/live-translation/src_go/internal/logging"
 	"github.com/dennis2lee/live-translation/src_go/internal/netcheck"
 	"github.com/dennis2lee/live-translation/src_go/internal/platform"
@@ -90,6 +91,8 @@ type prefsDialog struct {
 	textColour *colourPick
 
 	fontSize      *widget.Slider
+	captionFont   *widget.Select
+	fontNames     []string // parallel to captionFont.Options; "" is the built-in font
 	maxLines      *widget.Select
 	boxOpacity    *widget.Slider
 	cornerRadius  *widget.Slider
@@ -579,6 +582,32 @@ func (p *prefsDialog) syncPreviewButton() {
 	}
 }
 
+// selectCaptionFont shows a stored family in the font menu. Families are
+// matched the way fonts match them — case and spaces do not count — so a
+// stored "HelveticaNeue" shows as Helvetica Neue rather than as the default,
+// which the next Apply would have written back (the red team). A family that
+// is not installed is listed once, marked, so Apply keeps it.
+func (p *prefsDialog) selectCaptionFont(name string) {
+	if name == "" {
+		p.captionFont.SetSelectedIndex(0)
+		return
+	}
+	for i, n := range p.fontNames {
+		if i > 0 && fonts.SameFamily(n, name) {
+			p.captionFont.SetSelectedIndex(i)
+			return
+		}
+	}
+	p.fontNames = append(p.fontNames, name)
+	p.captionFont.Options = append(p.captionFont.Options, name+" (not installed)")
+	p.captionFont.SetSelectedIndex(len(p.fontNames) - 1)
+}
+
+// defaultFontLabel names the built-in caption font: Fyne's bundled Noto Sans.
+// It has no Hangul — Korean captions have always been drawn from an installed
+// font that has it, the same fallback a chosen family gets.
+const defaultFontLabel = "Default (Noto Sans)"
+
 // modelVoiceLabel names the translation service's own speech. Not "changes
 // at every reconnect": that is Gemini's, and OpenAI's follows the speaker.
 const modelVoiceLabel = "Model voice"
@@ -893,6 +922,14 @@ func (p *prefsDialog) appearanceWidgets() {
 	p.boxColour = p.newColourPick("Caption box colour", p.working.BoxColor, boxPresets)
 	p.textColour = p.newColourPick("Text colour", p.working.TextColor, textPresets)
 
+	// The caption font. Listed by the name each font gives itself; the first
+	// entry is the built-in font. A family chosen earlier and since
+	// uninstalled is still listed, marked, so opening the dialog does not
+	// quietly change the setting — the captions fall back meanwhile.
+	p.fontNames = append([]string{""}, fonts.Families()...)
+	p.captionFont = widget.NewSelect(append([]string{defaultFontLabel}, p.fontNames[1:]...), nil)
+	p.selectCaptionFont(p.working.CaptionFont)
+
 	p.fontSize = widget.NewSlider(24, 96)
 	p.fontSize.Step = 2
 	p.fontSize.SetValue(float64(p.working.FontSize))
@@ -927,6 +964,7 @@ func (p *prefsDialog) appearanceWidgets() {
 	p.directionHint.SetChecked(p.working.ShowDirectionHint)
 
 	p.captionsForm = widget.NewForm(
+		widget.NewFormItem("Font", p.captionFont),
 		widget.NewFormItem("Font size", container.NewBorder(nil, nil, nil, fontLabel, p.fontSize)),
 		widget.NewFormItem("Caption lines", p.maxLines),
 		widget.NewFormItem("Box width %", p.boxWidth),
@@ -1069,6 +1107,9 @@ func (p *prefsDialog) collect() config.Settings {
 	}
 	s.VocabularySource = p.vocabSource.Text
 	s.VocabularyCaptions = p.vocabCaption.Text
+	if i := p.captionFont.SelectedIndex(); i >= 0 && i < len(p.fontNames) {
+		s.CaptionFont = p.fontNames[i]
+	}
 	s.FontSize = int(p.fontSize.Value)
 	if n, err := strconv.Atoi(p.maxLines.Selected); err == nil {
 		s.MaxLines = n
@@ -1280,6 +1321,9 @@ func (p *prefsDialog) showFields(s config.Settings, f map[string]bool) {
 	check("WarmHandover", p.warmHandover, s.WarmHandover)
 	entry("VocabularySource", p.vocabSource, s.VocabularySource)
 	entry("VocabularyCaptions", p.vocabCaption, s.VocabularyCaptions)
+	if f["CaptionFont"] && p.captionFont != nil {
+		p.selectCaptionFont(s.CaptionFont)
+	}
 	slider("FontSize", p.fontSize, float64(s.FontSize))
 	if f["MaxLines"] && p.maxLines != nil {
 		p.maxLines.SetSelected(strconv.Itoa(s.MaxLines))
