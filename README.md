@@ -124,7 +124,7 @@ an unsigned app, microphone permission, and what to do if something is off:
 | Model | `gemini-3.5-live-translate-preview` | `gpt-realtime-translate` |
 | First translated speech | 3.3–5.2 s | ~0.5 s |
 | Spoken voice | picked by the model, changes at each reconnect | follows the speaker's voice (whether it holds across reconnects is not yet measured) |
-| Name / jargon hints | ✅ | — |
+| Name / jargon hints, kept as word presets | ✅ | — |
 | Cost | ~$0.037 per minute (measured: $1.11 for 30 min) | $0.034 per minute (OpenAI's list price) |
 
 You pay the provider directly; LiveCap has no account and no server of its

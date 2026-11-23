@@ -4,6 +4,7 @@ import (
 	"errors"
 	"image"
 	"math"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -18,6 +19,7 @@ import (
 	"github.com/dennis2lee/live-translation/src_go/internal/logging"
 	"github.com/dennis2lee/live-translation/src_go/internal/transcript"
 	"github.com/dennis2lee/live-translation/src_go/internal/translator"
+	"github.com/dennis2lee/live-translation/src_go/internal/wordpreset"
 )
 
 // newTestWindow builds a window against the test driver, with both persistence
@@ -36,6 +38,7 @@ func newTestWindowWith(t *testing.T, change func(*config.Settings)) *Window {
 	t.Cleanup(config.SetSettingsDirForTests(dir))
 	t.Cleanup(credentials.SetStoreDirForTests(dir))
 	t.Cleanup(logging.SetDirForTests(dir))
+	t.Cleanup(wordpreset.SetDirForTests(filepath.Join(dir, "Word presets")))
 	// applySettings now drives the real log level, so any test that applies
 	// settings can leave debug logging on for the ones that follow.
 	wasDebug := logging.Debug()

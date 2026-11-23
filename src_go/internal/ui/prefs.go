@@ -86,6 +86,10 @@ type prefsDialog struct {
 	runTest      *widget.Button
 	vocabSource  *widget.Entry
 	vocabCaption *widget.Entry
+	// words is the preset row above the two lists.
+	words *wordPresets
+	// tabs is the dialog's tab container, once show() has built it.
+	tabs *container.AppTabs
 
 	bgColour   *colourPick
 	boxColour  *colourPick
@@ -242,6 +246,19 @@ func (p *prefsDialog) show() {
 		container.NewTabItem("Words", p.vocabularyTab()),
 		container.NewTabItem("Behaviour", p.behaviourTab()),
 	)
+
+	// The presets folder is read again whenever the Words tab is shown, so a
+	// file written in an editor meanwhile appears; a pending Overwrite is put
+	// back to a plain button on leaving the tab.
+	p.tabs = tabs
+	tabs.OnSelected = func(item *container.TabItem) {
+		if p.words != nil {
+			p.words.disarm()
+			if item.Text == "Words" {
+				p.words.relist()
+			}
+		}
+	}
 
 	buttons := container.NewHBox(
 		widget.NewButton("Cancel", func() {
@@ -733,11 +750,15 @@ func (p *prefsDialog) vocabularyTab() fyne.CanvasObject {
 	p.vocabSource.SetText(p.working.VocabularySource)
 	p.vocabCaption = widget.NewMultiLineEntry()
 	p.vocabCaption.SetText(p.working.VocabularyCaptions)
+	for _, e := range []*widget.Entry{p.vocabSource, p.vocabCaption} {
+		e.SetMinRowsVisible(5)
+	}
+	p.words = newWordPresets(p)
 
 	// This was the widest thing in the dialog at 884 px, purely because a label
 	// with no wrapping asks for its whole text on one line.
 	note := widget.NewLabel(fmt.Sprintf(
-		"Split on line breaks only, never commas, so a term can be a whole clause. "+
+		"One term per line, never split on commas, so a term can be a whole clause. "+
 			"At most %d terms — they are resent with every reconnect. "+
 			"Google Gemini only: OpenAI takes no vocabulary hints.",
 		config.MaxVocabularyTerms))
@@ -750,15 +771,18 @@ func (p *prefsDialog) vocabularyTab() fyne.CanvasObject {
 
 	// Two lists, and they must stay separate: one biases recognition of the
 	// language being spoken, the other how names come out in the captions.
+	// Side by side since the preset row: stacked, the tab was taller than the
+	// dialog.
+	column := func(title string, hint *widget.Label, box *widget.Entry) fyne.CanvasObject {
+		return container.NewBorder(container.NewVBox(
+			widget.NewLabelWithStyle(title, fyne.TextAlignLeading, fyne.TextStyle{Bold: true}),
+			hint), nil, nil, nil, box)
+	}
 	return container.NewVBox(
-		widget.NewLabelWithStyle("Spoken language — one term per line",
-			fyne.TextAlignLeading, fyne.TextStyle{Bold: true}),
-		sourceHint,
-		p.vocabSource,
-		widget.NewLabelWithStyle("Captions — one term per line",
-			fyne.TextAlignLeading, fyne.TextStyle{Bold: true}),
-		captionHint,
-		p.vocabCaption,
+		p.words.rows(),
+		container.NewGridWithColumns(2,
+			column("Spoken language", sourceHint, p.vocabSource),
+			column("Captions", captionHint, p.vocabCaption)),
 		note,
 	)
 }
@@ -1145,6 +1169,9 @@ func (p *prefsDialog) collect() config.Settings {
 	}
 	s.VocabularySource = p.vocabSource.Text
 	s.VocabularyCaptions = p.vocabCaption.Text
+	if p.words != nil {
+		s.WordPreset = p.words.label()
+	}
 	if i := p.captionFont.SelectedIndex(); i >= 0 && i < len(p.fontNames) {
 		s.CaptionFont = p.fontNames[i]
 	}
@@ -1364,6 +1391,12 @@ func (p *prefsDialog) showFields(s config.Settings, f map[string]bool) {
 	check("WarmHandover", p.warmHandover, s.WarmHandover)
 	entry("VocabularySource", p.vocabSource, s.VocabularySource)
 	entry("VocabularyCaptions", p.vocabCaption, s.VocabularyCaptions)
+	// After the lists, since whether the preset still holds is judged
+	// against them.
+	if (f["WordPreset"] || f["VocabularySource"] || f["VocabularyCaptions"]) && p.words != nil {
+		p.words.adopt(s.WordPreset)
+		p.words.syncButtons()
+	}
 	if f["CaptionFont"] && p.captionFont != nil {
 		p.selectCaptionFont(s.CaptionFont)
 	}

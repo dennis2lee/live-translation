@@ -274,6 +274,12 @@ type Settings struct {
 	VocabularySource   string `json:"vocabulary_source"`
 	VocabularyCaptions string `json:"vocabulary_captions"`
 
+	// WordPreset is the name of the word preset (internal/wordpreset) the two
+	// lists above were applied from, so Preferences can show it. A label only:
+	// set at Apply, "" when the lists were edited after loading, and never a
+	// reason to restart a session.
+	WordPreset string `json:"word_preset"`
+
 	// API
 	//
 	// Provider is the translation service. Absent from settings files written

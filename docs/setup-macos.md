@@ -195,6 +195,30 @@ A ♪ appears beside the status dot while music is being held back.
 **Preferences → Words** takes names and terms the model should expect to hear,
 one per line, and how names should be spelled in the captions.
 
+Keep a list per occasion as a **word preset**. The row at the top of the tab
+loads a preset into the two boxes, saves the boxes back to it, or saves them
+under a new name. **Apply** then puts the lists into use; while translating,
+the session reconnects once to pick them up. **Folder** opens the folder the
+presets live in (`~/Library/Application Support/LiveCap/Word presets/`), where you can also write one in any text
+editor and save it as a UTF-8 `.txt` file:
+
+```
+# Lines starting with # are comments.
+[spoken]
+영업이익률
+평우
+
+[captions]
+Pyeongwoo Lee
+EBITDA
+```
+
+One term per line, under `[spoken]` (what will be heard) or `[captions]` (how
+it should be written). A term that starts with `#`, `[` or `\` needs a `\` in
+front. Saving from LiveCap rewrites the file, so comments written in an editor
+are not kept. A file LiveCap cannot read is not loaded, and the line it
+stumbled on is shown under the row.
+
 ### Transcripts
 
 Every session is saved as a Markdown file in **Documents → LiveCap**, named

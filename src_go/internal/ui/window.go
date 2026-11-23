@@ -216,6 +216,9 @@ func NewWindow(app fyne.App, settings config.Settings) *Window {
 	// never fires, and a Wait armed for a loop that never ran would hang
 	// Shutdown for ever.
 	app.Lifecycle().SetOnStarted(func() { go w.tickLoop() })
+	// A single slot, registered once: coming back to the front — from a text
+	// editor writing a word preset, say — re-reads the presets folder.
+	app.Lifecycle().SetOnEnteredForeground(w.onForeground)
 	return w
 }
 
@@ -523,8 +526,18 @@ func sessionNeedsRestart(old, next config.Settings) bool {
 		old.AdaptiveSessionPrep != next.AdaptiveSessionPrep ||
 		old.WarmHandover != next.WarmHandover ||
 		old.EchoTargetLanguage != next.EchoTargetLanguage ||
-		old.VocabularySource != next.VocabularySource ||
-		old.VocabularyCaptions != next.VocabularyCaptions
+		vocabularyChanged(old, next)
+}
+
+// vocabularyChanged reports a change to the word lists that a session would
+// actually use. OpenAI takes no vocabulary, so changing the lists there —
+// applying a word preset, say — must not cost a restart's gap for nothing. A
+// switch to Gemini is a provider change and restarts anyway, picking the new
+// lists up.
+func vocabularyChanged(old, next config.Settings) bool {
+	return next.Provider.SupportsVocabulary() &&
+		(old.VocabularySource != next.VocabularySource ||
+			old.VocabularyCaptions != next.VocabularyCaptions)
 }
 
 // applySpeechChanges brings the player into line with the settings, doing the
@@ -1359,6 +1372,13 @@ func (w *Window) syncMenuVisibility(fullScreen bool) {
 		return
 	}
 	w.win.SetMainMenu(w.menus.menu)
+}
+
+// onForeground runs when the application comes back to the front.
+func (w *Window) onForeground() {
+	if w.prefs != nil && w.prefs.words != nil {
+		w.prefs.words.relist()
+	}
 }
 
 // OpenTranscriptDir reveals the transcript folder in the file manager.
