@@ -32,6 +32,13 @@ type wrapAnchor struct {
 	// it of each row's first character.
 	text   string
 	starts []int
+
+	// carried is whether the last wrap carried rows over from the one before
+	// it, and cut how many bytes went from the front of the old paragraph
+	// when it did: a row that began at old offset o begins at o-cut now.
+	// That is what the scroll animation follows a row by — see scrollMove.
+	carried bool
+	cut     int
 }
 
 // alignProbe is how much of the new paragraph is looked for in the old one to
@@ -51,19 +58,34 @@ func (f Face) wrapAnchored(a *wrapAnchor, key, text string, fontSize, maxWidth f
 	if a == nil {
 		return f.Wrap(text, fontSize, maxWidth)
 	}
-	rows := f.keptRows(a, key, text, fontSize, maxWidth, boxRows)
+	rows, cut := f.keptRows(a, key, text, fontSize, maxWidth, boxRows)
+	a.carried, a.cut = rows != nil, cut
 	if rows == nil {
+		// A paragraph shorter than alignProbe cannot be aligned at all, so
+		// keptRows gives up on it. When the new text only continues it, the
+		// fresh greedy wrap below starts every old row where it started; and
+		// where it does not, the scroll's lookup simply misses.
+		a.carried = a.key == key && a.text != "" && strings.HasPrefix(text, a.text)
 		rows = f.Wrap(text, fontSize, maxWidth)
 	}
 	a.key, a.text, a.starts = key, text, rowStarts(text, rows)
+	if a.starts == nil {
+		a.carried = false
+	}
 	return rows
 }
 
 // keptRows is the wrap that keeps the old breaks, or nil when there is nothing
 // to keep: another font or width, or text that does not continue the old.
-func (f Face) keptRows(a *wrapAnchor, key, text string, fontSize, maxWidth float32, boxRows int) []string {
+// cut is how many bytes of the old paragraph went from the front.
+//
+// Every row it carries over keeps its first character's offset, less cut:
+// rows j to m-1 are sliced at their old starts, row m is wrapped again from
+// its old start, and the fresh-row rule below re-emits row m from that same
+// start. The scroll animation depends on that.
+func (f Face) keptRows(a *wrapAnchor, key, text string, fontSize, maxWidth float32, boxRows int) (rows []string, cut int) {
 	if a.key != key || a.text == "" || text == "" || len(a.starts) == 0 {
-		return nil
+		return nil, 0
 	}
 	// k: how much of the old paragraph went from the front. d: the first old
 	// offset that is not carried over unchanged. Text added at the end
@@ -71,7 +93,7 @@ func (f Face) keptRows(a *wrapAnchor, key, text string, fontSize, maxWidth float
 	// anything rewritten, puts it earlier.
 	k, shared := align(a.text, text)
 	if k < 0 {
-		return nil
+		return nil, 0
 	}
 	d := k + shared
 
@@ -81,13 +103,13 @@ func (f Face) keptRows(a *wrapAnchor, key, text string, fontSize, maxWidth float
 	j := sort.SearchInts(a.starts, k)
 	m := sort.SearchInts(a.starts, d) - 1
 	if j >= len(a.starts) || m < j {
-		return nil
+		return nil, 0
 	}
 
 	// What is left of the row the cut went through. It lost its first words,
 	// so it is short — and above the rows on screen unless the whole
 	// paragraph fits in the box.
-	rows := f.Wrap(text[:a.starts[j]-k], fontSize, maxWidth)
+	rows = f.Wrap(text[:a.starts[j]-k], fontSize, maxWidth)
 	for i := j; i < m; i++ {
 		rows = append(rows, strings.TrimSpace(text[a.starts[i]-k:a.starts[i+1]-k]))
 	}
@@ -112,7 +134,7 @@ func (f Face) keptRows(a *wrapAnchor, key, text string, fontSize, maxWidth float
 			}
 		}
 	}
-	return rows
+	return rows, k
 }
 
 // startsWithSpace reports whether s begins a new word rather than continuing

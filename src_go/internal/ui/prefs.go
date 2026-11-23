@@ -106,6 +106,7 @@ type prefsDialog struct {
 	completeOnly *widget.Check
 	showDraft    *widget.Check
 	dimDraft     *widget.Check
+	smoothScroll *widget.Check
 	// syncHold greys the line hold where it does nothing; set by the
 	// Behaviour tab, and run again when a setting changes outside the dialog.
 	syncHold      func()
@@ -973,6 +974,9 @@ func (p *prefsDialog) appearanceWidgets() {
 	// in an empty box with it.
 	p.dimDraft = widget.NewCheck("Dim text in progress", nil)
 	p.dimDraft.SetChecked(p.working.DimDraft)
+	// The rows sliding up when new text pushes them, rather than jumping.
+	p.smoothScroll = widget.NewCheck("Smooth scrolling", nil)
+	p.smoothScroll.SetChecked(p.working.SmoothScroll)
 
 	p.captionsForm = widget.NewForm(
 		widget.NewFormItem("Font", p.captionFont),
@@ -996,10 +1000,10 @@ func (p *prefsDialog) captionsTab() fyne.CanvasObject {
 	if p.captionsForm == nil {
 		p.appearanceWidgets()
 	}
-	// The two drawing checks share a row: one more row made the tab taller
-	// than the dialog.
+	// The checks share rows in pairs: one more row made the tab taller than
+	// the dialog.
 	return container.NewVBox(p.captionsForm, container.NewHBox(p.fixedBox, p.dimDraft),
-		p.sourceText, p.directionHint)
+		container.NewHBox(p.sourceText, p.smoothScroll), p.directionHint)
 }
 
 // coloursTab is what it looks like. It shares appearanceWidgets with
@@ -1164,6 +1168,7 @@ func (p *prefsDialog) collect() config.Settings {
 	s.ShowSourceText = p.sourceText.Checked
 	s.ShowDirectionHint = p.directionHint.Checked
 	s.DimDraft = p.dimDraft.Checked
+	s.SmoothScroll = p.smoothScroll.Checked
 	s.ClearAfterSeconds = p.clearAfter.Value
 	// To the tenth the slider steps in. The toolkit's own rounding lands on
 	// 1.5000000000000002 or 1.5 by turns, one repaint to the next, and now
@@ -1380,6 +1385,7 @@ func (p *prefsDialog) showFields(s config.Settings, f map[string]bool) {
 	check("ShowSourceText", p.sourceText, s.ShowSourceText)
 	check("ShowDirectionHint", p.directionHint, s.ShowDirectionHint)
 	check("DimDraft", p.dimDraft, s.DimDraft)
+	check("SmoothScroll", p.smoothScroll, s.SmoothScroll)
 	slider("ClearAfterSeconds", p.clearAfter, s.ClearAfterSeconds)
 	slider("LineHoldSeconds", p.lineHold, s.LineHoldSeconds)
 	// The draft check is greyed by completeOnly's OnChanged, which SetChecked

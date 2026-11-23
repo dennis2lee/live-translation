@@ -170,6 +170,12 @@ type Settings struct {
 	// gets the new drawing.
 	DimDraft bool `json:"dim_draft"`
 
+	// SmoothScroll animates the rows moving up when new text pushes them,
+	// over ui.ScrollDuration, instead of jumping (1.14.0). On by default;
+	// an older settings file has no key and gets it. Off draws every move at
+	// once, as before.
+	SmoothScroll bool `json:"smooth_scroll"`
+
 	// Transcript recording. The filename is the session start timestamp.
 	SaveTranscript bool   `json:"save_transcript"`
 	TranscriptDir  string `json:"transcript_dir"`
@@ -300,6 +306,7 @@ func Default() Settings {
 		ClearAfterSeconds:  2.0,
 		LineHoldSeconds:    0.7,
 		ShowDraftWhenEmpty: true,
+		SmoothScroll:       true,
 		SaveTranscript:     true,
 		TranscriptDir:      transcript.DefaultDir,
 		ShowDirectionHint:  true,

@@ -11,6 +11,7 @@ import (
 
 	"fyne.io/fyne/v2"
 	"fyne.io/fyne/v2/canvas"
+	"fyne.io/fyne/v2/container"
 	"fyne.io/fyne/v2/widget"
 
 	"github.com/dennis2lee/live-translation/src_go/internal/captions"
@@ -118,6 +119,12 @@ type CaptionView struct {
 	font     fyne.Resource
 	// anchor keeps the paragraph's row breaks steady between repaints.
 	anchor wrapAnchor
+	// linesVersion changes whenever the lines do, so the renderer re-wraps —
+	// and looks for rows that moved — only then, and not on every frame of
+	// a pulse, a fade or a move.
+	linesVersion uint64
+	// scroll is the rows' move up when new text pushes them.
+	scroll scrollState
 
 	boxAlpha  float32
 	hintText  string
@@ -212,6 +219,8 @@ func (v *CaptionView) CreateRenderer() fyne.WidgetRenderer {
 	r := &captionRenderer{view: v}
 	r.background = canvas.NewRectangle(color.Black)
 	r.box = canvas.NewRectangle(color.Transparent)
+	r.layer = container.NewWithoutLayout()
+	r.clip = container.NewClip(r.layer)
 	r.hint = canvas.NewText("", colourStatus)
 	r.status = canvas.NewText("", colourStatus)
 	r.sourceLine = canvas.NewText("", colourSource)
@@ -242,6 +251,7 @@ func (v *CaptionView) ApplySettings(s config.Settings) {
 // SetLines replaces the caption text.
 func (v *CaptionView) SetLines(lines []captions.Line) {
 	v.lines = lines
+	v.linesVersion++
 	v.refreshVisibility()
 }
 
@@ -261,6 +271,7 @@ func (v *CaptionView) SetStatus(status string) {
 // Clear empties the display.
 func (v *CaptionView) Clear() {
 	v.lines = nil
+	v.linesVersion++
 	v.source = ""
 	v.refreshVisibility()
 }
@@ -402,6 +413,32 @@ func (v *CaptionView) StopAnimations() {
 		v.dotPulse.Stop()
 		v.dotPulse = nil
 	}
+	v.scroll.cancel()
+}
+
+// beginScroll starts the animation for a move a repaint has set up. It runs
+// after that repaint is done, never inside it: Fyne's test driver ticks an
+// animation to its end inside Start, which would re-enter rebuild.
+func (v *CaptionView) beginScroll() {
+	s := &v.scroll
+	s.pending = false
+	if s.anim != nil {
+		s.anim.Stop()
+	}
+	var a *fyne.Animation
+	a = fyne.NewAnimation(ScrollDuration, func(f float32) {
+		if v.scroll.anim != a {
+			return // a move that has been replaced or cancelled
+		}
+		v.scroll.progress = f
+		if f >= 1 {
+			v.scroll.finish()
+		}
+		v.Refresh()
+	})
+	a.Curve = fyne.AnimationEaseOut
+	s.anim = a
+	startScroll(a)
 }
 
 // --- renderer -------------------------------------------------------------
@@ -411,12 +448,24 @@ type captionRenderer struct {
 
 	background *canvas.Rectangle
 	box        *canvas.Rectangle
-	texts      []*canvas.Text
-	hint       *canvas.Text
-	status     *canvas.Text
-	sourceLine *canvas.Text
-	dot        *canvas.Raster
-	musicNote  *canvas.Text
+	// The rows are drawn inside clip, which is the box: nothing moving in or
+	// out of it is drawn over the background, the source line, the hint or
+	// the dot. Their positions are relative to it.
+	clip   *container.Clip
+	layer  *fyne.Container
+	texts  []*canvas.Text
+	ghosts []*canvas.Text
+
+	// The last wrap, reused until the lines or the wrap key change.
+	wrap        wrapResult
+	wrapVersion uint64
+	wrapKey     string
+	wrapped     bool
+	hint        *canvas.Text
+	status      *canvas.Text
+	sourceLine  *canvas.Text
+	dot         *canvas.Raster
+	musicNote   *canvas.Text
 }
 
 func (r *captionRenderer) Destroy() { r.view.StopAnimations() }
@@ -424,11 +473,8 @@ func (r *captionRenderer) Destroy() { r.view.StopAnimations() }
 func (r *captionRenderer) MinSize() fyne.Size { return fyne.NewSize(320, 180) }
 
 func (r *captionRenderer) Objects() []fyne.CanvasObject {
-	out := []fyne.CanvasObject{r.background, r.box}
-	for _, t := range r.texts {
-		out = append(out, t)
-	}
-	return append(out, r.sourceLine, r.status, r.hint, r.musicNote, r.dot)
+	return []fyne.CanvasObject{r.background, r.box, r.clip,
+		r.sourceLine, r.status, r.hint, r.musicNote, r.dot}
 }
 
 func (r *captionRenderer) Layout(size fyne.Size) { r.rebuild(size) }
@@ -458,16 +504,23 @@ func (r *captionRenderer) rebuild(size fyne.Size) {
 		maxTextW = 40
 	}
 
-	maxLines := s.MaxLines
-	if maxLines < 1 {
-		maxLines = 1
-	}
-	lines := v.lines
-	if !s.DimDraft {
-		lines = inPlace(lines)
-	}
+	maxLines := max(1, s.MaxLines)
 	wrapKey := fmt.Sprintf("%s\x00%g\x00%g", v.fontName, fontSize, maxTextW)
-	wrapped := face.reflowAnchored(&v.anchor, wrapKey, lines, fontSize, maxTextW, maxLines)
+	// The wrap is redone only when the lines or what a break depends on have
+	// changed — not on the frames of a pulse, a fade or a move. And only a
+	// wrap caused by new lines is looked at for rows that moved.
+	cacheKey := fmt.Sprintf("%s\x00%d\x00%t", wrapKey, maxLines, s.DimDraft)
+	newLines := false
+	if !r.wrapped || r.wrapVersion != v.linesVersion || r.wrapKey != cacheKey {
+		lines := v.lines
+		if !s.DimDraft {
+			lines = inPlace(lines)
+		}
+		newLines = r.wrapped && r.wrapVersion != v.linesVersion
+		r.wrap = face.reflowAll(&v.anchor, wrapKey, lines, fontSize, maxTextW, maxLines)
+		r.wrapped, r.wrapVersion, r.wrapKey = true, v.linesVersion, cacheKey
+	}
+	wrapped := r.wrap.visible(maxLines)
 
 	visible := v.boxAlpha > 0.001 && (len(wrapped) > 0 || s.FixedBox)
 
@@ -505,38 +558,107 @@ func (r *captionRenderer) rebuild(size fyne.Size) {
 	}
 	r.box.Refresh()
 
-	// the text
-	r.ensureTexts(len(wrapped))
-	textColour := parseHex(s.TextColor, color.NRGBA{R: 0xFF, G: 0xFF, B: 0xFF, A: 0xFF})
-	// Bottom-aligned in fixed mode, so the newest line never moves.
-	y := boxTop + PadV
+	// Where the rows rest. Bottom-aligned in fixed mode, so the newest line
+	// never moves.
+	restTop := boxTop + PadV
 	if s.FixedBox {
-		y = boxTop + boxH - PadV - lineH*float32(len(wrapped))
+		restTop = boxTop + boxH - PadV - lineH*float32(len(wrapped))
 	}
-	for i, t := range r.texts {
-		if i >= len(wrapped) || !visible {
-			t.Hide()
-			t.Refresh()
-			continue
+	firstShown := len(r.wrap.all) - len(wrapped)
+	rest := func(i int) float32 { return restTop + float32(i-firstShown)*lineH }
+
+	// Did the rows move up? Only new lines can move them; anything that
+	// re-wraps the paragraph for another reason, or leaves nothing to show,
+	// draws the rows where they rest at once.
+	sc := &v.scroll
+	geom := fmt.Sprintf("%s\x00%g\x00%g\x00%v\x00%d\x00%t",
+		cacheKey, size.Width, size.Height, s.Position(), s.BottomMarginPct, s.FixedBox)
+	switch {
+	case !s.SmoothScroll || !visible || len(wrapped) == 0 || geom != sc.geom:
+		sc.cancel()
+	case newLines:
+		// New lines that do not simply push the rows up — rewritten rows, a
+		// dimmed draft folded into the paragraph, a downward move, or a
+		// non-fixed box whose left edge moved because it hugs its widest
+		// row — end a running move at once. Left running, its leaving row
+		// could be drawn beside the same text back on screen (red team: 60
+		// lines drawn twice in 5059 DimDraft moves). Growth within the last
+		// row, which moves nothing, leaves it running.
+		i := -1
+		if boxLeft == sc.boxLeft {
+			i = sc.trackedIndex(&v.anchor, r.wrap)
 		}
-		line := wrapped[i]
+		var move float32
+		if i >= 0 {
+			move = sc.trackY - rest(i)
+		}
+		switch {
+		case i < 0 || move < -0.5:
+			sc.cancel()
+		case move > 0.5:
+			sc.retarget(move, restTop, boxTop, lineH)
+		}
+	}
+	off := sc.offset()
+
+	// the text, inside the box's clip
+	r.clip.Move(fyne.NewPos(boxLeft, boxTop))
+	r.clip.Resize(fyne.NewSize(boxW, boxH))
+	if visible {
+		r.clip.Show()
+	} else {
+		r.clip.Hide()
+	}
+	textColour := parseHex(s.TextColor, color.NRGBA{R: 0xFF, G: 0xFF, B: 0xFF, A: 0xFF})
+	colourOf := func(settled bool, alpha float32) color.NRGBA {
 		c := textColour
-		alpha := v.boxAlpha
-		if !line.settled {
+		if !settled {
 			alpha *= 0.55 // unsettled text at 55% of the settled colour
 		}
 		c.A = uint8(clamp01(alpha) * 255)
-		t.Text = line.text
-		t.Color = c
-		t.TextSize = fontSize
-		t.TextStyle = fyne.TextStyle{}
-		t.FontSource = v.font
-		t.Alignment = CaptionAlignment
-		t.Resize(fyne.NewSize(boxW-2*PadH, lineH))
-		t.Move(fyne.NewPos(boxLeft+PadH, y+float32(i)*lineH))
-		t.Show()
-		t.Refresh()
+		return c
 	}
+	rowW := boxW - 2*PadH
+	r.ensureTexts(len(wrapped))
+	for i, t := range r.texts {
+		if i >= len(wrapped) || !visible {
+			hideText(t)
+			continue
+		}
+		line := wrapped[i]
+		y := restTop + float32(i)*lineH + off
+		r.paintText(t, line.text, colourOf(line.settled, v.boxAlpha), fontSize, rowW, lineH,
+			fyne.NewPos(PadH, y-boxTop))
+	}
+	// Leaving rows dissolve through the top padding rather than being sliced
+	// by the clip, in ghostFadeSteps steps. Entering rows are not faded: they
+	// carry the newest words.
+	textTop, textBottom := boxTop+PadV, boxTop+boxH-PadV
+	r.ensureGhosts(len(sc.ghosts))
+	for i, t := range r.ghosts {
+		if i >= len(sc.ghosts) || !visible {
+			hideText(t)
+			continue
+		}
+		g := sc.ghosts[i]
+		y := g.y + off
+		alpha := v.boxAlpha * fadeStep(insideFraction(y, lineH, textTop, textBottom))
+		if alpha <= 0 {
+			// Gone: hidden, not drawn at alpha 0 — Fyne would still rasterise
+			// and cache a full-row texture for it (red team, round two).
+			hideText(t)
+			continue
+		}
+		r.paintText(t, g.text, colourOf(g.settled, alpha), fontSize, rowW, lineH,
+			fyne.NewPos(PadH, y-boxTop))
+	}
+	// What this repaint drew, at rest, for the next one to measure against.
+	sc.prev = sc.prev[:0]
+	for i, line := range wrapped {
+		sc.prev = append(sc.prev, shownRow{line.text, line.settled, restTop + float32(i)*lineH})
+	}
+	sc.geom, sc.boxLeft = geom, boxLeft
+	sc.track(&v.anchor, r.wrap, rest)
 
 	// An empty fixed box carries the status text inside it; without a box the
 	// status is drawn where the box would have been.
@@ -615,6 +737,31 @@ func (r *captionRenderer) rebuild(size fyne.Size) {
 		r.hint.Hide()
 	}
 	r.hint.Refresh()
+
+	// Last, so the animation's first frame never re-enters this repaint.
+	if sc.pending {
+		v.beginScroll()
+	}
+}
+
+// paintText places and draws a caption row.
+func (r *captionRenderer) paintText(t *canvas.Text, text string, c color.NRGBA, size, w, h float32, pos fyne.Position) {
+	t.Text = text
+	t.Color = c
+	t.TextSize = size
+	t.TextStyle = fyne.TextStyle{}
+	t.FontSource = r.view.font
+	t.Alignment = CaptionAlignment
+	t.Resize(fyne.NewSize(w, h))
+	t.Move(pos)
+	t.Show()
+	t.Refresh()
+}
+
+// hideText hides a row.
+func hideText(t *canvas.Text) {
+	t.Hide()
+	t.Refresh()
 }
 
 // row is one display row after wrapping — what the renderer actually paints,
@@ -682,42 +829,68 @@ func (f Face) reflowRows(lines []captions.Line, fontSize, maxTextW float32, maxL
 // reflowAnchored is reflowRows that keeps the settled paragraph's breaks from
 // one call to the next — see wrapAnchor. A nil anchor wraps afresh.
 func (f Face) reflowAnchored(a *wrapAnchor, key string, lines []captions.Line, fontSize, maxTextW float32, maxLines int) []row {
+	return f.reflowAll(a, key, lines, fontSize, maxTextW, maxLines).visible(maxLines)
+}
+
+// reflowAll is reflowAnchored before the box trims it: every row, with what
+// the scroll animation needs to follow one of them to the next wrap.
+func (f Face) reflowAll(a *wrapAnchor, key string, lines []captions.Line, fontSize, maxTextW float32, maxLines int) wrapResult {
 	Wrap := f.Wrap
-	var wrapped []row
+	var out wrapResult
+	var drafts []row
 	var settledText []string
+	unsettled := 0
 	for _, line := range lines {
 		if line.Settled {
 			settledText = append(settledText, line.Text)
 			continue
 		}
-		for _, piece := range Wrap(line.Text, fontSize, maxTextW) {
-			wrapped = append(wrapped, row{piece, false})
+		unsettled++
+		pieces := Wrap(line.Text, fontSize, maxTextW)
+		if unsettled == 1 {
+			out.draft = strings.TrimSpace(line.Text)
+			out.draftStarts = rowStarts(out.draft, pieces)
+			out.draftFirst = len(drafts)
+		}
+		for _, piece := range pieces {
+			drafts = append(drafts, row{piece, false})
 		}
 	}
+	if unsettled != 1 {
+		out.draft, out.draftStarts = "", nil
+	}
 	if joined := strings.TrimSpace(strings.Join(settledText, " ")); joined != "" {
-		var settledRows []row
 		for _, piece := range f.wrapAnchored(a, key, joined, fontSize, maxTextW, max(1, maxLines)) {
-			settledRows = append(settledRows, row{piece, true})
+			out.all = append(out.all, row{piece, true})
 		}
-		wrapped = append(settledRows, wrapped...)
 	} else if a != nil {
 		a.text = "" // an emptied box starts its next paragraph afresh
 	}
-	if maxLines < 1 {
-		maxLines = 1
-	}
-	if len(wrapped) > maxLines {
-		wrapped = wrapped[len(wrapped)-maxLines:]
-	}
-	return wrapped
+	out.settled = len(out.all)
+	out.draftFirst += out.settled
+	out.all = append(out.all, drafts...)
+	return out
 }
 
 func (r *captionRenderer) ensureTexts(n int) {
 	for len(r.texts) < n {
-		t := canvas.NewText("", color.White)
-		t.Alignment = CaptionAlignment
-		r.texts = append(r.texts, t)
+		r.texts = append(r.texts, r.newRow())
 	}
+}
+
+func (r *captionRenderer) ensureGhosts(n int) {
+	for len(r.ghosts) < n {
+		r.ghosts = append(r.ghosts, r.newRow())
+	}
+}
+
+// newRow is a hidden caption row on the clipped layer.
+func (r *captionRenderer) newRow() *canvas.Text {
+	t := canvas.NewText("", color.White)
+	t.Alignment = CaptionAlignment
+	t.Hide()
+	r.layer.Add(t)
+	return t
 }
 
 // parseHex reads "#RRGGBB". Anything else falls back, the same contract
