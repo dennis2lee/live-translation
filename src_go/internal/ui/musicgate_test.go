@@ -181,7 +181,12 @@ func TestWithNoGateThereIsNoQuietPredicate(t *testing.T) {
 // snapshot of its state taken when the translator was built.
 func TestARunningGateGivesAPredicate(t *testing.T) {
 	w := newTestWindow(t)
-	gate := &classify.Gate{}
+	// A real gate, not &classify.Gate{}: a zero-value gate has no done
+	// channel, so the window's shutdown closed a nil channel and the guard
+	// logged a panic out of a test that otherwise passed. The nil model is
+	// never consulted, because the gate classifies only once it holds a full
+	// window of audio and this test feeds it none.
+	gate := classify.NewGate(nil, classify.DefaultTuning())
 	w.musicGate = gate
 	quiet := w.gateClosed()
 	if quiet == nil {
