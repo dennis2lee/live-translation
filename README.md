@@ -140,7 +140,7 @@ own. Set a budget alert with whichever you use.
 | `2` | English → Korean |
 | `9` | Complete phrases only — each caption waits for its sentence to end, so it trails the voice |
 | `f` | Full screen |
-| `m` | Mute the translation — captions and speech |
+| `m` / `Space` | Mute the translation — captions and speech |
 | `⌘R` / `Ctrl+R` | Start translating |
 | `⌘,` / `Ctrl+,` | Preferences |
 

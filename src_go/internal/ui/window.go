@@ -112,7 +112,7 @@ type Window struct {
 	// it so a restart can be driven without opening a socket; nil means
 	// newTranslator.
 	buildTranslator func(ring *audio.Ring, apiKey string) (*translator.Translator, error)
-	// muted is the m key: the whole translation is muted — no captions on
+	// muted is the m key (and Space): the whole translation is muted — no captions on
 	// screen, no speech, the dot half red — while the session goes on
 	// translating and the transcript goes on recording, so unmuting is
 	// instant and nothing is lost from the record. Independent of
@@ -120,7 +120,7 @@ type Window struct {
 	// what it hears. Deliberately *not* persisted: a mute that outlived a
 	// restart is indistinguishable from the feature being broken.
 	muted bool
-	// keysArmed marks m and f pressed and not yet acted on; keysArmable says
+	// keysArmed marks m, Space and f pressed and not yet acted on; keysArmable says
 	// the canvas reports key-downs at all. See typedKey. UI goroutine only.
 	keysArmed   map[fyne.KeyName]bool
 	keysArmable bool
@@ -273,6 +273,8 @@ func (w *Window) bindKeysOn(c fyne.Canvas) {
 	// keyDown). On Windows an IME in Hangul mode turns the press into
 	// VK_PROCESSKEY, which GLFW drops along with its release: there the key
 	// cannot get through, and the Translate menu's Mute item is the way.
+	// Space mutes too, bound the same way: by key, never by the ' ' it
+	// types, or one press would toggle twice.
 	c.SetOnTypedKey(w.typedKey)
 	if dc, ok := c.(desktop.Canvas); ok {
 		// A real press — not a repeat — arms the key; see typedKey.
@@ -298,7 +300,7 @@ func isKey(ev *fyne.KeyEvent, name fyne.KeyName, letter rune) bool {
 	return !ascii && ev.Physical.ScanCode == platform.ScanCode(letter)
 }
 
-// keyDown arms m and f on a real press. Fyne delivers it for presses only,
+// keyDown arms m, Space and f on a real press. Fyne delivers it for presses only,
 // never repeats, while typedKey also receives the repeats of a held key.
 //
 // Not with Ctrl, Alt or Cmd held: those presses are shortcuts and never reach
@@ -311,15 +313,17 @@ func (w *Window) keyDown(ev *fyne.KeyEvent) {
 	switch {
 	case isKey(ev, fyne.KeyM, 'M'):
 		w.keysArmed[fyne.KeyM] = true
+	case ev.Name == fyne.KeySpace:
+		w.keysArmed[fyne.KeySpace] = true
 	case isKey(ev, fyne.KeyF, 'F'):
 		w.keysArmed[fyne.KeyF] = true
 	}
 }
 
-// typedKey acts on m and f once per press: holding m used to toggle the mute
-// at the key-repeat rate, landing on whichever state the release caught and
-// splitting the transcript's sentence at every toggle. Escape leaves full
-// screen.
+// typedKey acts on m, Space and f once per press: holding m used to toggle
+// the mute at the key-repeat rate, landing on whichever state the release
+// caught and splitting the transcript's sentence at every toggle. Space is a
+// second mute key with the same rule. Escape leaves full screen.
 func (w *Window) typedKey(ev *fyne.KeyEvent) {
 	press := func(k fyne.KeyName) bool {
 		if !w.keysArmable {
@@ -332,6 +336,10 @@ func (w *Window) typedKey(ev *fyne.KeyEvent) {
 	switch {
 	case isKey(ev, fyne.KeyM, 'M'):
 		if press(fyne.KeyM) {
+			w.ToggleMute()
+		}
+	case ev.Name == fyne.KeySpace:
+		if press(fyne.KeySpace) {
 			w.ToggleMute()
 		}
 	case isKey(ev, fyne.KeyF, 'F'):

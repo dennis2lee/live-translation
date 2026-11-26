@@ -61,7 +61,7 @@ func newMenuBar(w *Window) *menuBar {
 	toggle := fyne.NewMenuItem("Toggle Translation (0)", w.ToggleTranslation)
 	// The m key's menu twin, and its fallback wherever a key cannot get
 	// through — an input method holding the key, a focused widget.
-	m.mute = fyne.NewMenuItem("Mute Translation (m)", w.ToggleMute)
+	m.mute = fyne.NewMenuItem("Mute Translation (m, Space)", w.ToggleMute)
 
 	m.saveTranscript = fyne.NewMenuItem("Save Transcript", func() {
 		w.update(func(s *config.Settings) { s.SaveTranscript = !s.SaveTranscript })

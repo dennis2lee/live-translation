@@ -125,6 +125,18 @@ func TestEveryKeyDoesItsJob(t *testing.T) {
 			t.Errorf("muted %v, dot %v", w.muted, w.view.Muted())
 		}
 	})
+	t.Run("Space mutes and unmutes, like m", func(t *testing.T) {
+		w, _ := speakingWindow(t)
+		w.startPlayer()
+		pressSpace(t, w)
+		if !w.muted || !w.view.Muted() {
+			t.Errorf("muted %v, dot %v", w.muted, w.view.Muted())
+		}
+		pressSpace(t, w)
+		if w.muted || w.view.Muted() {
+			t.Errorf("pressed again: muted %v, dot %v", w.muted, w.view.Muted())
+		}
+	})
 	t.Run("Escape leaves full screen", func(t *testing.T) {
 		w := newTestWindow(t)
 		pressKey(t, w, fyne.KeyF)
@@ -295,7 +307,7 @@ func TestAModifiedPressDoesNotToggle(t *testing.T) {
 // The menu item is the key's twin, ticked while muted.
 func TestTheMuteMenuItem(t *testing.T) {
 	w := newTestWindow(t)
-	item := find(t, w, "Mute Translation (m)")
+	item := find(t, w, "Mute Translation (m, Space)")
 	item.Action()
 	if !w.muted || !item.Checked {
 		t.Errorf("muted %v, ticked %v", w.muted, item.Checked)
@@ -352,4 +364,69 @@ func TestHeldModifiersReadsTheDriver(t *testing.T) {
 		t.Errorf("nil app: %v", got)
 	}
 	fyne.SetCurrentApp(base)
+}
+
+// pressSpace delivers one Space press as the desktop driver does: the
+// key-down, the typed key, then the ' ' it types — pressKey types no
+// character for a key whose name is longer than one letter.
+func pressSpace(t *testing.T, w *Window) {
+	t.Helper()
+	c := keyed(t, w)
+	ev := &fyne.KeyEvent{Name: fyne.KeySpace}
+	c.OnKeyDown()(ev)
+	c.OnTypedKey()(ev)
+	c.OnTypedRune()(' ')
+}
+
+// Space is a second mute key: one full press toggles once (the ' ' rune must
+// not act a second time), holding it toggles once, and a modified press is a
+// shortcut and toggles nothing.
+func TestSpaceTogglesTheMuteOncePerPress(t *testing.T) {
+	t.Run("one press", func(t *testing.T) {
+		w := newTestWindow(t)
+		pressSpace(t, w)
+		if !w.muted {
+			t.Error("one press of Space did not mute, or muted twice")
+		}
+	})
+	t.Run("held", func(t *testing.T) {
+		w := newTestWindow(t)
+		c := keyed(t, w)
+		ev := &fyne.KeyEvent{Name: fyne.KeySpace}
+		c.OnKeyDown()(ev)
+		for range 4 { // even: unfiltered, the repeats land back on unmuted
+			c.OnTypedKey()(ev)
+		}
+		if !w.muted {
+			t.Error("holding Space left the translation unmuted")
+		}
+	})
+	t.Run("m and Space each count once", func(t *testing.T) {
+		w := newTestWindow(t)
+		c := keyed(t, w)
+		m := &fyne.KeyEvent{Name: fyne.KeyM}
+		sp := &fyne.KeyEvent{Name: fyne.KeySpace}
+		c.OnKeyDown()(m)
+		c.OnTypedKey()(m)
+		c.OnKeyDown()(sp)
+		c.OnTypedKey()(sp)
+		c.OnTypedKey()(m) // a repeat of m, still held
+		if w.muted {
+			t.Error("m then Space should be muted then unmuted; a repeat of m toggled again")
+		}
+	})
+	t.Run("modified", func(t *testing.T) {
+		w := newTestWindow(t)
+		c := keyed(t, w)
+		saved := heldModifiers
+		t.Cleanup(func() { heldModifiers = saved })
+		heldModifiers = func() fyne.KeyModifier { return fyne.KeyModifierControl }
+		ev := &fyne.KeyEvent{Name: fyne.KeySpace}
+		c.OnKeyDown()(ev)
+		heldModifiers = func() fyne.KeyModifier { return 0 }
+		c.OnTypedKey()(ev) // a repeat after the modifier came up
+		if w.muted {
+			t.Error("Ctrl+Space armed the key, so a later repeat muted")
+		}
+	})
 }

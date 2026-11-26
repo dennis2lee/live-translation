@@ -149,7 +149,7 @@ You can also change the input later from **Settings → Audio Input**.
 | **2** | English → Korean |
 | **9** | Show only finished phrases (steadier, a beat later) |
 | **f** | Full screen on and off |
-| **m** | Mute the translation — captions and speech — and again to unmute |
+| **m** or **Space** | Mute the translation — captions and speech — and again to unmute |
 | **Ctrl+,** | Preferences |
 
 **m** and **f** do not reach LiveCap while the Korean input method is in
